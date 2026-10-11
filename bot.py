@@ -4,6 +4,7 @@ import base64
 import io
 import logging
 import os
+import random
 import sqlite3
 import tempfile
 import time
@@ -22,9 +23,9 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MessageEntity, Update
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 LOG = logging.getLogger("secret_ai")
@@ -52,16 +53,22 @@ PERSONAS = {
 }
 DEFAULT_PERSONA = "assistant"
 
+# The thinking bubble starts with the logo: an animated custom emoji when BRAND_EMOJI_ID is set.
 THINKING = {
-    "ru": ["🤔 Думаю", "🧠 Анализирую вопрос", "🔎 Ищу лучший ответ", "✍️ Формулирую", "⏳ Почти готово"],
-    "en": ["🤔 Thinking", "🧠 Analyzing your question", "🔎 Looking for the best answer", "✍️ Writing", "⏳ Almost done"],
+    "ru": ["Думаю", "Анализирую вопрос", "Ищу лучший ответ", "Формулирую", "Почти готово"],
+    "en": ["Thinking", "Analyzing your question", "Looking for the best answer", "Writing", "Almost done"],
 }
-SPINNER = "◐◓◑◒"
+PHRASE_SECONDS = 4
 CURSOR = " ▌"
 # Telegram allows roughly one edit per second per chat; faster edits get RetryAfter.
 ANIMATION_INTERVAL = 1.5
 STREAM_EDIT_INTERVAL = 1.2
 TYPING_INTERVAL = 4.5
+# Native drafts (sendMessageDraft) animate smoothly and are not limited like edits.
+DRAFT_INTERVAL = 0.4
+# A draft disappears after 30 seconds without updates.
+DRAFT_KEEPALIVE = 10
+REVEAL_MIN_STEP = 12
 
 
 def parse_allowed(value):
@@ -129,24 +136,33 @@ class Memory:
         self.db.close()
 
 
-def chunks(text, limit=4000):
-    """Split text into Telegram-sized parts, preferring paragraph, line and word boundaries.
+def utf16_len(text):
+    return sum(2 if ord(char) > 0xFFFF else 1 for char in text)
+
+
+def split_point(text, limit=4000):
+    """Index where the first Telegram-sized part of `text` ends, preferring paragraph, line and word boundaries.
 
     Sizes are counted in UTF-16 units, conservatively including astral emoji.
     """
+    units, cut = 0, len(text)
+    for index, char in enumerate(text):
+        units += 2 if ord(char) > 0xFFFF else 1
+        if units > limit:
+            cut = index
+            break
+    if cut < len(text):
+        for separator in ("\n\n", "\n", " "):
+            found = text.rfind(separator, 0, cut)
+            if found > cut // 2:
+                return found + len(separator)
+    return cut
+
+
+def chunks(text, limit=4000):
+    """Split text into Telegram-sized parts."""
     while text:
-        units, cut = 0, len(text)
-        for index, char in enumerate(text):
-            units += 2 if ord(char) > 0xFFFF else 1
-            if units > limit:
-                cut = index
-                break
-        if cut < len(text):
-            for separator in ("\n\n", "\n", " "):
-                found = text.rfind(separator, 0, cut)
-                if found > cut // 2:
-                    cut = found + len(separator)
-                    break
+        cut = split_point(text, limit)
         part, text = text[:cut], text[cut:]
         if part.strip():
             yield part
@@ -156,10 +172,10 @@ def seconds(delay):
     return delay.total_seconds() if hasattr(delay, "total_seconds") else delay
 
 
-async def reply(message, text, reply_markup=None):
+async def reply(message, text, reply_markup=None, entities=None):
     for attempt in range(3):
         try:
-            return await message.reply_text(text, parse_mode=None, reply_markup=reply_markup)
+            return await message.reply_text(text, parse_mode=None, reply_markup=reply_markup, entities=entities)
         except RetryAfter as exc:
             if attempt == 2:
                 raise
@@ -189,11 +205,48 @@ def user_lock(context, user_id):
     return context.bot_data["locks"][user_id]
 
 
-class LiveReply:
-    """A reply that animates while the model thinks and then streams the answer in place."""
+def logo_entities(config):
+    if not config.get("logo_id"):
+        return None
+    return [MessageEntity(MessageEntity.CUSTOM_EMOJI, 0, utf16_len(config["logo"]), custom_emoji_id=config["logo_id"])]
 
-    def __init__(self, target, language="ru", action=ChatAction.TYPING):
-        self.target, self.language, self.action = target, language, action
+
+async def with_logo(config, send):
+    """Call send(entities) with the custom emoji logo, falling back to the plain emoji if Telegram refuses it."""
+    entities = logo_entities(config)
+    try:
+        return await send(entities)
+    except BadRequest as exc:
+        if not entities or not any(word in str(exc).lower() for word in ("emoji", "entit", "document")):
+            raise
+        # Bots may use custom emoji only when the owner has Telegram Premium or a Fragment username.
+        config["logo_id"] = ""
+        LOG.warning("Custom emoji logo is not available for this bot; using the plain emoji")
+        return await send(None)
+
+
+def thinking_frame(language, logo, started, dots=None):
+    elapsed = int(time.monotonic() - started)
+    phrases = THINKING[language]
+    phrase = phrases[min(len(phrases) - 1, elapsed // PHRASE_SECONDS)]
+    unit = "с" if language == "ru" else "s"
+    return f"{logo} {phrase}{'.' * dots if dots else ''}\n{elapsed}{unit}"
+
+
+async def typing_loop(target, action):
+    while True:
+        try:
+            await target.get_bot().send_chat_action(chat_id=target.chat_id, action=action)
+        except TelegramError:
+            pass
+        await asyncio.sleep(TYPING_INTERVAL)
+
+
+class LiveReply:
+    """Fallback reply: animates by editing a message while the model thinks, then streams the answer in place."""
+
+    def __init__(self, target, language, config, action=ChatAction.TYPING):
+        self.target, self.language, self.config, self.action = target, language, config, action
         self.messages, self.shown = [], []
         self.text = ""
         self.started = time.monotonic()
@@ -202,17 +255,13 @@ class LiveReply:
         self.tasks = []
 
     def frame(self, tick):
-        phrases = THINKING[self.language]
-        phrase = phrases[min(len(phrases) - 1, tick // 3)]
-        elapsed = int(time.monotonic() - self.started)
-        unit = "с" if self.language == "ru" else "s"
-        return f"{SPINNER[tick % len(SPINNER)]} {phrase}{'.' * (tick % 3 + 1)}  {elapsed} {unit}"
+        return thinking_frame(self.language, self.config["logo"], self.started, tick % 3 + 1)
 
     async def start(self):
         first = self.frame(0)
-        self.messages.append(await reply(self.target, first))
+        self.messages.append(await with_logo(self.config, lambda entities: reply(self.target, first, entities=entities)))
         self.shown.append(first)
-        self.tasks = [asyncio.create_task(self._animate()), asyncio.create_task(self._typing())]
+        self.tasks = [asyncio.create_task(self._animate()), asyncio.create_task(typing_loop(self.target, self.action))]
 
     async def _animate(self):
         tick = 0
@@ -222,22 +271,15 @@ class LiveReply:
             async with self.lock:
                 if self.text.strip():
                     return
-                await self._edit(0, self.frame(tick))
+                frame = self.frame(tick)
+                await with_logo(self.config, lambda entities: self._edit(0, frame, entities=entities))
 
-    async def _typing(self):
-        while True:
-            try:
-                await self.target.get_bot().send_chat_action(chat_id=self.target.chat_id, action=self.action)
-            except TelegramError:
-                pass
-            await asyncio.sleep(TYPING_INTERVAL)
-
-    async def _edit(self, index, text, reply_markup=None, retries=0):
+    async def _edit(self, index, text, reply_markup=None, retries=0, entities=None):
         if self.shown[index] == text and reply_markup is None:
             return
         for attempt in range(retries + 1):
             try:
-                await self.messages[index].edit_text(text, parse_mode=None, reply_markup=reply_markup)
+                await self.messages[index].edit_text(text, parse_mode=None, reply_markup=reply_markup, entities=entities)
                 self.shown[index] = text
                 return
             except RetryAfter as exc:
@@ -293,6 +335,129 @@ class LiveReply:
                 await self.messages[0].delete()
         except TelegramError:
             LOG.warning("Could not clean up an interrupted reply")
+
+
+class DraftReply:
+    """Native Telegram streaming (sendMessageDraft), like large AI bots.
+
+    The draft shows the animated logo with a timer while the model thinks, then the answer types
+    itself out. Finished parts are sent as normal messages because a draft is only a preview.
+    """
+
+    def __init__(self, target, language, config, action=ChatAction.TYPING):
+        self.target, self.language, self.config, self.action = target, language, config, action
+        self.bot, self.chat_id = target.get_bot(), target.chat_id
+        self.draft_id = random.randint(1, 2**31 - 1)
+        self.text = ""
+        self.offset = 0  # characters of self.text already sent as messages
+        self.revealed = 0  # characters after offset already shown in the draft
+        self.shown, self.pushed = None, 0.0
+        self.sent = []
+        self.started = time.monotonic()
+        self.closed, self.wake = False, asyncio.Event()
+        self.tasks = []
+
+    async def _push(self, text, entities=None):
+        params = {"chat_id": self.chat_id, "draft_id": self.draft_id, "text": text}
+        if entities:
+            params["entities"] = entities
+        await self.bot.do_api_request("sendMessageDraft", api_kwargs=params)
+        self.shown, self.pushed = text, time.monotonic()
+
+    async def start(self):
+        frame = thinking_frame(self.language, self.config["logo"], self.started)
+        await with_logo(self.config, lambda entities: self._push(frame, entities))
+        self.tasks = [asyncio.create_task(self._loop()), asyncio.create_task(typing_loop(self.target, self.action))]
+
+    async def _pause(self, delay):
+        try:
+            await asyncio.wait_for(self.wake.wait(), delay)
+        except asyncio.TimeoutError:
+            pass
+
+    async def _tick(self):
+        if not self.text.strip():
+            frame = thinking_frame(self.language, self.config["logo"], self.started)
+            if frame != self.shown:
+                await with_logo(self.config, lambda entities: self._push(frame, entities))
+            return
+        pending = self.text[self.offset:]
+        # Commit full Telegram-sized parts as real messages and keep drafting the rest.
+        while (cut := split_point(pending)) < len(pending):
+            if pending[:cut].strip():
+                self.sent.append(await reply(self.target, pending[:cut]))
+            self.offset += cut
+            self.revealed = 0
+            pending = self.text[self.offset:]
+        # Typewriter: reveal the backlog in steps so the text flows instead of jumping.
+        backlog = len(pending) - self.revealed
+        if backlog > 0:
+            self.revealed = min(len(pending), self.revealed + max(REVEAL_MIN_STEP, backlog // 3))
+            space = pending.find(" ", self.revealed)
+            if 0 <= space - self.revealed <= 8:
+                self.revealed = space
+        shown = pending[:self.revealed]
+        if shown.strip() and (shown != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE):
+            await self._push(shown)
+
+    async def _loop(self):
+        while not self.closed:
+            try:
+                await self._tick()
+            except RetryAfter as exc:
+                await self._pause(seconds(exc.retry_after))
+            except TelegramError as exc:
+                LOG.warning("Draft update failed: %s", type(exc).__name__)
+            await self._pause(DRAFT_INTERVAL)
+
+    async def update(self, text):
+        self.text = text
+
+    async def stop(self):
+        self.closed = True
+        self.wake.set()
+        # Let the draft loop finish its current step so a part is never sent twice.
+        for task in self.tasks[1:]:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        self.tasks = []
+
+    async def finish(self, text, reply_markup=None):
+        await self.stop()
+        self.text = text
+        parts = list(chunks(text[self.offset:]))
+        if not parts:
+            await self.sent[-1].edit_reply_markup(reply_markup=reply_markup)
+            return self.sent[-1]
+        for index, part in enumerate(parts):
+            self.sent.append(await reply(self.target, part, reply_markup if index == len(parts) - 1 else None))
+        return self.sent[-1]
+
+    async def abort(self, note):
+        await self.stop()
+        try:
+            rest = self.text[self.offset:].rstrip()
+            if rest:
+                await send(self.target, rest + "\n\n" + note)
+        except TelegramError:
+            LOG.warning("Could not clean up an interrupted reply")
+
+
+async def open_reply(target, language, config):
+    """Start a live reply: native drafts when Telegram supports them, message edits otherwise."""
+    if config.get("drafts"):
+        draft = DraftReply(target, language, config)
+        try:
+            await draft.start()
+            return draft
+        except (RetryAfter, NetworkError):
+            pass
+        except TelegramError as exc:
+            config["drafts"] = False
+            LOG.warning("Native drafts are unavailable (%s); using message edits", type(exc).__name__)
+    live = LiveReply(target, language, config)
+    await live.start()
+    return live
 
 
 async def generate(context, live, **request):
@@ -355,6 +520,7 @@ HELP_RU = (
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
     "/myid — ваш Telegram ID\n"
+    "/emojiid — узнать ID анимированного эмодзи\n"
     "/help — эта справка\n\n"
     "Я помню последние 30 сообщений нашего диалога."
 )
@@ -366,6 +532,7 @@ HELP_EN = (
     "/reset — clear memory\n"
     "/export — download the conversation\n"
     "/myid — your Telegram ID\n"
+    "/emojiid — get a custom emoji ID\n"
     "/help — this help\n\n"
     "I remember our last 30 messages."
 )
@@ -400,6 +567,19 @@ async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    ui(update, f"Текущий режим: {persona_label(update, current)}\nВыберите новый:",
                       f"Current mode: {persona_label(update, current)}\nChoose a new one:"),
                    persona_keyboard(update, current))
+
+
+async def emojiid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show IDs of custom emoji in the message, e.g. to put the logo into BRAND_EMOJI_ID."""
+    if not await authorized(update, context):
+        return
+    message = update.effective_message
+    found = [(text, entity.custom_emoji_id) for entity, text in message.parse_entities([MessageEntity.CUSTOM_EMOJI]).items()]
+    if not found:
+        await send(message, ui(update, "Отправьте /emojiid вместе с анимированным эмодзи, например: /emojiid 🕶",
+                               "Send /emojiid together with a custom emoji, e.g. /emojiid 🕶"))
+        return
+    await send(message, "\n".join(f"{text}  BRAND_EMOJI={text}  BRAND_EMOJI_ID={emoji_id}" for text, emoji_id in found))
 
 
 async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -480,8 +660,7 @@ async def respond(update, context, target, content, saved_question):
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
     instructions = SYSTEM + (" " + persona[3] if persona[3] else "") + " Telegram language: " + (update.effective_user.language_code or "ru")
-    live = LiveReply(target, lang(update))
-    await live.start()
+    live = await open_reply(target, lang(update), context.bot_data)
     try:
         answer, incomplete = await generate(
             context, live, model=context.bot_data["model"], instructions=instructions,
@@ -669,6 +848,9 @@ def main():
         memory=Memory(os.environ.get("DATABASE_PATH", "memory.db")), allowed=allowed,
         model=os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna",
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
+        drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
+        logo=os.environ.get("BRAND_EMOJI", "🕶").strip() or "🕶",
+        logo_id=os.environ.get("BRAND_EMOJI_ID", "").strip(),
         tts_model=os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip(),
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
         locks=defaultdict(asyncio.Lock), last_answer={})
@@ -678,6 +860,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("emojiid", emojiid))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.PHOTO | filters.Document.IMAGE,
