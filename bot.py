@@ -2,16 +2,19 @@
 import asyncio
 import base64
 import io
+import json
 import logging
 import os
+import random
 import sqlite3
 import tempfile
 import time
 from collections import defaultdict
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
 
+import httpx
 import imageio_ffmpeg
 from openai import (
     APIConnectionError,
@@ -22,10 +25,14 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, MessageEntity, Update,
+                      WebAppInfo)
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, RetryAfter, TelegramError
+from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+
+import miniapp
+from integrations import Connections, GitHubError, Toolbox, apply_change, describe, prune_pending
 
 LOG = logging.getLogger("secret_ai")
 SYSTEM = (
@@ -52,16 +59,24 @@ PERSONAS = {
 }
 DEFAULT_PERSONA = "assistant"
 
+# The thinking bubble starts with the logo: an animated custom emoji when BRAND_EMOJI_ID is set.
 THINKING = {
-    "ru": ["🤔 Думаю", "🧠 Анализирую вопрос", "🔎 Ищу лучший ответ", "✍️ Формулирую", "⏳ Почти готово"],
-    "en": ["🤔 Thinking", "🧠 Analyzing your question", "🔎 Looking for the best answer", "✍️ Writing", "⏳ Almost done"],
+    "ru": ["Думаю", "Анализирую вопрос", "Ищу лучший ответ", "Формулирую", "Почти готово"],
+    "en": ["Thinking", "Analyzing your question", "Looking for the best answer", "Writing", "Almost done"],
 }
-SPINNER = "◐◓◑◒"
+PHRASE_SECONDS = 4
 CURSOR = " ▌"
 # Telegram allows roughly one edit per second per chat; faster edits get RetryAfter.
 ANIMATION_INTERVAL = 1.5
 STREAM_EDIT_INTERVAL = 1.2
 TYPING_INTERVAL = 4.5
+# Native drafts (sendMessageDraft) animate smoothly and are not limited like edits.
+DRAFT_INTERVAL = 0.4
+# A draft disappears after 30 seconds without updates.
+DRAFT_KEEPALIVE = 10
+REVEAL_MIN_STEP = 12
+MAX_TOOL_ROUNDS = 12
+DIFF_INLINE_LIMIT = 2500
 
 
 def parse_allowed(value):
@@ -129,24 +144,33 @@ class Memory:
         self.db.close()
 
 
-def chunks(text, limit=4000):
-    """Split text into Telegram-sized parts, preferring paragraph, line and word boundaries.
+def utf16_len(text):
+    return sum(2 if ord(char) > 0xFFFF else 1 for char in text)
+
+
+def split_point(text, limit=4000):
+    """Index where the first Telegram-sized part of `text` ends, preferring paragraph, line and word boundaries.
 
     Sizes are counted in UTF-16 units, conservatively including astral emoji.
     """
+    units, cut = 0, len(text)
+    for index, char in enumerate(text):
+        units += 2 if ord(char) > 0xFFFF else 1
+        if units > limit:
+            cut = index
+            break
+    if cut < len(text):
+        for separator in ("\n\n", "\n", " "):
+            found = text.rfind(separator, 0, cut)
+            if found > cut // 2:
+                return found + len(separator)
+    return cut
+
+
+def chunks(text, limit=4000):
+    """Split text into Telegram-sized parts."""
     while text:
-        units, cut = 0, len(text)
-        for index, char in enumerate(text):
-            units += 2 if ord(char) > 0xFFFF else 1
-            if units > limit:
-                cut = index
-                break
-        if cut < len(text):
-            for separator in ("\n\n", "\n", " "):
-                found = text.rfind(separator, 0, cut)
-                if found > cut // 2:
-                    cut = found + len(separator)
-                    break
+        cut = split_point(text, limit)
         part, text = text[:cut], text[cut:]
         if part.strip():
             yield part
@@ -156,10 +180,10 @@ def seconds(delay):
     return delay.total_seconds() if hasattr(delay, "total_seconds") else delay
 
 
-async def reply(message, text, reply_markup=None):
+async def reply(message, text, reply_markup=None, entities=None):
     for attempt in range(3):
         try:
-            return await message.reply_text(text, parse_mode=None, reply_markup=reply_markup)
+            return await message.reply_text(text, parse_mode=None, reply_markup=reply_markup, entities=entities)
         except RetryAfter as exc:
             if attempt == 2:
                 raise
@@ -189,30 +213,67 @@ def user_lock(context, user_id):
     return context.bot_data["locks"][user_id]
 
 
-class LiveReply:
-    """A reply that animates while the model thinks and then streams the answer in place."""
+def logo_entities(config):
+    if not config.get("logo_id"):
+        return None
+    return [MessageEntity(MessageEntity.CUSTOM_EMOJI, 0, utf16_len(config["logo"]), custom_emoji_id=config["logo_id"])]
 
-    def __init__(self, target, language="ru", action=ChatAction.TYPING):
-        self.target, self.language, self.action = target, language, action
+
+async def with_logo(config, send):
+    """Call send(entities) with the custom emoji logo, falling back to the plain emoji if Telegram refuses it."""
+    entities = logo_entities(config)
+    try:
+        return await send(entities)
+    except BadRequest as exc:
+        if not entities or not any(word in str(exc).lower() for word in ("emoji", "entit", "document")):
+            raise
+        # Bots may use custom emoji only when the owner has Telegram Premium or a Fragment username.
+        config["logo_id"] = ""
+        LOG.warning("Custom emoji logo is not available for this bot; using the plain emoji")
+        return await send(None)
+
+
+def thinking_frame(language, logo, started, dots=None, note=None):
+    elapsed = int(time.monotonic() - started)
+    phrases = THINKING[language]
+    phrase = note or phrases[min(len(phrases) - 1, elapsed // PHRASE_SECONDS)]
+    unit = "с" if language == "ru" else "s"
+    return f"{logo} {phrase}{'.' * dots if dots else ''}\n{elapsed}{unit}"
+
+
+async def typing_loop(target, action):
+    while True:
+        try:
+            await target.get_bot().send_chat_action(chat_id=target.chat_id, action=action)
+        except TelegramError:
+            pass
+        await asyncio.sleep(TYPING_INTERVAL)
+
+
+class LiveReply:
+    """Fallback reply: animates by editing a message while the model thinks, then streams the answer in place."""
+
+    def __init__(self, target, language, config, action=ChatAction.TYPING):
+        self.target, self.language, self.config, self.action = target, language, config, action
         self.messages, self.shown = [], []
         self.text = ""
         self.started = time.monotonic()
         self.last_edit = 0.0
         self.lock = asyncio.Lock()
         self.tasks = []
+        self.note = None
 
     def frame(self, tick):
-        phrases = THINKING[self.language]
-        phrase = phrases[min(len(phrases) - 1, tick // 3)]
-        elapsed = int(time.monotonic() - self.started)
-        unit = "с" if self.language == "ru" else "s"
-        return f"{SPINNER[tick % len(SPINNER)]} {phrase}{'.' * (tick % 3 + 1)}  {elapsed} {unit}"
+        return thinking_frame(self.language, self.config["logo"], self.started, tick % 3 + 1, self.note)
+
+    def status(self, note):
+        self.note = note
 
     async def start(self):
         first = self.frame(0)
-        self.messages.append(await reply(self.target, first))
+        self.messages.append(await with_logo(self.config, lambda entities: reply(self.target, first, entities=entities)))
         self.shown.append(first)
-        self.tasks = [asyncio.create_task(self._animate()), asyncio.create_task(self._typing())]
+        self.tasks = [asyncio.create_task(self._animate()), asyncio.create_task(typing_loop(self.target, self.action))]
 
     async def _animate(self):
         tick = 0
@@ -222,22 +283,15 @@ class LiveReply:
             async with self.lock:
                 if self.text.strip():
                     return
-                await self._edit(0, self.frame(tick))
+                frame = self.frame(tick)
+                await with_logo(self.config, lambda entities: self._edit(0, frame, entities=entities))
 
-    async def _typing(self):
-        while True:
-            try:
-                await self.target.get_bot().send_chat_action(chat_id=self.target.chat_id, action=self.action)
-            except TelegramError:
-                pass
-            await asyncio.sleep(TYPING_INTERVAL)
-
-    async def _edit(self, index, text, reply_markup=None, retries=0):
+    async def _edit(self, index, text, reply_markup=None, retries=0, entities=None):
         if self.shown[index] == text and reply_markup is None:
             return
         for attempt in range(retries + 1):
             try:
-                await self.messages[index].edit_text(text, parse_mode=None, reply_markup=reply_markup)
+                await self.messages[index].edit_text(text, parse_mode=None, reply_markup=reply_markup, entities=entities)
                 self.shown[index] = text
                 return
             except RetryAfter as exc:
@@ -295,8 +349,138 @@ class LiveReply:
             LOG.warning("Could not clean up an interrupted reply")
 
 
-async def generate(context, live, **request):
-    """Stream the model output into `live`; fall back to a single request if streaming is refused."""
+class DraftReply:
+    """Native Telegram streaming (sendMessageDraft), like large AI bots.
+
+    The draft shows the animated logo with a timer while the model thinks, then the answer types
+    itself out. Finished parts are sent as normal messages because a draft is only a preview.
+    """
+
+    def __init__(self, target, language, config, action=ChatAction.TYPING):
+        self.target, self.language, self.config, self.action = target, language, config, action
+        self.bot, self.chat_id = target.get_bot(), target.chat_id
+        self.draft_id = random.randint(1, 2**31 - 1)
+        self.text = ""
+        self.offset = 0  # characters of self.text already sent as messages
+        self.revealed = 0  # characters after offset already shown in the draft
+        self.shown, self.pushed = None, 0.0
+        self.sent = []
+        self.started = time.monotonic()
+        self.closed, self.wake = False, asyncio.Event()
+        self.tasks = []
+        self.note = None
+
+    def status(self, note):
+        """Show what the bot is doing (e.g. reading a file) under the thinking timer or the text."""
+        self.note = note
+
+    async def _push(self, text, entities=None):
+        params = {"chat_id": self.chat_id, "draft_id": self.draft_id, "text": text}
+        if entities:
+            params["entities"] = entities
+        await self.bot.do_api_request("sendMessageDraft", api_kwargs=params)
+        self.shown, self.pushed = text, time.monotonic()
+
+    async def start(self):
+        frame = thinking_frame(self.language, self.config["logo"], self.started)
+        await with_logo(self.config, lambda entities: self._push(frame, entities))
+        self.tasks = [asyncio.create_task(self._loop()), asyncio.create_task(typing_loop(self.target, self.action))]
+
+    async def _pause(self, delay):
+        try:
+            await asyncio.wait_for(self.wake.wait(), delay)
+        except asyncio.TimeoutError:
+            pass
+
+    async def _tick(self):
+        if not self.text.strip():
+            frame = thinking_frame(self.language, self.config["logo"], self.started, note=self.note)
+            if frame != self.shown:
+                await with_logo(self.config, lambda entities: self._push(frame, entities))
+            return
+        pending = self.text[self.offset:]
+        # Commit full Telegram-sized parts as real messages and keep drafting the rest.
+        while (cut := split_point(pending)) < len(pending):
+            if pending[:cut].strip():
+                self.sent.append(await reply(self.target, pending[:cut]))
+            self.offset += cut
+            self.revealed = 0
+            pending = self.text[self.offset:]
+        # Typewriter: reveal the backlog in steps so the text flows instead of jumping.
+        backlog = len(pending) - self.revealed
+        if backlog > 0:
+            self.revealed = min(len(pending), self.revealed + max(REVEAL_MIN_STEP, backlog // 3))
+            space = pending.find(" ", self.revealed)
+            if 0 <= space - self.revealed <= 8:
+                self.revealed = space
+        shown = pending[:self.revealed]
+        if self.note and self.revealed == len(pending):
+            shown = shown.rstrip() + f"\n\n{self.config['logo']} {self.note}…"
+        if shown.strip() and (shown != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE):
+            await self._push(shown)
+
+    async def _loop(self):
+        while not self.closed:
+            try:
+                await self._tick()
+            except RetryAfter as exc:
+                await self._pause(seconds(exc.retry_after))
+            except TelegramError as exc:
+                LOG.warning("Draft update failed: %s", type(exc).__name__)
+            await self._pause(DRAFT_INTERVAL)
+
+    async def update(self, text):
+        self.text = text
+
+    async def stop(self):
+        self.closed = True
+        self.wake.set()
+        # Let the draft loop finish its current step so a part is never sent twice.
+        for task in self.tasks[1:]:
+            task.cancel()
+        await asyncio.gather(*self.tasks, return_exceptions=True)
+        self.tasks = []
+
+    async def finish(self, text, reply_markup=None):
+        await self.stop()
+        self.text = text
+        parts = list(chunks(text[self.offset:]))
+        if not parts:
+            await self.sent[-1].edit_reply_markup(reply_markup=reply_markup)
+            return self.sent[-1]
+        for index, part in enumerate(parts):
+            self.sent.append(await reply(self.target, part, reply_markup if index == len(parts) - 1 else None))
+        return self.sent[-1]
+
+    async def abort(self, note):
+        await self.stop()
+        try:
+            rest = self.text[self.offset:].rstrip()
+            if rest:
+                await send(self.target, rest + "\n\n" + note)
+        except TelegramError:
+            LOG.warning("Could not clean up an interrupted reply")
+
+
+async def open_reply(target, language, config):
+    """Start a live reply: native drafts when Telegram supports them, message edits otherwise."""
+    if config.get("drafts"):
+        draft = DraftReply(target, language, config)
+        try:
+            await draft.start()
+            return draft
+        except (RetryAfter, NetworkError):
+            pass
+        except TelegramError as exc:
+            config["drafts"] = False
+            LOG.warning("Native drafts are unavailable (%s); using message edits", type(exc).__name__)
+    live = LiveReply(target, language, config)
+    await live.start()
+    return live
+
+
+async def model_round(context, live, prefix, request):
+    """One model call streamed into `live` after `prefix`; falls back to a single request if streaming is refused."""
     client = context.bot_data["client"]
     if context.bot_data.get("stream", True):
         try:
@@ -305,17 +489,83 @@ async def generate(context, live, **request):
                 async for event in stream:
                     if event.type == "response.output_text.delta":
                         text += event.delta
-                        await live.update(text)
-                final = await stream.get_final_response()
-            return (final.output_text or text), final.status == "incomplete"
+                        live.status(None)
+                        await live.update(prefix + text)
+                return await stream.get_final_response()
         except BadRequestError as exc:
             # Some models require a verified OpenAI organization for streaming.
             if live.text or "stream" not in str(exc).lower():
                 raise
             context.bot_data["stream"] = False
             LOG.warning("Streaming is not available for this model; using regular responses")
-    response = await client.responses.create(**request)
-    return response.output_text, response.status == "incomplete"
+    return await client.responses.create(**request)
+
+
+def echo_items(output):
+    """Model output items to send back with tool results (store=False keeps no server-side state)."""
+    items = []
+    for item in output:
+        if item.type == "reasoning":
+            reasoning = {"type": "reasoning", "id": item.id,
+                         "summary": [{"type": "summary_text", "text": part.text} for part in item.summary or []]}
+            if item.encrypted_content:
+                reasoning["encrypted_content"] = item.encrypted_content
+            items.append(reasoning)
+        elif item.type == "function_call":
+            items.append({"type": "function_call", "call_id": item.call_id, "name": item.name, "arguments": item.arguments})
+        elif item.type == "message":
+            text = "".join(getattr(part, "text", "") or "" for part in item.content)
+            if text:
+                items.append({"role": "assistant", "content": text})
+    return items
+
+
+async def generate(context, live, toolbox=None, **request):
+    """Run the model, executing tool calls (GitHub) until it produces the final answer."""
+    tools = toolbox.definitions() if toolbox else []
+    if tools:
+        # store=False: reasoning must travel with the tool calls we send back.
+        request.update(tools=tools, include=["reasoning.encrypted_content"])
+    answer, incomplete = "", False
+    for _ in range(MAX_TOOL_ROUNDS):
+        prefix = answer + "\n\n" if answer.strip() else ""
+        response = await model_round(context, live, prefix, request)
+        text = (response.output_text or "").strip()
+        if text:
+            answer = prefix + text
+            await live.update(answer)
+        incomplete = response.status == "incomplete"
+        calls = [item for item in response.output if item.type == "function_call"]
+        if not calls:
+            break
+        request["input"] = list(request["input"]) + echo_items(response.output)
+        for call in calls:
+            try:
+                args = json.loads(call.arguments or "{}")
+            except ValueError:
+                args = {}
+            live.status(toolbox.status(call.name, args))
+            output = await toolbox.run(call.name, args)
+            request["input"].append({"type": "function_call_output", "call_id": call.call_id, "output": output})
+    live.status(None)
+    return answer, incomplete
+
+
+async def show_proposals(update, context, toolbox, target):
+    """Send each prepared repository change with its diff and Apply/Cancel buttons."""
+    for pid in toolbox.proposals:
+        change = context.bot_data["pending"].get(pid)
+        if not change:
+            continue
+        summary, diff = describe(change, lang(update))
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(ui(update, "✅ Применить", "✅ Apply"), callback_data=f"apply:{pid}"),
+            InlineKeyboardButton(ui(update, "❌ Отмена", "❌ Cancel"), callback_data=f"cancel:{pid}")]])
+        if len(diff) <= DIFF_INLINE_LIMIT:
+            await send(target, f"{summary}\n\n{diff}".rstrip(), keyboard)
+        else:
+            await target.reply_document(document=io.BytesIO(diff.encode("utf-8")), filename="changes.diff",
+                                        caption=summary[:1000], reply_markup=keyboard)
 
 
 def answer_keyboard(update, context):
@@ -355,6 +605,8 @@ HELP_RU = (
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
     "/myid — ваш Telegram ID\n"
+    "/app — подключить GitHub и другие сервисы\n"
+    "/emojiid — узнать ID анимированного эмодзи\n"
     "/help — эта справка\n\n"
     "Я помню последние 30 сообщений нашего диалога."
 )
@@ -366,6 +618,8 @@ HELP_EN = (
     "/reset — clear memory\n"
     "/export — download the conversation\n"
     "/myid — your Telegram ID\n"
+    "/app — connect GitHub and other services\n"
+    "/emojiid — get a custom emoji ID\n"
     "/help — this help\n\n"
     "I remember our last 30 messages."
 )
@@ -400,6 +654,38 @@ async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    ui(update, f"Текущий режим: {persona_label(update, current)}\nВыберите новый:",
                       f"Current mode: {persona_label(update, current)}\nChoose a new one:"),
                    persona_keyboard(update, current))
+
+
+async def emojiid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show IDs of custom emoji in the message, e.g. to put the logo into BRAND_EMOJI_ID."""
+    if not await authorized(update, context):
+        return
+    message = update.effective_message
+    found = [(text, entity.custom_emoji_id) for entity, text in message.parse_entities([MessageEntity.CUSTOM_EMOJI]).items()]
+    if not found:
+        await send(message, ui(update, "Отправьте /emojiid вместе с анимированным эмодзи, например: /emojiid 🕶",
+                               "Send /emojiid together with a custom emoji, e.g. /emojiid 🕶"))
+        return
+    await send(message, "\n".join(f"{text}  BRAND_EMOJI={text}  BRAND_EMOJI_ID={emoji_id}" for text, emoji_id in found))
+
+
+def app_url(context):
+    base = context.bot_data.get("public_url")
+    return base + "/app" if base else None
+
+
+async def open_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await authorized(update, context):
+        return
+    url = app_url(context)
+    if not url:
+        await send(update.effective_message, ui(update, "Mini App не настроен: задайте PUBLIC_URL (на Render он определяется сам).",
+                                                "The Mini App is not configured: set PUBLIC_URL (Render sets it automatically)."))
+        return
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(ui(update, "🧩 Открыть Secret AI", "🧩 Open Secret AI"), web_app=WebAppInfo(url))]])
+    await send(update.effective_message, ui(
+        update, "Подключите GitHub и другие сервисы, а потом просто пишите, например: «измени в моём репо README и удали old.py».",
+        "Connect GitHub and other services, then just write, e.g. “update README in my repo and delete old.py”."), keyboard)
 
 
 async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -479,18 +765,23 @@ async def respond(update, context, target, content, saved_question):
     user_id = update.effective_user.id
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
+    prune_pending(context.bot_data["pending"])
+    toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update))
     instructions = SYSTEM + (" " + persona[3] if persona[3] else "") + " Telegram language: " + (update.effective_user.language_code or "ru")
-    live = LiveReply(target, lang(update))
-    await live.start()
+    if toolbox.instructions():
+        instructions += " " + toolbox.instructions()
+    live = await open_reply(target, lang(update), context.bot_data)
     try:
         answer, incomplete = await generate(
-            context, live, model=context.bot_data["model"], instructions=instructions,
+            context, live, toolbox, model=context.bot_data["model"], instructions=instructions,
             input=memory.history(user_id) + [{"role": "user", "content": content}],
-            store=False, max_output_tokens=6000)
+            store=False, max_output_tokens=16000 if toolbox.definitions() else 6000)
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
     answer = answer.strip()
+    if not answer and toolbox.proposals:
+        answer = ui(update, "Подготовил изменения — проверьте и подтвердите ниже.", "Changes are ready — review and confirm below.")
     if not answer:
         await live.finish(ui(update, "Модель не вернула текст. Попробуйте переформулировать вопрос.", "The model returned no text. Please rephrase your question."))
         return
@@ -499,6 +790,7 @@ async def respond(update, context, target, content, saved_question):
     memory.append_turn(user_id, saved_question, answer)
     last = await live.finish(answer, answer_keyboard(update, context))
     context.bot_data["last_answer"][user_id] = last.message_id
+    await show_proposals(update, context, toolbox, target)
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -546,6 +838,42 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             memory.reset(user_id)
         await query.answer(ui(update, "Память очищена", "Memory cleared"))
         await send(query.message, ui(update, "🧹 Память очищена. Начнём новый диалог!", "🧹 Memory cleared. Let's start a new conversation!"))
+        return
+
+    if data.startswith(("apply:", "cancel:")):
+        action, pid = data.split(":", 1)
+        change = context.bot_data["pending"].get(pid)
+        if not change or change["user_id"] != user_id:
+            await query.answer(ui(update, "Изменение устарело — попросите ещё раз", "This change expired — please ask again"), show_alert=True)
+            return
+        if action == "cancel":
+            context.bot_data["pending"].pop(pid, None)
+            await query.answer(ui(update, "Отменено", "Cancelled"))
+            await query.edit_message_reply_markup(reply_markup=None)
+            await send(query.message, ui(update, "❌ Изменения отменены, репозиторий не тронут.", "❌ Changes cancelled; the repository is untouched."))
+            return
+        if change.get("applying"):
+            await query.answer()
+            return
+        change["applying"] = True
+        await query.answer(ui(update, "Применяю…", "Applying…"))
+        try:
+            commit_url, pull_url = await apply_change(context.bot_data["http"], context.bot_data["connections"], change)
+        except (GitHubError, httpx.HTTPError) as exc:
+            change["applying"] = False
+            detail = str(exc) if isinstance(exc, GitHubError) else type(exc).__name__
+            await send(query.message, ui(update, f"⚠️ Не удалось применить: {detail}", f"⚠️ Couldn't apply: {detail}"))
+            return
+        context.bot_data["pending"].pop(pid, None)
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except TelegramError:
+            pass
+        text = ui(update, f"✅ Готово! Коммит в {change['repo']} → {change['branch']}\n{commit_url}",
+                  f"✅ Done! Commit to {change['repo']} → {change['branch']}\n{commit_url}")
+        if pull_url:
+            text += f"\n🔀 Pull request: {pull_url}"
+        await send(query.message, text)
         return
 
     if data == "tts":
@@ -608,46 +936,40 @@ async def on_error(update, context):
         LOG.warning("Error notification could not be delivered")
 
 
-class HealthHandler(BaseHTTPRequestHandler):
-    body = b"Secret AI is running\n"
-
-    def _headers(self):
-        self.send_response(200 if self.path in ("/", "/health") else 404)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.send_header("Content-Length", str(len(self.body)))
-        self.end_headers()
-
-    def do_GET(self):
-        self._headers()
-        self.wfile.write(self.body)
-
-    # Uptime monitors often probe with HEAD; without this they get 501 and report the bot as down.
-    def do_HEAD(self):
-        self._headers()
-
-    def log_message(self, *args):
-        pass
-
-
 COMMANDS = {
-    "ru": [("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
+    "ru": [("app", "Подключения"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
            ("export", "Скачать историю"), ("myid", "Мой Telegram ID")],
-    "en": [("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
+    "en": [("app", "Connections"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
            ("export", "Download history"), ("myid", "My Telegram ID")],
 }
 
 
 async def post_init(app):
+    app.bot_data["loop"] = asyncio.get_running_loop()
     try:
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
+        if app.bot_data["public_url"]:
+            # The button next to the message field opens the Mini App, like in large AI bots.
+            await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp("Secret AI", WebAppInfo(app.bot_data["public_url"] + "/app")))
     except TelegramError:
         LOG.warning("Could not register the command menu")
 
 
 async def shutdown(app):
     await app.bot_data["client"].close()
+    await app.bot_data["http"].aclose()
     app.bot_data["memory"].close()
+    app.bot_data["connections"].close()
+
+
+def notifier(app):
+    """Send a message from the HTTP thread (e.g. after GitHub sign-in)."""
+    def notify(user_id, text):
+        loop = app.bot_data.get("loop")
+        if loop:
+            asyncio.run_coroutine_threadsafe(app.bot.send_message(user_id, text), loop)
+    return notify
 
 
 def main():
@@ -663,12 +985,22 @@ def main():
     except ValueError:
         raise SystemExit("Invalid ALLOWED_USERS or PORT configuration.") from None
     # Updates run concurrently across users; a per-user lock keeps each conversation and /reset in order.
+    database = os.environ.get("DATABASE_PATH", "memory.db")
+    public_url = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+    if public_url and not public_url.startswith("https://"):
+        raise SystemExit("PUBLIC_URL must start with https:// (Telegram Mini Apps require HTTPS).")
+    # Service tokens are encrypted with ENCRYPTION_KEY; without it the key is derived from the bot token.
+    connections = Connections(database, os.environ.get("ENCRYPTION_KEY", "").strip() or token)
     app = Application.builder().token(token).concurrent_updates(True).post_init(post_init).post_shutdown(shutdown).build()
     app.bot_data.update(
+        connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key, timeout=120, max_retries=2),
-        memory=Memory(os.environ.get("DATABASE_PATH", "memory.db")), allowed=allowed,
+        memory=Memory(database), allowed=allowed,
         model=os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna",
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
+        drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
+        logo=os.environ.get("BRAND_EMOJI", "🕶").strip() or "🕶",
+        logo_id=os.environ.get("BRAND_EMOJI_ID", "").strip(),
         tts_model=os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip(),
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
         locks=defaultdict(asyncio.Lock), last_answer={})
@@ -678,13 +1010,19 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("emojiid", emojiid))
+    app.add_handler(CommandHandler(["app", "connect"], open_app))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.PHOTO | filters.Document.IMAGE,
         chat))
     app.add_handler(MessageHandler(filters.ALL, unsupported))
     app.add_error_handler(on_error)
-    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+    handler = miniapp.make_handler({
+        "token": token, "allowed": allowed, "store": connections, "public_url": public_url,
+        "oauth_id": os.environ.get("GITHUB_CLIENT_ID", "").strip(), "oauth_secret": os.environ.get("GITHUB_CLIENT_SECRET", "").strip(),
+        "notify": notifier(app)})
+    server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:

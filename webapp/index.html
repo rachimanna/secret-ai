@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Secret AI</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #0e0b16);
+    --card: var(--tg-theme-secondary-bg-color, #1a1526);
+    --text: var(--tg-theme-text-color, #f2f0f7);
+    --hint: var(--tg-theme-hint-color, #9a93ab);
+    --accent: #8b5cf6;
+    --accent-2: #c084fc;
+    --ok: #34d399;
+    --danger: #f87171;
+    --line: color-mix(in srgb, var(--hint) 22%, transparent);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+  .logo { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; font-size: 26px;
+          background: linear-gradient(135deg, var(--accent), var(--accent-2)); animation: breathe 3s ease-in-out infinite; }
+  @keyframes breathe { 50% { transform: scale(1.06); box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 55%, transparent); } }
+  h1 { font-size: 22px; margin: 0; }
+  .sub { color: var(--hint); font-size: 14px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--hint); margin: 26px 4px 10px; font-weight: 600; }
+  .card { background: var(--card); border-radius: 18px; padding: 16px; margin-bottom: 12px; }
+  .row { display: flex; align-items: center; gap: 12px; }
+  .icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: none; background: #24292f; }
+  .icon svg { width: 24px; height: 24px; fill: #fff; }
+  .grow { flex: 1; min-width: 0; }
+  .name { font-weight: 600; }
+  .status { font-size: 13px; color: var(--hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status.on { color: var(--ok); }
+  .pill { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
+  button { font: inherit; border: 0; border-radius: 12px; padding: 11px 16px; cursor: pointer; font-weight: 600; color: #fff;
+           background: linear-gradient(135deg, var(--accent), #7c3aed); }
+  button.ghost { background: transparent; color: var(--danger); padding: 8px 10px; }
+  button.wide { width: 100%; margin-top: 12px; }
+  button:disabled { opacity: .55; }
+  input { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+          border-radius: 12px; padding: 11px 12px; margin-top: 10px; outline: none; }
+  input:focus { border-color: var(--accent); }
+  details summary { cursor: pointer; color: var(--accent-2); margin-top: 12px; font-size: 14px; list-style: none; }
+  details summary::-webkit-details-marker { display: none; }
+  .hint { color: var(--hint); font-size: 13px; margin-top: 8px; }
+  .hint a { color: var(--accent-2); }
+  .item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .item:first-child { border-top: 0; padding-top: 0; }
+  .examples li { margin: 6px 0; color: var(--text); }
+  .examples { padding-left: 18px; margin: 0; }
+  .toast { position: fixed; left: 16px; right: 16px; bottom: 20px; max-width: 528px; margin: 0 auto; padding: 12px 14px; border-radius: 14px;
+           background: #2a2238; color: #fff; opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; }
+  .toast.show { opacity: 1; transform: none; }
+  .skeleton { color: var(--hint); text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="logo">🕶</div>
+    <div>
+      <h1>Secret AI</h1>
+      <div class="sub" data-t="subtitle">Подключите сервисы — и просто пишите боту, что сделать</div>
+    </div>
+  </header>
+
+  <div id="app" class="skeleton" data-t="loading">Загрузка…</div>
+</main>
+<div id="toast" class="toast"></div>
+
+<script>
+const tg = window.Telegram?.WebApp;
+tg?.ready(); tg?.expand();
+const lang = (tg?.initDataUnsafe?.user?.language_code || navigator.language || "ru").startsWith("ru") ? "ru" : "en";
+const T = {
+  ru: {
+    subtitle: "Подключите сервисы — и просто пишите боту, что сделать", loading: "Загрузка…",
+    services: "Подключения", github: "GitHub", notConnected: "Не подключено", connectedAs: "Подключено: @",
+    connect: "Подключить через GitHub", disconnect: "Отключить", orToken: "Или вставить токен",
+    tokenPh: "github_pat_… или ghp_…", save: "Сохранить",
+    tokenHint: 'Создайте <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">fine-grained токен</a>: выберите репозитории и права Contents — Read and write (для PR ещё Pull requests).',
+    mcp: "Другие сервисы (MCP)", mcpHint: "Любой удалённый MCP-сервер: Zapier MCP, Composio, Stripe и другие — тысячи приложений. Вставьте URL сервера и ключ, если нужен.",
+    mcpName: "Название, например zapier", mcpUrl: "https://… URL MCP-сервера", mcpToken: "Ключ / токен (необязательно)", add: "Добавить",
+    mcpWarn: "Действия MCP-сервисов выполняются без отдельного подтверждения — подключайте только то, чему доверяете.",
+    howto: "Как пользоваться", ex1: "«Покажи мои репозитории»", ex2: "«В репо secret-ai поменяй в README заголовок на …»",
+    ex3: "«Удали файл old.py и обнови requirements.txt»", ex4: "«Сделай это в новой ветке и открой pull request»",
+    exNote: "Перед каждым изменением бот покажет diff и кнопки «Применить / Отмена».",
+    saved: "Сохранено ✅", removed: "Отключено", badToken: "Токен не подошёл — проверьте его и права", error: "Ошибка, попробуйте ещё раз",
+    badLabel: "Название: латиница, цифры и _", badUrl: "URL должен начинаться с https://", openTg: "Откройте эту страницу из бота в Telegram.",
+    oauthOpened: "Завершите вход в браузере и вернитесь в Telegram",
+  },
+  en: {
+    subtitle: "Connect services — then just tell the bot what to do", loading: "Loading…",
+    services: "Connections", github: "GitHub", notConnected: "Not connected", connectedAs: "Connected: @",
+    connect: "Connect with GitHub", disconnect: "Disconnect", orToken: "Or paste a token",
+    tokenPh: "github_pat_… or ghp_…", save: "Save",
+    tokenHint: 'Create a <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">fine-grained token</a> with repository Contents: Read and write (plus Pull requests for PRs).',
+    mcp: "Other services (MCP)", mcpHint: "Any remote MCP server: Zapier MCP, Composio, Stripe and more — thousands of apps. Paste the server URL and a key if needed.",
+    mcpName: "Name, e.g. zapier", mcpUrl: "https://… MCP server URL", mcpToken: "Key / token (optional)", add: "Add",
+    mcpWarn: "MCP actions run without a separate confirmation — connect only services you trust.",
+    howto: "How to use", ex1: "“Show my repositories”", ex2: "“In secret-ai change the README title to …”",
+    ex3: "“Delete old.py and update requirements.txt”", ex4: "“Do it in a new branch and open a pull request”",
+    exNote: "Before any change the bot shows a diff with Apply / Cancel buttons.",
+    saved: "Saved ✅", removed: "Disconnected", badToken: "The token didn't work — check it and its permissions", error: "Something went wrong, try again",
+    badLabel: "Name: latin letters, digits and _", badUrl: "URL must start with https://", openTg: "Open this page from the bot in Telegram.",
+    oauthOpened: "Finish signing in in the browser, then return to Telegram",
+  },
+}[lang];
+document.documentElement.lang = lang;
+document.querySelectorAll("[data-t]").forEach(el => el.textContent = T[el.dataset.t]);
+
+const GH_ICON = '<svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function toast(text) {
+  const el = document.getElementById("toast");
+  el.textContent = text; el.classList.add("show");
+  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2600);
+}
+async function api(path, body = {}) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg?.initData || "" }, body: JSON.stringify(body) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw Object.assign(new Error(data.error || "error"), { code: data.error, status: res.status });
+  return data;
+}
+function errorText(e) {
+  return { github_token: T.badToken, mcp_label: T.badLabel, mcp_url: T.badUrl, auth: T.openTg }[e.code] || T.error;
+}
+async function act(button, fn, okText) {
+  button.disabled = true;
+  try { render(await fn()); if (okText) toast(okText); tg?.HapticFeedback?.notificationOccurred("success"); }
+  catch (e) { toast(errorText(e)); tg?.HapticFeedback?.notificationOccurred("error"); }
+  finally { button.disabled = false; }
+}
+
+function render(state) {
+  const gh = state.github;
+  const app = document.getElementById("app");
+  app.className = "";
+  app.innerHTML = `
+    <h2>${T.services}</h2>
+    <div class="card">
+      <div class="row">
+        <div class="icon">${GH_ICON}</div>
+        <div class="grow"><div class="name">${T.github}</div>
+          <div class="status ${gh.connected ? "on" : ""}">${gh.connected ? T.connectedAs + esc(gh.login) : T.notConnected}</div></div>
+        ${gh.connected ? `<button class="ghost" id="gh-off">${T.disconnect}</button>` : ""}
+      </div>
+      ${gh.connected ? "" : `
+        ${gh.oauth ? `<button class="wide" id="gh-oauth">${T.connect}</button>` : ""}
+        <details ${gh.oauth ? "" : "open"}><summary>${T.orToken}</summary>
+          <input id="gh-token" type="password" autocomplete="off" placeholder="${T.tokenPh}">
+          <div class="hint">${T.tokenHint}</div>
+          <button class="wide" id="gh-save">${T.save}</button>
+        </details>`}
+    </div>
+
+    <h2>${T.mcp}</h2>
+    <div class="card">
+      ${state.mcp.length ? `<div>${state.mcp.map(s => `
+        <div class="item"><div class="grow"><div class="name">${esc(s.label)} <span class="pill">MCP</span></div>
+          <div class="status">${esc(s.url)}</div></div>
+          <button class="ghost" data-off="${esc(s.label)}">${T.disconnect}</button></div>`).join("")}</div>` : ""}
+      <div class="hint">${T.mcpHint}</div>
+      <input id="mcp-label" placeholder="${T.mcpName}" autocomplete="off">
+      <input id="mcp-url" placeholder="${T.mcpUrl}" inputmode="url" autocomplete="off">
+      <input id="mcp-token" type="password" placeholder="${T.mcpToken}" autocomplete="off">
+      <button class="wide" id="mcp-add">${T.add}</button>
+      <div class="hint">⚠️ ${T.mcpWarn}</div>
+    </div>
+
+    <h2>${T.howto}</h2>
+    <div class="card">
+      <ul class="examples"><li>${T.ex1}</li><li>${T.ex2}</li><li>${T.ex3}</li><li>${T.ex4}</li></ul>
+      <div class="hint">🛡 ${T.exNote}</div>
+    </div>`;
+
+  const $ = id => document.getElementById(id);
+  $("gh-off")?.addEventListener("click", e => act(e.target, () => api("/api/disconnect", { service: "github", label: "github" }), T.removed));
+  $("gh-save")?.addEventListener("click", e => act(e.target, () => api("/api/github/token", { token: $("gh-token").value }), T.saved));
+  $("gh-oauth")?.addEventListener("click", async e => {
+    try {
+      const { url } = await api("/api/github/oauth");
+      tg ? tg.openLink(url) : window.open(url, "_blank");
+      toast(T.oauthOpened);
+    } catch (err) { toast(errorText(err)); }
+  });
+  $("mcp-add").addEventListener("click", e => act(e.target, () => api("/api/mcp", {
+    label: $("mcp-label").value, url: $("mcp-url").value, token: $("mcp-token").value }), T.saved));
+  app.querySelectorAll("[data-off]").forEach(b => b.addEventListener("click", e =>
+    act(e.target, () => api("/api/disconnect", { service: "mcp", label: b.dataset.off }), T.removed)));
+  app.querySelectorAll("[data-link]").forEach(a => a.addEventListener("click", e => {
+    e.preventDefault(); tg ? tg.openLink(a.dataset.link) : window.open(a.dataset.link, "_blank");
+  }));
+}
+
+// Re-check after returning from the GitHub sign-in page.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
+async function load() {
+  try { render(await api("/api/state")); }
+  catch (e) { const app = document.getElementById("app"); if (app.classList.contains("skeleton")) app.textContent = errorText(e); }
+}
+load();
+</script>
+</body>
+</html>
