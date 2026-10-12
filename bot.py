@@ -35,6 +35,7 @@ from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, Co
 import miniapp
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
+from mcp_oauth import DirectApps, MCPAuthError
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -604,13 +605,6 @@ async def show_proposals(update, context, toolbox, target):
                                         caption=summary[:1000], reply_markup=keyboard)
 
 
-def answer_keyboard(update, context):
-    row = [InlineKeyboardButton(ui(update, "🔄 Другой ответ", "🔄 Regenerate"), callback_data="regen")]
-    if context.bot_data.get("tts_model"):
-        row.append(InlineKeyboardButton(ui(update, "🔊 Озвучить", "🔊 Read aloud"), callback_data="tts"))
-    return InlineKeyboardMarkup([row, [InlineKeyboardButton(ui(update, "🧹 Новый диалог", "🧹 New chat"), callback_data="reset")]])
-
-
 def persona_keyboard(update, current):
     buttons = [
         InlineKeyboardButton(("✅ " if pid == current else "") + persona_label(update, pid), callback_data=f"mode:{pid}")
@@ -639,7 +633,7 @@ async def authorized(update, context):
 HELP_RU = (
     "Я Secret AI ✨ Отправьте текст, голосовое, аудио, кружок или фото (можно файлом) с вопросом.\n\n"
     "Пока я думаю, вы увидите анимацию, а ответ будет появляться прямо по ходу печати.\n"
-    "Под ответом есть кнопки: 🔄 другой ответ, 🔊 озвучить, 🧹 новый диалог.\n\n"
+    "На голосовое я отвечаю голосом.\n\n"
     "/mode — режим: ассистент, программист, переводчик, креатив\n"
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
@@ -652,7 +646,7 @@ HELP_RU = (
 HELP_EN = (
     "I'm Secret AI ✨ Send text, a voice message, audio, a video note or a photo (also as a file) with a question.\n\n"
     "While I'm thinking you'll see an animation, and the answer appears as it is being written.\n"
-    "Buttons under each answer: 🔄 regenerate, 🔊 read aloud, 🧹 new chat.\n\n"
+    "I answer voice messages with my voice.\n\n"
     "/mode — mode: assistant, coder, translator, creative\n"
     "/reset — clear memory\n"
     "/export — download the conversation\n"
@@ -806,18 +800,24 @@ def user_model(bot_data, user_id):
 
 
 async def app_tools(bot_data, user_id, taken):
-    """MCP tools of apps the user connected in one tap; a Pipedream outage must not break the answer."""
-    pipedream = bot_data["pipedream"]
-    if not pipedream.enabled:
-        return [], []
+    """MCP tools of apps the user connected in one tap; an outage of one source must not break the answer."""
+    tools, names = [], []
     try:
-        return await asyncio.to_thread(pipedream.mcp_tools, user_id, taken)
-    except (PipedreamError, httpx.HTTPError, KeyError, ValueError) as exc:
-        LOG.warning("Connected apps unavailable: %s", type(exc).__name__)
-        return [], []
+        tools, names = await asyncio.to_thread(bot_data["direct"].mcp_tools, user_id, taken)
+    except (MCPAuthError, httpx.HTTPError, KeyError, ValueError) as exc:
+        LOG.warning("Directly connected apps unavailable: %s", type(exc).__name__)
+    pipedream = bot_data["pipedream"]
+    if pipedream.enabled:
+        try:
+            more, more_names = await asyncio.to_thread(pipedream.mcp_tools, user_id, list(taken) + [t["server_label"] for t in tools])
+            tools, names = tools + more, names + more_names
+        except (PipedreamError, httpx.HTTPError, KeyError, ValueError) as exc:
+            LOG.warning("Connected apps unavailable: %s", type(exc).__name__)
+    return tools, names
 
 
-async def respond(update, context, target, content, saved_question):
+async def respond(update, context, target, content, saved_question, voice=False):
+    """Answer in the chat; voice=True (the user sent a voice message) also sends the answer as a voice message."""
     user_id = update.effective_user.id
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
@@ -847,8 +847,13 @@ async def respond(update, context, target, content, saved_question):
     if incomplete:
         answer += ui(update, "\n\nОтвет достиг лимита. Напишите «продолжи».", "\n\nOutput limit reached. Ask me to continue.")
     memory.append_turn(user_id, saved_question, answer)
-    last = await live.finish(answer, answer_keyboard(update, context))
+    last = await live.finish(answer)
     context.bot_data["last_answer"][user_id] = last.message_id
+    if voice and context.bot_data.get("tts_model"):
+        try:
+            await speak(context, target, answer)
+        except Exception as exc:  # the text answer is already there; a failed voice must not look like a failed reply
+            LOG.warning("Voice reply failed: %s", type(exc).__name__)
     await show_proposals(update, context, toolbox, target)
 
 
@@ -864,17 +869,20 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parsed = await read_question(update, context)
         if parsed:
             _, content, saved_question = parsed
-            await respond(update, context, message, content, saved_question)
+            # Voice in, voice out: a voice message or video note gets a spoken answer too.
+            voice = bool(message.voice or message.video_note)
+            await respond(update, context, message, content, saved_question, voice=voice)
 
 
-async def speak(update, context, source):
-    text = (source.text or "").replace(CURSOR, "").strip()[:4000]
+async def speak(context, target, text):
+    """Reply to target with text read aloud (OpenAI TTS)."""
+    text = (text or "").replace(CURSOR, "").strip()[:4000]
     if not text:
         return
-    await source.get_bot().send_chat_action(chat_id=source.chat_id, action=ChatAction.RECORD_VOICE)
+    await target.get_bot().send_chat_action(chat_id=target.chat_id, action=ChatAction.RECORD_VOICE)
     audio = await context.bot_data["client"].audio.speech.create(
         model=context.bot_data["tts_model"], voice=context.bot_data["tts_voice"], input=text, response_format="opus")
-    await source.reply_voice(voice=audio.content, filename="secret-ai.ogg")
+    await target.reply_voice(voice=audio.content, filename="secret-ai.ogg")
 
 
 async def confirm_deletion(update, context, query, pid, change):
@@ -990,7 +998,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "tts":
         await query.answer(ui(update, "Записываю голосовое…", "Recording a voice message…"))
-        await speak(update, context, query.message)
+        await speak(context, query.message, query.message.text)  # buttons under older answers
         return
 
     if data == "regen":
@@ -1118,6 +1126,7 @@ async def shutdown(app):
     await app.bot_data["client"].close()
     await app.bot_data["http"].aclose()
     app.bot_data["pipedream"].http.close()
+    app.bot_data["direct"].http.close()
     app.bot_data["memory"].close()
     app.bot_data["connections"].close()
 
@@ -1217,6 +1226,7 @@ def main():
     model = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
     # Models offered in the Mini App picker; the first one stays the default for users who never chose.
     models = [model] + [m for m in dict.fromkeys(x.strip() for x in os.environ.get("OPENAI_MODELS", "").split(",")) if m and m != model]
+    direct = DirectApps(connections, public_url)
     github_apps = GitHubApps(connections, os.environ.get("GITHUB_CLIENT_ID", "").strip(), os.environ.get("GITHUB_CLIENT_SECRET", "").strip())
     pipedream = Pipedream(os.environ.get("PIPEDREAM_CLIENT_ID", "").strip(), os.environ.get("PIPEDREAM_CLIENT_SECRET", "").strip(),
                           os.environ.get("PIPEDREAM_PROJECT_ID", "").strip(), os.environ.get("PIPEDREAM_ENVIRONMENT", "production").strip(),
@@ -1226,7 +1236,7 @@ def main():
         connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key, timeout=120, max_retries=2),
         memory=Memory(database), allowed=allowed,
-        model=model, models=models, pipedream=pipedream, github_apps=github_apps,
+        model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
         logo=os.environ.get("BRAND_EMOJI", "✨").strip() or "✨",
@@ -1250,7 +1260,7 @@ def main():
     app.add_error_handler(on_error)
     handler = miniapp.make_handler({
         "token": token, "allowed": allowed, "store": connections, "public_url": public_url,
-        "github": github_apps, "bot_name": lambda: app.bot_data.get("bot_name") or "bot",
+        "github": github_apps, "direct": direct, "bot_name": lambda: app.bot_data.get("bot_name") or "bot",
         "bridge": Bridge(app), "pipedream": pipedream})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     thread = Thread(target=server.serve_forever, daemon=True)

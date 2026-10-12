@@ -338,7 +338,8 @@ const T = {
     waiting: "Ожидаю подтверждения…", waitingSub: "Войдите в аккаунт в открывшемся окне и вернитесь сюда.",
     connectedTo: n => `${n} подключён`, connectedSub: "Теперь просто напишите боту, что сделать.", opening: "Открываю…",
     disconnect: "Отключить", disconnectAsk: n => `Отключить ${n}?`, tryAsk: "Попробуйте попросить", ask: "Спросить",
-    notReady: "Каталог приложений ещё не включён владельцем бота", notReadySub: "Нужны ключи Pipedream Connect (см. README). GitHub работает и без них.",
+    notReady: "Это приложение пока недоступно", notReadySub: "GitHub, Notion, Linear, Jira, Asana и другие с пометкой «сразу» подключаются одной кнопкой. Gmail, Календарь и остальные заработают, когда владелец бота включит каталог.",
+    notReadyApp: "Это приложение подключит владелец бота: Google и многие другие сервисы требуют один раз зарегистрировать бота. Пока можно подключить GitHub, Notion, Linear, Jira, Asana и другие с пометкой «сразу».", instant: "сразу",
     ghToken: "Fine-grained токен GitHub", ghTokenHint: 'Создайте <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">токен</a> с правами Contents — Read and write (для PR ещё Pull requests).',
     ghFirst: "Нажмите «Подключить». Первый раз GitHub попросит нажать «Create GitHub App» — так бот один раз создаёт себе доступ. Потом всем пользователям хватит одной кнопки.",
     ghNotReady: "Владелец бота ещё не включил вход через GitHub. Можно войти по токену.", byToken: "Войти по токену",
@@ -366,7 +367,8 @@ const T = {
     waiting: "Waiting for confirmation…", waitingSub: "Sign in in the window that opened, then come back here.",
     connectedTo: n => `${n} connected`, connectedSub: "Now just tell the bot what to do.", opening: "Opening…",
     disconnect: "Disconnect", disconnectAsk: n => `Disconnect ${n}?`, tryAsk: "Try asking", ask: "Ask",
-    notReady: "The app catalog isn't enabled by the bot owner yet", notReadySub: "It needs Pipedream Connect keys (see README). GitHub works without them.",
+    notReady: "This app isn't available yet", notReadySub: "GitHub, Notion, Linear, Jira, Asana and others marked “instant” connect with one tap. Gmail, Calendar and the rest work once the bot owner enables the catalog.",
+    notReadyApp: "The bot owner has to enable this app: Google and many others require registering the bot once. For now you can connect GitHub, Notion, Linear, Jira, Asana and others marked “instant”.", instant: "instant",
     ghToken: "GitHub fine-grained token", ghTokenHint: 'Create a <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">token</a> with Contents: Read and write (plus Pull requests for PRs).',
     ghFirst: "Tap Connect. The first time GitHub asks you to press “Create GitHub App” — that's the bot setting up its access once. After that everyone needs just one tap.",
     ghNotReady: "The bot owner hasn't enabled GitHub sign-in yet. You can use a token.", byToken: "Use a token instead",
@@ -444,7 +446,7 @@ const DISCOVER = lang === "ru" ? [
     ["✍️", "Channel post", "Catchy and alive", "Write a Telegram channel post about the benefits of AI assistants, lively and concise."],
   ]],
 ];
-const FEATURED_HOME = ["github", "notion", "gmail", "google_calendar", "slack", "linear_app"];
+const FEATURED_HOME = ["github", "notion", "linear", "atlassian", "asana", "gmail"];
 
 /* ---------------- helpers ---------------- */
 const $ = id => document.getElementById(id);
@@ -618,7 +620,7 @@ function appRow(app, i = 0) {
   const on = app.slug === "github" ? state?.github?.connected : connectedSlugs().has(app.slug);
   return `<button class="row press" style="--i:${i}" data-app="${esc(app.slug)}">
     ${appIcon(app)}
-    <div class="body"><div class="t">${esc(app.name)}</div><div class="d">${esc(app.description || "")}</div></div>
+    <div class="body"><div class="t">${esc(app.name)}${!on && (app.direct || app.slug === "github") ? `<span class="badge on">${T.instant}</span>` : ""}</div><div class="d">${esc(app.description || "")}</div></div>
     <span class="plus ${on ? "on" : ""}" data-plus="${esc(app.slug)}">${on ? ICON.check : ICON.plus}</span></button>`;
 }
 function renderHomeApps() {
@@ -779,14 +781,16 @@ function openAppSheet(app, opts = {}) {
     });
     return;
   }
-  openSheet(`<div class="head">${icon}<h3>${opts.needs ? esc(T.needsApp(app.name)) : esc(app.name)}</h3><p class="lead" id="lead">${lead}</p></div>
-    <button class="btn" id="go">${esc(T.connectApp(app.name))}</button>`);
+  const available = app.direct || state.apps.enabled;
+  openSheet(`<div class="head">${icon}<h3>${opts.needs ? esc(T.needsApp(app.name)) : esc(app.name)}</h3><p class="lead" id="lead">${available ? lead : T.notReadyApp}</p></div>
+    ${available ? `<button class="btn" id="go">${esc(T.connectApp(app.name))}</button>` : ""}`);
+  if (!available) return;
   $("go").onclick = () => startConnect(app, opts);
 }
 
 async function startConnect(app, opts) {
   const btn = $("go");
-  if (!state.apps.enabled) { toast(T.notReady); haptic("warning"); return; }
+  if (!app.direct && !state.apps.enabled) { toast(T.notReady); haptic("warning"); return; }
   btn.disabled = true;
   btn.innerHTML = `<span class="spinner"></span>${T.opening}`;
   try {

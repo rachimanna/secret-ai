@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from apps import PipedreamError, featured
+from mcp_oauth import DIRECT_APPS, MCPAuthError, direct_catalog
 from integrations import GITHUB_API, check_init_data, check_mcp, github_headers, read_state, sign_state
 
 LOG = logging.getLogger("secret_ai.miniapp")
@@ -51,7 +52,7 @@ def result_page(title, text, ok=True):
 
 def make_handler(config):
     """config: token, allowed, store, public_url, github (GitHubApps), bot_name(), bridge, pipedream."""
-    pipedream, github = config["pipedream"], config["github"]
+    pipedream, github, direct = config["pipedream"], config["github"], config["direct"]
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status, body, content_type="application/json; charset=utf-8", head=False, cache="no-store"):
@@ -95,13 +96,15 @@ def make_handler(config):
             return data
 
         def _apps(self, uid, fresh=False):
+            # Directly connected apps (no keys needed) first, then Pipedream accounts if the catalog is set up.
+            connected = direct.connected(uid)
             if not pipedream.enabled:
-                return {"enabled": False, "connected": []}
+                return {"enabled": False, "connected": connected}
             try:
-                return {"enabled": True, "connected": pipedream.accounts(uid, fresh=fresh)}
+                return {"enabled": True, "connected": connected + pipedream.accounts(uid, fresh=fresh)}
             except (PipedreamError, httpx.HTTPError, KeyError, ValueError) as exc:
                 LOG.warning("Pipedream accounts failed: %s", exc if isinstance(exc, PipedreamError) else type(exc).__name__)
-                return {"enabled": True, "connected": [], "error": True}
+                return {"enabled": True, "connected": connected, "error": True}
 
         def _state(self, user, fresh=False):
             uid = user["id"]
@@ -138,6 +141,8 @@ def make_handler(config):
                     self._page("Не получилось", "Подключение не завершено. Вернитесь в Telegram и попробуйте ещё раз.", ok=False)
             elif url.path == "/oauth/github/callback":
                 self._oauth_callback(parse_qs(url.query))
+            elif url.path == "/oauth/mcp/callback":
+                self._mcp_callback(parse_qs(url.query))
             elif url.path == "/oauth/github/installed":
                 self._page("GitHub подключён", "Репозитории выбраны. Вернитесь в Telegram — Secret AI уже может с ними работать.")
             elif url.path == "/setup/github":
@@ -171,25 +176,41 @@ def make_handler(config):
             if path == "/api/state":
                 self._send(200, self._state(user, fresh=bool(data.get("fresh"))))
             elif path == "/api/catalog":
+                query, after = str(data.get("q") or "").strip().lower(), str(data.get("after") or "")
+                # Apps that connect without any keys always come first.
+                own = [] if after else [a for a in direct_catalog(language) if not query or query in a["name"].lower()]
                 if not pipedream.enabled:
-                    query = str(data.get("q") or "").strip().lower()
-                    apps = [a for a in featured(language) if not query or query in a["name"].lower()]
-                    self._send(200, {"apps": apps, "next": None, "total": None, "enabled": False})
-                    return
-                apps, cursor, total = pipedream.catalog(str(data.get("q") or ""), str(data.get("after") or ""))
-                self._send(200, {"apps": apps, "next": cursor, "total": total, "enabled": True})
+                    rest = [a for a in featured(language) if not query or query in a["name"].lower()]
+                    cursor, total = None, None
+                else:
+                    rest, cursor, total = pipedream.catalog(query, after)
+                taken = {a["slug"] for a in own} | {"linear_app", "jira", "confluence"}  # same services as the direct ones
+                self._send(200, {"apps": own + [a for a in rest if a["slug"] not in taken], "next": cursor, "total": total,
+                                 "enabled": pipedream.enabled})
             elif path == "/api/apps/connect":
                 slug = str(data.get("slug") or "").strip()
-                if not pipedream.enabled:
-                    self._send(400, {"error": "apps_disabled"})
-                    return
                 if not slug or len(slug) > 80 or not slug.replace("_", "").replace("-", "").isalnum():
                     self._send(400, {"error": "bad request"})
-                    return
-                redirect = config["public_url"] + "/connected" if config["public_url"] else ""
-                self._send(200, {"url": pipedream.connect_link(uid, slug, redirect)})
+                elif slug in DIRECT_APPS:
+                    if not config["public_url"]:
+                        self._send(400, {"error": "no_public_url"})
+                        return
+                    try:
+                        self._send(200, {"url": direct.start(uid, slug)})
+                    except (MCPAuthError, httpx.HTTPError, KeyError, ValueError) as exc:
+                        LOG.warning("Direct connect to %s failed: %s", slug, exc if isinstance(exc, MCPAuthError) else type(exc).__name__)
+                        self._send(502, {"error": "apps"})
+                elif not pipedream.enabled:
+                    self._send(400, {"error": "apps_disabled"})
+                else:
+                    redirect = config["public_url"] + "/connected" if config["public_url"] else ""
+                    self._send(200, {"url": pipedream.connect_link(uid, slug, redirect)})
             elif path == "/api/apps/disconnect":
-                pipedream.disconnect(uid, str(data.get("id") or ""))
+                account = str(data.get("id") or "")
+                if account.startswith("direct:"):
+                    direct.disconnect(uid, account[len("direct:"):])
+                else:
+                    pipedream.disconnect(uid, account)
                 self._send(200, self._state(user, fresh=True))
             elif path == "/api/settings":
                 bridge.update(uid, persona=data.get("persona"), model=data.get("model"))
@@ -236,6 +257,19 @@ def make_handler(config):
                 self._send(200, self._state(user))
             else:
                 self._send(404, {"error": "not found"})
+
+        def _mcp_callback(self, query):
+            try:
+                user_id, name = direct.finish((query.get("state") or [""])[0], (query.get("code") or [""])[0])
+            except (MCPAuthError, httpx.HTTPError, KeyError, ValueError) as exc:
+                LOG.warning("Direct app sign-in failed: %s", exc if isinstance(exc, MCPAuthError) else type(exc).__name__)
+                self._page("Не получилось", "Подключение не завершено. Вернитесь в Telegram и попробуйте ещё раз.", ok=False)
+                return
+            try:
+                config["bridge"].notify(user_id, f"✅ {name} подключён. Теперь просто напишите, что сделать.")
+            except RuntimeError:
+                pass
+            self._page("Подключено", f"{name} готов к работе. Вернитесь в Telegram — Secret AI уже видит его.")
 
         def _owner_state(self, query):
             """User ID from a signed state if it belongs to the bot owner, else None."""
