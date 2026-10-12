@@ -22,6 +22,10 @@ UA = {"User-Agent": "secret-ai-bot", "Accept": "application/json"}
 
 # slug: (name, MCP server URL, Russian description, English description, simple-icons slug)
 DIRECT_APPS = {
+    # Zapier: each user signs in to their own (free) Zapier account and picks any of its 8000+ apps there.
+    "zapier": ("Zapier · 8000+ приложений", "https://mcp.zapier.com/api/v1/connect",
+               "Gmail, Google Календарь, Таблицы, Slack, Trello и ещё 8000 приложений через ваш Zapier",
+               "Gmail, Google Calendar, Sheets, Slack, Trello and 8000 more apps through your Zapier", "zapier"),
     "notion": ("Notion", "https://mcp.notion.com/mcp", "Страницы, базы и заметки", "Pages, databases and notes", "notion"),
     "linear": ("Linear", "https://mcp.linear.app/mcp", "Задачи и проекты команды", "Team issues and projects", "linear"),
     "atlassian": ("Jira и Confluence", "https://mcp.atlassian.com/v1/mcp", "Задачи Jira и страницы Confluence",
@@ -33,6 +37,29 @@ DIRECT_APPS = {
     "huggingface": ("Hugging Face", "https://huggingface.co/mcp", "Модели, датасеты и Spaces", "Models, datasets and Spaces",
                     "huggingface"),
     "stripe": ("Stripe", "https://mcp.stripe.com", "Платежи, клиенты, счета", "Payments, customers, invoices", "stripe"),
+    "clickup": ("ClickUp", "https://mcp.clickup.com/mcp", "Задачи, списки и документы", "Tasks, lists and docs", "clickup"),
+    "todoist": ("Todoist", "https://ai.todoist.net/mcp", "Задачи и напоминания", "Tasks and reminders", "todoist"),
+    "monday": ("monday.com", "https://mcp.monday.com/sse", "Доски, задачи и проекты", "Boards, items and projects", "mondaydotcom"),
+    "miro": ("Miro", "https://mcp.miro.com/", "Доски и схемы", "Boards and diagrams", "miro"),
+    "figma": ("Figma", "https://mcp.figma.com/mcp", "Макеты и дизайн-системы", "Designs and design systems", "figma"),
+    "intercom": ("Intercom", "https://mcp.intercom.com/mcp", "Переписка с клиентами", "Customer conversations", "intercom"),
+    "attio": ("Attio", "https://mcp.attio.com/mcp", "CRM: контакты и сделки", "CRM: contacts and deals", "attio"),
+    "close": ("Close", "https://mcp.close.com/mcp", "CRM для продаж", "Sales CRM", "close"),
+    "paypal": ("PayPal", "https://mcp.paypal.com/mcp", "Платежи, счета и заказы", "Payments, invoices and orders", "paypal"),
+    "square": ("Square", "https://mcp.squareup.com/sse", "Продажи, товары и клиенты", "Sales, items and customers", "square"),
+    "webflow": ("Webflow", "https://mcp.webflow.com/sse", "Сайты и CMS", "Websites and CMS", "webflow"),
+    "wix": ("Wix", "https://mcp.wix.com/mcp", "Сайты, магазины и записи", "Sites, stores and bookings", "wix"),
+    "netlify": ("Netlify", "https://netlify-mcp.netlify.app/mcp", "Сайты и деплои", "Sites and deploys", "netlify"),
+    "supabase": ("Supabase", "https://mcp.supabase.com/mcp", "Базы данных и проекты", "Databases and projects", "supabase"),
+    "neon": ("Neon", "https://mcp.neon.tech/mcp", "Postgres-базы", "Postgres databases", "postgresql"),
+    "prisma": ("Prisma Postgres", "https://mcp.prisma.io/mcp", "Базы и миграции", "Databases and migrations", "prisma"),
+    "cloudflare": ("Cloudflare", "https://bindings.mcp.cloudflare.com/mcp", "Workers, KV, R2 и D1", "Workers, KV, R2 and D1",
+                   "cloudflare"),
+    "cloudinary": ("Cloudinary", "https://asset-management.mcp.cloudinary.com/sse", "Фото и видео в облаке",
+                   "Images and videos in the cloud", "cloudinary"),
+    "box": ("Box", "https://mcp.box.com", "Файлы и папки", "Files and folders", "box"),
+    "fireflies": ("Fireflies", "https://api.fireflies.ai/mcp", "Записи и заметки встреч", "Meeting notes and recordings",
+                  "fireflies"),
 }
 
 
