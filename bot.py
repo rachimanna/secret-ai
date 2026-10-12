@@ -853,7 +853,13 @@ async def respond(update, context, target, content, saved_question, voice=False)
         try:
             await speak(context, target, answer)
         except Exception as exc:  # the text answer is already there; a failed voice must not look like a failed reply
-            LOG.warning("Voice reply failed: %s", type(exc).__name__)
+            # Error texts from OpenAI/Telegram carry no user content and tell the owner what to fix.
+            LOG.warning("Voice reply failed: %s %s", type(exc).__name__, getattr(exc, "message", "") or str(exc)[:200])
+            try:
+                await send(target, ui(update, "🔇 Не получилось записать голосовой ответ — ответил текстом.",
+                                      "🔇 Couldn't record a voice reply — answered in text."))
+            except TelegramError:
+                pass
     await show_proposals(update, context, toolbox, target)
 
 
@@ -882,7 +888,12 @@ async def speak(context, target, text):
     await target.get_bot().send_chat_action(chat_id=target.chat_id, action=ChatAction.RECORD_VOICE)
     audio = await context.bot_data["client"].audio.speech.create(
         model=context.bot_data["tts_model"], voice=context.bot_data["tts_voice"], input=text, response_format="opus")
-    await target.reply_voice(voice=audio.content, filename="secret-ai.ogg")
+    try:
+        await target.reply_voice(voice=audio.content, filename="secret-ai.ogg")
+    except BadRequest as exc:
+        # Premium users can forbid voice messages (VOICE_MESSAGES_FORBIDDEN); an audio file is still allowed.
+        LOG.warning("Voice message refused by Telegram (%s); sending an audio file", exc.message)
+        await target.reply_audio(audio=audio.content, filename="Secret AI.ogg", title="Secret AI")
 
 
 async def confirm_deletion(update, context, query, pid, change):
