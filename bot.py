@@ -1023,7 +1023,7 @@ async def make_video(data, job):
     """Generate the scenes in parallel, voice them and edit them into one MP4. Returns the video bytes."""
     scenes = await plan_scenes(data, job)
     clip_seconds = min(job["seconds"], SCENE_SECONDS)
-    quiet = " No dialogue, nobody talks; natural ambient sound only." if job["voice"] else ""
+    quiet = " No dialogue, nobody talks, no lip movement."
     urls = await asyncio.gather(*[
         fal_generate(data["http"], job["key"], job["model"], "video", scene["visual"].rstrip(". ") + "." + quiet, job["fmt"], clip_seconds)
         for scene in scenes])

@@ -44,11 +44,19 @@ class MediaError(Exception):
         self.code = code
 
 
-def build_input(kind, prompt, fmt, seconds=5):
+# Models with native audio invent speech in English or Chinese whatever the prompt says, so their sound is turned off;
+# the voice-over is added by the bot. Other models get no such parameter.
+NATIVE_AUDIO = ("kling-video/v2.6", "kling-video/v3", "kling-video/o3", "veo3", "seedance")
+
+
+def build_input(kind, prompt, fmt, seconds=5, model=""):
     image_size, aspect = FORMATS.get(fmt, FORMATS["square"])
     if kind == "photo":
         return {"prompt": prompt, "image_size": image_size, "num_images": 1, "enable_safety_checker": True}
-    return {"prompt": prompt, "aspect_ratio": aspect, "duration": "10" if seconds >= 10 else "5"}
+    data = {"prompt": prompt, "aspect_ratio": aspect, "duration": "10" if seconds >= 10 else "5"}
+    if any(name in model for name in NATIVE_AUDIO):
+        data["generate_audio"] = False
+    return data
 
 
 def result_url(data):
@@ -69,8 +77,13 @@ def result_url(data):
 async def fal_generate(http, key, model, kind, prompt, fmt, seconds=5):
     """Run one generation and return the URL of the result."""
     headers = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
+    payload = build_input(kind, prompt, fmt, seconds, model)
     try:
-        response = await http.post(f"{FAL_QUEUE}/{model}", headers=headers, json=build_input(kind, prompt, fmt, seconds), timeout=30)
+        response = await http.post(f"{FAL_QUEUE}/{model}", headers=headers, json=payload, timeout=30)
+        if response.status_code == 422 and "generate_audio" in payload:
+            # This model doesn't know the parameter: ask again without it (its sound is dropped in the montage anyway).
+            payload.pop("generate_audio")
+            response = await http.post(f"{FAL_QUEUE}/{model}", headers=headers, json=payload, timeout=30)
     except httpx.HTTPError as exc:
         raise MediaError("failed", type(exc).__name__) from None
     if response.status_code in (401, 403):
@@ -139,10 +152,10 @@ async def _has_audio(path):
     return b"Audio:" in err
 
 
-async def montage(clips, fmt, voice=None):
-    """Join video clips (bytes) into one MP4 with the same frame; mix an optional voice-over (bytes) on top.
+async def montage(clips, fmt, voice=None, keep_sound=False):
+    """Join video clips (bytes) into one MP4 with the same frame and lay an optional voice-over (bytes) on top.
 
-    The clips' own sound stays as quiet background under the voice. Returns the MP4 bytes.
+    The clips' own sound is dropped unless keep_sound: video models put foreign-language speech there. Returns MP4 bytes.
     """
     width, height = FRAME.get(fmt, FRAME["square"])
     with tempfile.TemporaryDirectory(prefix="secret-ai-video-") as folder:
@@ -152,7 +165,7 @@ async def montage(clips, fmt, voice=None):
             source, target = folder / f"clip{index}.mp4", folder / f"part{index}.mp4"
             source.write_bytes(data)
             # Every part gets the same size, frame rate and an audio track, so they can be joined without re-encoding.
-            audio = ["-map", "0:a:0"] if await _has_audio(source) else ["-map", "1:a:0"]
+            audio = ["-map", "0:a:0"] if keep_sound and await _has_audio(source) else ["-map", "1:a:0"]
             await _ffmpeg("-i", str(source), "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
                           "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
                                  f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30",
