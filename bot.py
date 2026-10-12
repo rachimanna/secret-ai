@@ -85,6 +85,8 @@ DRAFT_KEEPALIVE = 10
 REVEAL_MIN_STEP = 12
 MAX_TOOL_ROUNDS = 12
 DIFF_INLINE_LIMIT = 2500
+VOICE_TIMEOUT = 60
+VOICE_MAX_CHARS = 1500
 
 
 def parse_allowed(value):
@@ -850,17 +852,25 @@ async def respond(update, context, target, content, saved_question, voice=False)
     last = await live.finish(answer)
     context.bot_data["last_answer"][user_id] = last.message_id
     if voice and context.bot_data.get("tts_model"):
-        try:
-            await speak(context, target, answer)
-        except Exception as exc:  # the text answer is already there; a failed voice must not look like a failed reply
-            # Error texts from OpenAI/Telegram carry no user content and tell the owner what to fix.
-            LOG.warning("Voice reply failed: %s %s", type(exc).__name__, getattr(exc, "message", "") or str(exc)[:200])
-            try:
-                await send(target, ui(update, "🔇 Не получилось записать голосовой ответ — ответил текстом.",
-                                      "🔇 Couldn't record a voice reply — answered in text."))
-            except TelegramError:
-                pass
+        # Recorded in the background: the user's next message must not wait for the voice (it keeps the lock otherwise).
+        task = asyncio.create_task(voice_reply(update, context, target, answer))
+        tasks = context.bot_data.setdefault("voice_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
     await show_proposals(update, context, toolbox, target)
+
+
+async def voice_reply(update, context, target, answer):
+    try:
+        await asyncio.wait_for(speak(context, target, answer), VOICE_TIMEOUT)
+    except Exception as exc:  # the text answer is already there; a failed voice must not look like a failed reply
+        # Error texts from OpenAI/Telegram carry no user content and tell the owner what to fix.
+        LOG.warning("Voice reply failed: %s %s", type(exc).__name__, getattr(exc, "message", "") or str(exc)[:200])
+        try:
+            await send(target, ui(update, "🔇 Не получилось записать голосовой ответ — ответил текстом.",
+                                  "🔇 Couldn't record a voice reply — answered in text."))
+        except TelegramError:
+            pass
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -882,7 +892,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def speak(context, target, text):
     """Reply to target with text read aloud (OpenAI TTS)."""
-    text = (text or "").replace(CURSOR, "").strip()[:4000]
+    text = (text or "").replace(CURSOR, "").strip()
+    if len(text) > VOICE_MAX_CHARS:  # long answers take minutes to voice; read the beginning, the full text is in the chat
+        cut = text.rfind(". ", 0, VOICE_MAX_CHARS)
+        text = text[:cut + 1 if cut > VOICE_MAX_CHARS // 2 else VOICE_MAX_CHARS]
     if not text:
         return
     await target.get_bot().send_chat_action(chat_id=target.chat_id, action=ChatAction.RECORD_VOICE)
