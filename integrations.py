@@ -77,7 +77,8 @@ def read_state(secret, state):
 class Connections:
     """Per-user service tokens, encrypted at rest. Safe to use from the bot and the HTTP thread."""
 
-    def __init__(self, path, secret):
+    def __init__(self, path, secret, owner=None):
+        self.owner = owner  # OWNER_ID: fixed bot owner, survives a wiped database
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, timeout=10, check_same_thread=False)
         self.lock = threading.Lock()
@@ -129,6 +130,8 @@ class Connections:
         self.db.execute("CREATE TABLE IF NOT EXISTS bot_meta (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
 
     def get_meta(self, key, secret=False):
+        if key == "owner" and self.owner:
+            return self.owner
         with self.lock, self.db:
             self._meta_table()
             row = self.db.execute("SELECT value FROM bot_meta WHERE key=?", (key,)).fetchone()

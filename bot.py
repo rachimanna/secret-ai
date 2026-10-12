@@ -1623,7 +1623,9 @@ def main():
     if public_url and not public_url.startswith("https://"):
         raise SystemExit("PUBLIC_URL must start with https:// (Telegram Mini Apps require HTTPS).")
     # Service tokens are encrypted with ENCRYPTION_KEY; without it the key is derived from the bot token.
-    connections = Connections(database, os.environ.get("ENCRYPTION_KEY", "").strip() or token)
+    owner = os.environ.get("OWNER_ID", "").strip()
+    connections = Connections(database, os.environ.get("ENCRYPTION_KEY", "").strip() or token,
+                              int(owner) if owner.isdigit() else None)
     model = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
     # Models offered in the Mini App picker; the first one stays the default for users who never chose.
     models = [model] + [m for m in dict.fromkeys(x.strip() for x in os.environ.get("OPENAI_MODELS", "").split(",")) if m and m != model]
