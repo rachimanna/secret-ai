@@ -5,7 +5,7 @@ how to answer ("reply to everyone: hi, I'm busy, I'll answer later, this is an A
 """
 import time
 
-OWNER_ACTIVE = 10 * 60  # after the owner writes in a chat, the secretary stays quiet there for 10 minutes
+OWNER_ACTIVE = 10 * 60  # after the owner writes anywhere, the secretary stays quiet everywhere for 10 minutes
 MIN_GAP = 0  # every message gets its own answer
 HISTORY = 14  # recent lines of a chat the secretary sees
 
@@ -79,6 +79,8 @@ class Activity:
     """When the owner last wrote and when the secretary last answered, per chat (in memory)."""
 
     def __init__(self):
+        # owner_seen: owner user id -> when they last wrote (in any chat or to the bot); Telegram doesn't show bots
+        # whether someone is online, so writing is the sign that the owner is here.
         self.owner_seen, self.answered, self.lines = {}, {}, {}
 
     def log(self, chat_id, line):
@@ -86,12 +88,15 @@ class Activity:
         lines.append(line[:600])
         del lines[:-HISTORY]
 
-    def owner_wrote(self, chat_id):
-        self.owner_seen[chat_id] = time.monotonic()
+    def owner_wrote(self, owner_id):
+        self.owner_seen[owner_id] = time.monotonic()
 
-    def may_answer(self, chat_id):
+    def owner_online(self, owner_id):
+        return time.monotonic() - self.owner_seen.get(owner_id, -1e9) < OWNER_ACTIVE
+
+    def may_answer(self, owner_id, chat_id):
         now = time.monotonic()
-        return now - self.owner_seen.get(chat_id, -1e9) > OWNER_ACTIVE and now - self.answered.get(chat_id, -1e9) > MIN_GAP
+        return not self.owner_online(owner_id) and now - self.answered.get(chat_id, -1e9) > MIN_GAP
 
     def answered_now(self, chat_id):
         self.answered[chat_id] = time.monotonic()

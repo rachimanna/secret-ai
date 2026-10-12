@@ -1470,10 +1470,10 @@ async def business_connection(update: Update, context: ContextTypes.DEFAULT_TYPE
         rules = current["rules"] or "—"
         text = (f"✅ Секретарь подключён. Сейчас он {'включён' if current['enabled'] else 'выключен'}, правила: «{rules}».\n\n"
                 "Напиши мне, как отвечать, например: «отвечай всем: привет, я занят или сплю, отвечу позже, это ИИ». "
-                "Выключить — «выключи секретаря». Когда ты сам пишешь в чате, я там 10 минут молчу." if ru else
+                "Выключить — «выключи секретаря». Как только ты сам кому-то пишешь (или пишешь мне), я замолкаю во всех чатах на 10 минут." if ru else
                 f"✅ The secretary is connected. It is {'on' if current['enabled'] else 'off'}, rules: «{rules}».\n\n"
                 "Tell me how to answer, e.g. “reply to everyone: hi, I'm busy, I'll answer later, this is an AI”. "
-                "Turn it off with “turn off the secretary”. When you write in a chat yourself, I stay quiet there for 10 minutes.")
+                "Turn it off with “turn off the secretary”. As soon as you write to anyone (or to me), I go quiet in all chats for 10 minutes.")
     try:
         await context.bot.send_message(value["chat_id"], text)
     except TelegramError:
@@ -1500,14 +1500,14 @@ async def secretary_answer(context, message):
     chat_id, sender, activity = message.chat.id, message.from_user, data["biz_activity"]
     said = describe_message(message) or "…"
     if sender and sender.id == conn["user_id"]:
-        activity.owner_wrote(chat_id)  # the owner is here: stay quiet in this chat for a while
+        activity.owner_wrote(sender.id)  # the owner is here: stay quiet in all chats for a while
         activity.log(chat_id, f"{conn.get('name', 'Owner')} (owner): {said}")
         return
     name = speaker(sender) if sender else "?"
     activity.log(chat_id, f"{name}: {said}")
     current = sec.settings(store, conn["user_id"])
     if (not current["enabled"] or not conn["enabled"] or not conn["can_reply"] or message.chat.type != "private"
-            or (sender and sender.is_bot) or not activity.may_answer(chat_id)):
+            or (sender and sender.is_bot) or not activity.may_answer(conn["user_id"], chat_id)):
         return
     activity.answered_now(chat_id)
     try:
@@ -1853,6 +1853,8 @@ async def voice_reply(update, context, target, answer):
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user:
+        context.bot_data["biz_activity"].owner_wrote(update.effective_user.id)  # writing to the bot = online (secretary pauses)
     if update.effective_chat and update.effective_chat.type in GROUP_TYPES:
         await group_chat(update, context)
         return
