@@ -1222,7 +1222,7 @@ function hideSplash() {
   const el = $("splash");
   if (!el || el.classList.contains("gone")) return;
   // Keep it at least a moment so the app doesn't flash in.
-  const wait = Math.max(0, 1600 - performance.now());
+  const wait = Math.max(0, 3000 - performance.now());
   setTimeout(() => { el.classList.add("gone"); setTimeout(() => el.remove(), 600); }, wait);
 }
 function init() {
@@ -1248,7 +1248,7 @@ function init() {
   }
   paintChrome();
   load().then(settle).finally(hideSplash);
-  setTimeout(hideSplash, 8000);  // never keep the splash if the server is slow to answer
+  setTimeout(hideSplash, 9000);  // never keep the splash if the server is slow to answer
   // Re-check connections after returning from a sign-in page.
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state) load(true); });
 }
