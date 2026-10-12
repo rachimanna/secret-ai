@@ -34,6 +34,8 @@ class GroupStore:
             self.db.execute("CREATE TABLE IF NOT EXISTS group_media (chat_id INTEGER NOT NULL, kind TEXT NOT NULL, "
                             "unique_id TEXT NOT NULL, file_id TEXT NOT NULL, seen INTEGER NOT NULL, added INTEGER NOT NULL, "
                             "PRIMARY KEY (chat_id, unique_id))")
+            self.db.execute("CREATE TABLE IF NOT EXISTS group_sent (chat_id INTEGER NOT NULL, key TEXT NOT NULL, "
+                            "created INTEGER NOT NULL, PRIMARY KEY (chat_id, key))")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_phrases (chat_id INTEGER NOT NULL, key TEXT NOT NULL, "
                             "phrase TEXT NOT NULL, count INTEGER NOT NULL, last INTEGER NOT NULL, PRIMARY KEY (chat_id, key))")
 
@@ -109,6 +111,18 @@ class GroupStore:
         if not rows:
             return None
         return random.choices([r[0] for r in rows], weights=[r[1] for r in rows])[0]
+
+    def was_sent(self, chat_id, key):
+        return bool(self.db.execute("SELECT 1 FROM group_sent WHERE chat_id=? AND key=?", (chat_id, key)).fetchone())
+
+    def sent_keys(self, chat_id):
+        return {row[0] for row in self.db.execute("SELECT key FROM group_sent WHERE chat_id=?", (chat_id,))}
+
+    def mark_sent(self, chat_id, key):
+        with self.db:
+            self.db.execute("INSERT OR IGNORE INTO group_sent(chat_id, key, created) VALUES (?, ?, ?)", (chat_id, key, int(time.time())))
+            self.db.execute("DELETE FROM group_sent WHERE chat_id=? AND key NOT IN (SELECT key FROM group_sent WHERE chat_id=? "
+                            "ORDER BY created DESC LIMIT 500)", (chat_id, chat_id))
 
     def close(self):
         self.db.close()
@@ -258,3 +272,50 @@ def demotivator(photo, title, subtitle=""):
         draw.text((width / 2, y + 6), line, font=sub_font, fill=(220, 220, 220), anchor="ma")
         y += 42
     return _jpeg(card)
+
+
+# ---------- TikTok memes ----------
+
+TIKWM = "https://www.tikwm.com"  # unofficial TikTok search with watermark-free video links; may change or rate-limit
+MEME_QUERIES = ["мемы", "мем", "приколы", "смешные видео", "мемы 2026", "ржака", "смешно до слёз", "мемы про школу",
+                "мемы про работу", "мемы про друзей", "кот мем", "собака прикол", "жиза мем", "угар", "приколы с животными"]
+MAX_VIDEO_BYTES = 45_000_000
+
+
+class MemeError(Exception):
+    pass
+
+
+async def tiktok_meme(http, query=None, skip=()):
+    """A funny TikTok video for the query: (video id, mp4 bytes, title). Raises MemeError."""
+    query = query or random.choice(MEME_QUERIES)
+    try:
+        response = await http.post(f"{TIKWM}/api/feed/search", timeout=20,
+                                   data={"keywords": query, "count": 20, "cursor": random.choice([0, 0, 10, 20]), "HD": 0},
+                                   headers={"User-Agent": "Mozilla/5.0"})
+        videos = ((response.json() or {}).get("data") or {}).get("videos") or []
+    except Exception as exc:  # network, JSON or a changed format
+        raise MemeError(type(exc).__name__) from None
+    videos = [v for v in videos if v.get("play") and str(v.get("video_id")) not in skip and 0 < (v.get("duration") or 0) <= 90
+              and (v.get("size") or 0) <= MAX_VIDEO_BYTES]
+    random.shuffle(videos)
+    for video in videos[:3]:
+        url = video["play"] if video["play"].startswith("http") else TIKWM + video["play"]
+        try:
+            data = await http.get(url, timeout=60, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
+        except Exception:  # try the next one
+            continue
+        if data.status_code == 200 and 10_000 < len(data.content) <= MAX_VIDEO_BYTES:
+            return str(video["video_id"]), data.content, str(video.get("title") or "")[:200]
+    raise MemeError("no video")
+
+
+async def picture_meme(http):
+    """A meme picture (meme-api.com, from Reddit) as a fallback: (url, title). Raises MemeError."""
+    try:
+        data = (await http.get("https://meme-api.com/gimme", timeout=15)).json()
+    except Exception as exc:
+        raise MemeError(type(exc).__name__) from None
+    if data.get("nsfw") or not data.get("url"):
+        raise MemeError("no meme")
+    return data["url"], str(data.get("title") or "")[:200]

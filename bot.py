@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import random
+import re
 import sqlite3
 import tempfile
 import time
@@ -28,7 +29,7 @@ from openai import (
 from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
                       MessageEntity, ReplyParameters, Update, User, WebAppInfo)
 from codefiles import extract_files, site_file
-from fun import GroupStore, demotivator, quote_card
+from fun import GroupStore, MemeError, demotivator, picture_meme, quote_card, tiktok_meme
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
@@ -767,7 +768,7 @@ HELP_RU = (
     "На голосовое я отвечаю голосом.\n"
     "Код и скрипты присылаю файлами, а сайт ещё и публикую — с кнопкой «Открыть сайт».\n"
     "Добавьте меня в группу: отвечаю на reply и на @упоминание, помню чат, иногда сам кидаю мемы, цитаты и демотиваторы. "
-    "В группе: /q — цитата (ответом на сообщение), /dem — демотиватор.\n\n"
+    "В группе: /q — цитата (ответом на сообщение), /dem — демотиватор, /meme — мем из TikTok.\n\n"
     "/mode — режим: ассистент, программист, переводчик, креатив\n"
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
@@ -783,7 +784,7 @@ HELP_EN = (
     "I answer voice messages with my voice.\n"
     "Code and scripts come as files; a website is also published with an “Open” button.\n"
     "Add me to a group: I answer replies and @mentions, remember the chat and sometimes post memes, quotes and demotivators. "
-    "In a group: /q — quote (reply to a message), /dem — demotivator.\n\n"
+    "In a group: /q — quote (reply to a message), /dem — demotivator, /meme — a TikTok meme.\n\n"
     "/mode — mode: assistant, coder, translator, creative\n"
     "/reset — clear memory\n"
     "/export — download the conversation\n"
@@ -1213,6 +1214,7 @@ async def group_surprise(context, message, user):
         options.append(("quote", 18))
     if store.has_media(chat_id, "photo"):
         options.append(("demotivator", 10))
+    options.append(("tiktok", 15))
     action = random.choices([o[0] for o in options], weights=[o[1] for o in options])[0]
     target, target_line = surprise_target(store, message)
     if action == "media":
@@ -1225,6 +1227,8 @@ async def group_surprise(context, message, user):
         await send_quote(context, chat_id, message.text, user, message.message_id if target else None)
     elif action == "demotivator":
         await send_demotivator(context, chat_id, None, reply_id=target)
+    elif action == "tiktok" and await send_meme(context, chat_id, None, target):
+        pass
     else:
         if target == message.message_id:
             target_line = f"{speaker(user)}: {describe_message(message)}"
@@ -1264,6 +1268,56 @@ async def send_chat_media(context, chat_id, kinds, target=None):
             return
         except BadRequest:
             store.forget_media(chat_id, file_id)
+
+
+MEME_ASK = re.compile(r"(скин|кин|кида|дава|покаж|дай|отправ|хочу|го\b|send|show|give).{0,40}(мем|тик ?ток|tik ?tok|meme)"
+                      r"|(мем|тик ?ток|tik ?tok|meme).{0,20}(скин|кин|дава|покаж|дай|плиз|пж)", re.I | re.S)
+MEME_FILLER = re.compile(r"@\w+|\b(скинь|кинь|кидай|давай|покажи|дай|отправь|хочу|го|пж|плиз|пожалуйста|please|send|show|give|me|a|"
+                         r"мемы|мемчик|мемас|мем|тикток|тик ток|tiktok|tik tok|видео|видос|из|с|в|про|какой|нибудь|-?то|meme|memes|"
+                         r"about|from)\b", re.I)
+
+
+def meme_query(text):
+    """"скинь мем про котов" -> "мем коты"-like search words, or None for any meme."""
+    rest = " ".join(MEME_FILLER.sub(" ", text or "").split()).strip(" ,.!?")
+    return f"мем {rest}" if rest else None
+
+
+async def send_meme(context, chat_id, query=None, reply_id=None):
+    """A funny TikTok video (or, if TikTok search is down, a meme picture). True if something was sent."""
+    store, http = context.bot_data["groups"], context.bot_data["http"]
+    try:
+        video_id, video, title = await tiktok_meme(http, query, {k[3:] for k in store.sent_keys(chat_id) if k.startswith("tt:")})
+        await context.bot.send_video(chat_id, InputFile(video, filename="meme.mp4"), supports_streaming=True,
+                                     reply_parameters=reply_to(reply_id), write_timeout=120, read_timeout=120)
+        store.mark_sent(chat_id, "tt:" + video_id)
+        store.add_line(chat_id, f"Secret AI: [видео-мем из TikTok: {title}]")
+        return True
+    except (MemeError, TelegramError) as exc:
+        LOG.warning("TikTok meme failed: %s", type(exc).__name__)
+    for _ in range(2):
+        try:
+            url, title = await picture_meme(http)
+            if store.was_sent(chat_id, "img:" + url):
+                continue
+            await context.bot.send_photo(chat_id, url, reply_parameters=reply_to(reply_id))
+            store.mark_sent(chat_id, "img:" + url)
+            store.add_line(chat_id, f"Secret AI: [мем-картинка: {title}]")
+            return True
+        except (MemeError, TelegramError) as exc:
+            LOG.warning("Picture meme failed: %s", type(exc).__name__)
+    return False
+
+
+async def meme_command(update, context):
+    """/meme [about what]: a TikTok meme."""
+    message = update.effective_message
+    if not message:
+        return
+    await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_VIDEO)
+    query = meme_query(" ".join(context.args)) if context.args else None
+    if not await send_meme(context, message.chat_id, query, message.message_id):
+        await reply(message, ui(update, "Мемы сейчас не грузятся, попробуй чуть позже.", "Memes aren't loading right now, try later."))
 
 
 async def avatar_bytes(bot, user_id):
@@ -1333,6 +1387,10 @@ async def meme_request(update, context):
     if "цитат" in text or "quote" in text:
         if target and target.from_user and target.from_user.id != context.bot.id and (target.text or target.caption):
             await send_quote(context, message.chat_id, target.text or target.caption, target.from_user, message.message_id)
+            return True
+    if MEME_ASK.search(text):
+        await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_VIDEO)
+        if await send_meme(context, message.chat_id, meme_query(text), message.message_id):
             return True
     if "демотиватор" in text or "demotivator" in text:
         photo = (message.photo or (target.photo if target else None) or [None])[-1]
@@ -1956,9 +2014,11 @@ async def post_init(app):
     try:
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
-        group = [BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото")]
+        group = [BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
+                 BotCommand("meme", "Мем из TikTok")]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
-        await app.bot.set_my_commands([BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo")],
+        await app.bot.set_my_commands([BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
+                                       BotCommand("meme", "A TikTok meme")],
                                       scope=BotCommandScopeAllGroupChats())
         if app.bot_data["public_url"]:
             # The button next to the message field opens the Mini App, like in large AI bots.
@@ -2127,6 +2187,7 @@ def main():
     app.add_handler(CommandHandler(["app", "connect"], open_app))
     app.add_handler(CommandHandler(["q", "quote"], quote_command))
     app.add_handler(CommandHandler(["dem", "demotivator"], demotivator_command))
+    app.add_handler(CommandHandler(["meme", "mem"], meme_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
