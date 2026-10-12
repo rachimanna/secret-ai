@@ -277,8 +277,10 @@ def demotivator(photo, title, subtitle=""):
 # ---------- TikTok memes ----------
 
 TIKWM = "https://www.tikwm.com"  # unofficial TikTok search with watermark-free video links; may change or rate-limit
-MEME_QUERIES = ["мемы", "мем", "приколы", "смешные видео", "мемы 2026", "ржака", "смешно до слёз", "мемы про школу",
-                "мемы про работу", "мемы про друзей", "кот мем", "собака прикол", "жиза мем", "угар", "приколы с животными"]
+MEME_QUERIES = ["русские мемы", "мемы на русском", "приколы на русском", "русские приколы", "смешные видео на русском",
+                "мемы россия", "ржака до слёз", "угарные видео", "мемы про школу", "мемы про работу", "мемы про друзей",
+                "жиза мем", "приколы с котами", "приколы с собаками", "мемы тикток россия", "смешные моменты стрим"]
+RUSSIAN_REGIONS = {"RU", "BY", "KZ", "UA", "KG", "UZ", "AM", "AZ", "GE", "MD", "TJ", "TM"}
 MAX_VIDEO_BYTES = 45_000_000
 
 
@@ -286,18 +288,41 @@ class MemeError(Exception):
     pass
 
 
+def _cyrillic(text):
+    return sum(1 for c in text if "а" <= c.lower() <= "я" or c in "ёЁ")
+
+
+def _russian(video):
+    """Russian-speaking video: a Russian title or an author from a Russian-speaking country."""
+    title = str(video.get("title") or "")
+    region = str(video.get("region") or (video.get("author") or {}).get("region") or "").upper()
+    return _cyrillic(title) >= 3 or region in RUSSIAN_REGIONS
+
+
+async def _search(http, query):
+    response = await http.post(f"{TIKWM}/api/feed/search", timeout=20,
+                               data={"keywords": query, "count": 30, "cursor": random.choice([0, 0, 10, 20]), "HD": 0,
+                                     "region": "RU"},
+                               headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "ru-RU,ru;q=0.9"})
+    return ((response.json() or {}).get("data") or {}).get("videos") or []
+
+
 async def tiktok_meme(http, query=None, skip=()):
-    """A funny TikTok video for the query: (video id, mp4 bytes, title). Raises MemeError."""
-    query = query or random.choice(MEME_QUERIES)
-    try:
-        response = await http.post(f"{TIKWM}/api/feed/search", timeout=20,
-                                   data={"keywords": query, "count": 20, "cursor": random.choice([0, 0, 10, 20]), "HD": 0},
-                                   headers={"User-Agent": "Mozilla/5.0"})
-        videos = ((response.json() or {}).get("data") or {}).get("videos") or []
-    except Exception as exc:  # network, JSON or a changed format
-        raise MemeError(type(exc).__name__) from None
-    videos = [v for v in videos if v.get("play") and str(v.get("video_id")) not in skip and 0 < (v.get("duration") or 0) <= 90
-              and (v.get("size") or 0) <= MAX_VIDEO_BYTES]
+    """A funny Russian-language TikTok video: (video id, mp4 bytes, title). Raises MemeError."""
+    queries = [query] if query else []
+    queries += random.sample(MEME_QUERIES, 2)
+    videos = []
+    for words in queries:
+        if " " not in words and not _cyrillic(words):
+            words += " на русском"
+        try:
+            found = await _search(http, words)
+        except Exception as exc:  # network, JSON or a changed format
+            raise MemeError(type(exc).__name__) from None
+        videos = [v for v in found if v.get("play") and str(v.get("video_id")) not in skip and _russian(v)
+                  and 0 < (v.get("duration") or 0) <= 90 and (v.get("size") or 0) <= MAX_VIDEO_BYTES]
+        if videos:
+            break
     random.shuffle(videos)
     for video in videos[:3]:
         url = video["play"] if video["play"].startswith("http") else TIKWM + video["play"]
@@ -308,14 +333,3 @@ async def tiktok_meme(http, query=None, skip=()):
         if data.status_code == 200 and 10_000 < len(data.content) <= MAX_VIDEO_BYTES:
             return str(video["video_id"]), data.content, str(video.get("title") or "")[:200]
     raise MemeError("no video")
-
-
-async def picture_meme(http):
-    """A meme picture (meme-api.com, from Reddit) as a fallback: (url, title). Raises MemeError."""
-    try:
-        data = (await http.get("https://meme-api.com/gimme", timeout=15)).json()
-    except Exception as exc:
-        raise MemeError(type(exc).__name__) from None
-    if data.get("nsfw") or not data.get("url"):
-        raise MemeError("no meme")
-    return data["url"], str(data.get("title") or "")[:200]

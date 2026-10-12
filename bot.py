@@ -29,7 +29,7 @@ from openai import (
 from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
                       MessageEntity, ReplyParameters, Update, User, WebAppInfo)
 from codefiles import extract_files, site_file
-from fun import GroupStore, MemeError, demotivator, picture_meme, quote_card, tiktok_meme
+from fun import GroupStore, MemeError, demotivator, quote_card, tiktok_meme
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
@@ -1284,7 +1284,7 @@ def meme_query(text):
 
 
 async def send_meme(context, chat_id, query=None, reply_id=None):
-    """A funny TikTok video (or, if TikTok search is down, a meme picture). True if something was sent."""
+    """A funny Russian-language TikTok video (or, if TikTok search is down, the chat's own gif). True if sent."""
     store, http = context.bot_data["groups"], context.bot_data["http"]
     try:
         video_id, video, title = await tiktok_meme(http, query, {k[3:] for k in store.sent_keys(chat_id) if k.startswith("tt:")})
@@ -1295,17 +1295,10 @@ async def send_meme(context, chat_id, query=None, reply_id=None):
         return True
     except (MemeError, TelegramError) as exc:
         LOG.warning("TikTok meme failed: %s", type(exc).__name__)
-    for _ in range(2):
-        try:
-            url, title = await picture_meme(http)
-            if store.was_sent(chat_id, "img:" + url):
-                continue
-            await context.bot.send_photo(chat_id, url, reply_parameters=reply_to(reply_id))
-            store.mark_sent(chat_id, "img:" + url)
-            store.add_line(chat_id, f"Secret AI: [мем-картинка: {title}]")
-            return True
-        except (MemeError, TelegramError) as exc:
-            LOG.warning("Picture meme failed: %s", type(exc).__name__)
+    # No English picture memes: the chat's own stickers and gifs are the fallback.
+    if store.has_media(chat_id, "gif") or store.has_media(chat_id, "sticker"):
+        await send_chat_media(context, chat_id, ("gif", "sticker"), reply_id)
+        return True
     return False
 
 
