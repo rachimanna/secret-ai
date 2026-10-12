@@ -1447,6 +1447,8 @@ def secretary_tool(context, user_id, ru):
             current["rules"] = ("Привет! Я сейчас занят и отвечу позже. Это ИИ-помощник." if ru
                                 else "Hi! I'm busy right now and will answer later. This is an AI assistant.")
         sec.save_settings(store, user_id, current)
+        if current["enabled"]:
+            context.bot_data["biz_activity"].owner_seen.pop(user_id, None)
         return "Saved. " + sec.status_text(store, user_id, ru)
 
     return {"definition": sec.TOOL, "run": run, "status": ("Настраиваю секретаря", "Setting up the secretary"),
@@ -1470,10 +1472,10 @@ async def business_connection(update: Update, context: ContextTypes.DEFAULT_TYPE
         rules = current["rules"] or "—"
         text = (f"✅ Секретарь подключён. Сейчас он {'включён' if current['enabled'] else 'выключен'}, правила: «{rules}».\n\n"
                 "Напиши мне, как отвечать, например: «отвечай всем: привет, я занят или сплю, отвечу позже, это ИИ». "
-                "Выключить — «выключи секретаря». Как только ты сам кому-то пишешь (или пишешь мне), я замолкаю во всех чатах на 10 минут." if ru else
+                "Выключить — «выключи секретаря». Как только ты сам кому-то пишешь в личке, я замолкаю во всех чатах на 10 минут." if ru else
                 f"✅ The secretary is connected. It is {'on' if current['enabled'] else 'off'}, rules: «{rules}».\n\n"
                 "Tell me how to answer, e.g. “reply to everyone: hi, I'm busy, I'll answer later, this is an AI”. "
-                "Turn it off with “turn off the secretary”. As soon as you write to anyone (or to me), I go quiet in all chats for 10 minutes.")
+                "Turn it off with “turn off the secretary”. As soon as you write to anyone yourself, I go quiet in all chats for 10 minutes.")
     try:
         await context.bot.send_message(value["chat_id"], text)
     except TelegramError:
@@ -1547,6 +1549,37 @@ async def send_signed(context, chat_id, text, conn_id, reply_id=None):
                                               reply_parameters=reply_to(reply_id))
 
     return await with_logo(data, post)
+
+
+SECRETARY_OFF = re.compile(r"\b(выключ|отключ|стоп|останов|убери|turn off|disable|stop)\w*\b.{0,20}(секретар|автоответ|secretary)"
+                           r"|(секретар|автоответ|secretary)\w*.{0,10}\b(выключ|отключ|выкл|стоп|off)", re.I | re.S)
+SECRETARY_ON = re.compile(r"\b(включ|вруби|запусти|turn on|enable|start)\w*\b.{0,20}(секретар|автоответ|secretary)"
+                          r"|(секретар|автоответ|secretary)\w*.{0,10}\b(включ\w*|вкл\w*|on)\b", re.I | re.S)
+
+
+async def secretary_switch(update, context, text):
+    """"выключи секретаря" / "включи секретаря": switched at once, without the model. True if handled."""
+    if len(text) > 120:
+        return False
+    off, on = SECRETARY_OFF.search(text), SECRETARY_ON.search(text)
+    if not off and not on:
+        return False
+    store, user_id, ru = context.bot_data["connections"], update.effective_user.id, lang(update) == "ru"
+    current = sec.settings(store, user_id)
+    current["enabled"] = not off
+    if current["enabled"] and not current["rules"]:
+        current["rules"] = ("Привет! Я сейчас занят и отвечу позже. Это ИИ-помощник." if ru
+                            else "Hi! I'm busy right now and will answer later. This is an AI assistant.")
+    sec.save_settings(store, user_id, current)
+    if current["enabled"]:
+        context.bot_data["biz_activity"].owner_seen.pop(user_id, None)  # start answering right away
+        text = (f"✅ Секретарь включён. Отвечаю всем по правилам: «{current['rules']}»." if ru
+                else f"✅ Secretary on. Answering everyone by the rules: «{current['rules']}».")
+    else:
+        text = "⏸ Секретарь выключен. Больше никому не отвечаю, пока не скажешь «включи секретаря»." if ru \
+            else "⏸ Secretary off. I won't answer anyone until you say “turn on the secretary”."
+    await send(update.effective_message, text)
+    return True
 
 
 async def secretary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1853,14 +1886,14 @@ async def voice_reply(update, context, target, answer):
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user:
-        context.bot_data["biz_activity"].owner_wrote(update.effective_user.id)  # writing to the bot = online (secretary pauses)
     if update.effective_chat and update.effective_chat.type in GROUP_TYPES:
         await group_chat(update, context)
         return
     if not await authorized(update, context):
         return
     message = update.effective_message
+    if message.text and await secretary_switch(update, context, message.text):
+        return
     lock = user_lock(context, update.effective_user.id)
     if lock.locked():
         await send(message, ui(update, "⏳ Ещё отвечаю на предыдущее сообщение — это обработаю следом.",
