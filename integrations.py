@@ -126,6 +126,22 @@ class Connections:
 
     # ----- bot-wide settings (owner, the GitHub App created in one click) -----
 
+    # ----- websites the bot made: served at /s/<id> -----
+
+    def save_site(self, html):
+        site_id = uuid.uuid4().hex[:12]
+        with self.lock, self.db:
+            self.db.execute("CREATE TABLE IF NOT EXISTS sites (id TEXT PRIMARY KEY, html BLOB NOT NULL, created INTEGER NOT NULL)")
+            self.db.execute("INSERT INTO sites(id, html, created) VALUES (?, ?, ?)", (site_id, html, int(time.time())))
+            self.db.execute("DELETE FROM sites WHERE id NOT IN (SELECT id FROM sites ORDER BY created DESC LIMIT 300)")
+        return site_id
+
+    def site(self, site_id):
+        with self.lock, self.db:
+            self.db.execute("CREATE TABLE IF NOT EXISTS sites (id TEXT PRIMARY KEY, html BLOB NOT NULL, created INTEGER NOT NULL)")
+            row = self.db.execute("SELECT html FROM sites WHERE id=?", (site_id,)).fetchone()
+        return bytes(row[0]) if row else None
+
     def _meta_table(self):
         self.db.execute("CREATE TABLE IF NOT EXISTS bot_meta (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
 

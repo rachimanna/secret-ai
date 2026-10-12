@@ -151,6 +151,19 @@ def make_handler(config):
                 self._setup_start(parse_qs(url.query))
             elif url.path == "/setup/github/done":
                 self._setup_done(parse_qs(url.query))
+            elif url.path.startswith("/s/") and len(url.path) <= 20 and url.path[3:].isalnum():
+                html = config["store"].site(url.path[3:])
+                if html is None:
+                    self._page("Сайт не найден", "Ссылка устарела. Попросите Secret AI сделать сайт ещё раз.", ok=False)
+                    return
+                # A sandbox gives the page its own origin: its scripts can't reach the Mini App or its API.
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(html)))
+                self.send_header("Content-Security-Policy", "sandbox allow-scripts allow-forms allow-popups allow-modals")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(html)
             else:
                 self._send(404, {"error": "not found"})
 

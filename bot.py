@@ -9,7 +9,7 @@ import random
 import sqlite3
 import tempfile
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -27,6 +27,7 @@ from openai import (
 )
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
                       MessageEntity, Update, User, WebAppInfo)
+from codefiles import extract_files, site_file
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
@@ -43,13 +44,47 @@ from integrations import (Connections, GitHubError, Toolbox, apply_change, delet
 
 LOG = logging.getLogger("secret_ai")
 SYSTEM = (
-    "You are Secret AI, a helpful, accurate and friendly assistant. "
+    "You are Secret AI, a brilliant, knowledgeable and friendly assistant. "
     "Introduce yourself as Secret AI when asked. Reply in the user's language. "
     "Use the language of their latest message, caption or voice transcription; "
-    "if none is available, use their Telegram language. Admit uncertainty. "
-    "Reply in plain text, without Markdown formatting. "
+    "if none is available, use their Telegram language. "
+    "Think the problem through before answering and get facts, numbers and code right. Give complete, practical "
+    "answers: concrete steps, examples and working solutions instead of generic advice; for simple questions be brief. "
+    "When something may have changed recently (news, prices, versions, events), search the web if you can. "
+    "Admit uncertainty instead of guessing. "
+    "Reply in plain text, without Markdown formatting (no **bold**, no # headings). "
     "Previous photo markers are not images; do not invent unseen visual details."
 )
+# Code goes out as files (codefiles.extract_files), websites are also published with a link.
+CODE_RULES = (
+    " Exception: code. When you write code, a script, a config or a website, put each file in its own fenced block "
+    "whose first line is ``` plus the language and a file name, for example ```python main.py — complete, runnable "
+    "files, never fragments with '...'. The bot sends these blocks as files, so outside them only say briefly what the "
+    "files are and how to run them; don't repeat the code. For a website write one self-contained index.html with inline "
+    "CSS and JavaScript: modern, beautiful, responsive (mobile first), with real content, smooth animations and no "
+    "external dependencies except fonts or CDN libraries; the bot publishes it and gives the user a link. "
+    "A one- or two-line command may stay in the text. Never use code blocks for ordinary text."
+)
+GROUP_STYLE = (
+    " You are in a Telegram group chat with friends; messages come as 'Name: text'. You are one of the gang: witty, "
+    "bold, with a sharp tongue. Keep replies short (one to three sentences) unless someone asks a real question — then "
+    "answer it properly. When someone teases you or the others, roast them back playfully in their own tone: street "
+    "slang and rude jokes are fine when they talk that way, mild swearing too if they swear. Now and then answer with a "
+    "short rhyme or a pun. With girls be playful and charming: funny rhymes, compliments, light teasing — never sexual "
+    "and never creepy. Hard limits: no insults about ethnicity, nationality, religion, disability, sexual orientation "
+    "or weight and looks; no threats; nothing about minors; if someone seems genuinely hurt, ease off and be kind. "
+    "Address people by name. Don't start with your own name."
+)
+INTERJECT = (
+    "Nobody asked you, but you feel like dropping one spontaneous line into this conversation: a joke, a playful roast "
+    "of someone, a rhyme or a witty remark about the latest messages. One short sentence, as a friend in the chat would. "
+    "If nothing fun fits, answer exactly SKIP."
+)
+GROUP_TYPES = ("group", "supergroup")
+GROUP_CONTEXT = 40  # recent group messages the bot keeps in mind
+GROUP_RANDOM_CHANCE = 0.07  # chance to chime in on a message nobody addressed to the bot
+GROUP_RANDOM_PAUSE = 240  # seconds between such remarks in one chat
+USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
 HISTORY_LIMIT = 30
 
@@ -402,6 +437,14 @@ class LiveReply:
                 else:
                     self.messages.append(await reply(self.target, shown, markup))
                     self.shown.append(shown)
+            if final and len(self.messages) > len(parts):
+                # The final text can be shorter than the streamed one (code went to files): remove the leftovers.
+                for extra in self.messages[len(parts):]:
+                    try:
+                        await extra.delete()
+                    except TelegramError:
+                        pass
+                del self.messages[len(parts):], self.shown[len(parts):]
 
     async def update(self, text):
         self.text = text
@@ -482,6 +525,12 @@ class DraftReply:
                 await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
             return
         pending = self.text[self.offset:]
+        if "```" in pending:
+            # Code goes out as files at the end: preview the tail in the draft, commit nothing.
+            tail = pending[-3500:]
+            if tail.strip() and (tail != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE):
+                await self._push(tail)
+            return
         # Commit full Telegram-sized parts as real messages and keep drafting the rest.
         while (cut := split_point(pending)) < len(pending):
             if pending[:cut].strip():
@@ -526,8 +575,10 @@ class DraftReply:
 
     async def finish(self, text, reply_markup=None):
         await self.stop()
+        # Parts already sent stay; the final text may differ after them (code moved to files).
+        rest = text[self.offset:] if text[:self.offset] == self.text[:self.offset] else text
         self.text = text
-        parts = list(chunks(text[self.offset:]))
+        parts = list(chunks(rest))
         if not parts:
             await self.sent[-1].edit_reply_markup(reply_markup=reply_markup)
             return self.sent[-1]
@@ -598,6 +649,8 @@ def echo_items(output):
             items.append(reasoning)
         elif item.type == "function_call":
             items.append({"type": "function_call", "call_id": item.call_id, "name": item.name, "arguments": item.arguments})
+        elif item.type == "web_search_call":
+            items.append(item.model_dump(exclude_none=True))
         elif item.type == "message":
             text = "".join(getattr(part, "text", "") or "" for part in item.content)
             if text:
@@ -607,14 +660,28 @@ def echo_items(output):
 
 async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
-    tools = toolbox.definitions() if toolbox else []
+    tools = list(toolbox.definitions()) if toolbox else []
+    if context.bot_data.get("web_search"):
+        tools.append({"type": "web_search"})
     if tools:
         # store=False: reasoning must travel with the tool calls we send back.
         request.update(tools=tools, include=["reasoning.encrypted_content"])
     answer, incomplete = "", False
     for _ in range(MAX_TOOL_ROUNDS):
         prefix = answer + "\n\n" if answer.strip() else ""
-        response = await model_round(context, live, prefix, request)
+        try:
+            response = await model_round(context, live, prefix, request)
+        except BadRequestError as exc:
+            # Web search isn't available for every model or account: answer without it from now on.
+            if not context.bot_data.get("web_search") or live.text or "web_search" not in str(exc):
+                raise
+            context.bot_data["web_search"] = False
+            LOG.warning("Web search is not available for this model; answering without it")
+            request["tools"] = [tool for tool in request["tools"] if tool.get("type") != "web_search"]
+            if not request["tools"]:
+                request.pop("tools")
+                request.pop("include", None)
+            response = await model_round(context, live, prefix, request)
         text = (response.output_text or "").strip()
         if text:
             answer = prefix + text
@@ -674,9 +741,10 @@ async def authorized(update, context):
         return False
     allowed = context.bot_data["allowed"]
     if allowed and update.effective_user.id not in allowed:
-        await send(update.effective_message, ui(update, "Доступ к Secret AI ограничен.", "Access to Secret AI is restricted."))
+        if update.effective_chat.type == "private":
+            await send(update.effective_message, ui(update, "Доступ к Secret AI ограничен.", "Access to Secret AI is restricted."))
         return False
-    # Avoid exposing personal history to group chats.
+    # Commands with personal data (history, memory, apps) stay in private chats; groups get their own chat mode.
     if update.effective_chat.type != "private":
         await send(update.effective_message, ui(update, "Напишите Secret AI в личные сообщения.", "Please message Secret AI privately."))
         return False
@@ -689,7 +757,9 @@ async def authorized(update, context):
 HELP_RU = (
     "Я Secret AI ✨ Отправьте текст, голосовое, аудио, кружок или фото (можно файлом) с вопросом.\n\n"
     "Пока я думаю, вы увидите анимацию, а ответ будет появляться прямо по ходу печати.\n"
-    "На голосовое я отвечаю голосом.\n\n"
+    "На голосовое я отвечаю голосом.\n"
+    "Код и скрипты присылаю файлами, а сайт ещё и публикую — с кнопкой «Открыть сайт».\n"
+    "Добавьте меня в группу: отвечаю на reply и на @упоминание, а иногда и сам вставляю словечко.\n\n"
     "/mode — режим: ассистент, программист, переводчик, креатив\n"
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
@@ -702,7 +772,9 @@ HELP_RU = (
 HELP_EN = (
     "I'm Secret AI ✨ Send text, a voice message, audio, a video note or a photo (also as a file) with a question.\n\n"
     "While I'm thinking you'll see an animation, and the answer appears as it is being written.\n"
-    "I answer voice messages with my voice.\n\n"
+    "I answer voice messages with my voice.\n"
+    "Code and scripts come as files; a website is also published with an “Open” button.\n"
+    "Add me to a group: I answer replies and @mentions, and sometimes chime in myself.\n\n"
     "/mode — mode: assistant, coder, translator, creative\n"
     "/reset — clear memory\n"
     "/export — download the conversation\n"
@@ -892,7 +964,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
             return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                       apps=await app_tools(context.bot_data, user_id, taken), media=media)
-    instructions = SYSTEM + (" " + persona[3] if persona[3] else "") + " Telegram language: " + (update.effective_user.language_code or "ru")
+    instructions = (SYSTEM + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
+                    + (update.effective_user.language_code or "ru"))
     if toolbox.instructions():
         instructions += " " + toolbox.instructions()
     live = await open_reply(target, lang(update), context.bot_data)
@@ -900,7 +973,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         answer, incomplete = await generate(
             context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
             input=memory.history(user_id) + [{"role": "user", "content": content}],
-            store=False, max_output_tokens=16000 if toolbox.definitions() else 6000)
+            store=False, max_output_tokens=16000)
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
@@ -912,9 +985,12 @@ async def respond(update, context, target, content, saved_question, voice=False)
         return
     if incomplete:
         answer += ui(update, "\n\nОтвет достиг лимита. Напишите «продолжи».", "\n\nOutput limit reached. Ask me to continue.")
-    memory.append_turn(user_id, saved_question, answer)
-    last = await live.finish(answer)
+    memory.append_turn(user_id, saved_question, answer[:12000])
+    text, files = extract_files(answer)
+    last = await live.finish(text or ui(update, "📎 Готово — файлы ниже.", "📎 Done — the files are below."))
     context.bot_data["last_answer"][user_id] = last.message_id
+    await send_files(update, context, target, files)
+    answer = text
     if voice and context.bot_data.get("tts_model"):
         # Recorded in the background: the user's next message must not wait for the voice (it keeps the lock otherwise).
         task = asyncio.create_task(voice_reply(update, context, target, answer))
@@ -922,6 +998,184 @@ async def respond(update, context, target, content, saved_question, voice=False)
         tasks.add(task)
         task.add_done_callback(tasks.discard)
     await show_proposals(update, context, toolbox, target)
+
+
+async def send_files(update, context, target, files):
+    """Send code files from an answer; a website is also published with an "Open" button."""
+    page = site_file(files)
+    keyboard = None
+    if page and context.bot_data["public_url"]:
+        site_id = context.bot_data["connections"].save_site(page[1])
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(ui(update, "🌐 Открыть сайт", "🌐 Open the website"),
+                                                               url=f"{context.bot_data['public_url']}/s/{site_id}")]])
+    for name, data in files:
+        markup = keyboard if page and name == page[0] else None
+        await target.reply_document(document=io.BytesIO(data), filename=name, reply_markup=markup)
+
+
+class GroupReply:
+    """In groups: no long animation, just the logo until the answer is ready, then the answer in its place."""
+
+    def __init__(self, target, config):
+        self.target, self.config = target, config
+        self.text, self.message, self.typing = "", None, None
+
+    def status(self, note):
+        pass
+
+    async def start(self):
+        logo = self.config["logo"]
+        self.message = await with_logo(self.config, lambda entities: reply(self.target, logo, entities=entities))
+        self.typing = asyncio.create_task(typing_loop(self.target, ChatAction.TYPING))
+
+    async def update(self, text):
+        self.text = text
+
+    async def _stop(self):
+        if self.typing:
+            self.typing.cancel()
+            await asyncio.gather(self.typing, return_exceptions=True)
+            self.typing = None
+
+    async def finish(self, text, reply_markup=None):
+        await self._stop()
+        parts = list(chunks(text)) or ["…"]
+        try:
+            await self.message.edit_text(parts[0], parse_mode=None, reply_markup=reply_markup if len(parts) == 1 else None)
+            last = self.message
+        except BadRequest:
+            await self.message.delete()
+            last = await reply(self.target, parts[0], reply_markup if len(parts) == 1 else None)
+        for index, part in enumerate(parts[1:], 2):
+            last = await reply(self.target, part, reply_markup if index == len(parts) else None)
+        return last
+
+    async def abort(self, note):
+        await self._stop()
+        try:
+            await self.message.delete()
+        except TelegramError:
+            pass
+
+
+def speaker(user):
+    return (user.full_name or user.username or "?")[:40]
+
+
+def addressed_to_bot(message, bot, bot_data):
+    """A reply to the bot, its @username (the current one) or a mention of the bot."""
+    replied = message.reply_to_message
+    if replied and replied.from_user and replied.from_user.id == bot.id:
+        return True
+    username = (bot_data.get("bot_name") or bot.username or "").lower()
+    entities = message.parse_entities() if message.text else message.parse_caption_entities()
+    for entity, text in entities.items():
+        if entity.type == MessageEntity.MENTION and username and text.lower() == "@" + username:
+            return True
+        if entity.type == MessageEntity.TEXT_MENTION and entity.user and entity.user.id == bot.id:
+            return True
+    return False
+
+
+def group_log(bot_data, chat_id):
+    return bot_data["group_log"].setdefault(chat_id, deque(maxlen=GROUP_CONTEXT))
+
+
+def describe_message(message):
+    text = message.text or message.caption or ""
+    kind = ("фото" if message.photo else "голосовое" if message.voice else "кружок" if message.video_note else
+            "стикер " + (message.sticker.emoji or "") if message.sticker else "видео" if message.video else
+            "гифка" if message.animation else "файл" if message.document else "")
+    return f"[{kind}] {text}".strip() if kind else text
+
+
+async def group_chat(update, context):
+    """Group chats: answer when addressed, remember who says what, and sometimes chime in uninvited."""
+    message, user, data = update.effective_message, update.effective_user, context.bot_data
+    if not user or user.is_bot or (data["allowed"] and user.id not in data["allowed"]):
+        return
+    chat_id = message.chat_id
+    log = group_log(data, chat_id)
+    lock = data["locks"][chat_id]
+    if not addressed_to_bot(message, context.bot, data):
+        said = describe_message(message)
+        if said:
+            log.append(f"{speaker(user)}: {said}")
+        quiet = time.monotonic() - data["group_spoke"].get(chat_id, 0)
+        if (not message.text or len(message.text.split()) < 3 or lock.locked() or quiet < GROUP_RANDOM_PAUSE
+                or random.random() >= GROUP_RANDOM_CHANCE):
+            return
+        data["group_spoke"][chat_id] = time.monotonic()
+        async with lock:
+            try:
+                await group_interject(context, message, log)
+            except Exception as exc:  # an uninvited joke that failed is no reason to bother the chat
+                LOG.warning("Group remark failed: %s", type(exc).__name__)
+        return
+    async with lock:
+        readable = (message.text or message.caption or message.voice or message.audio or message.video_note or message.photo
+                    or (message.document and (message.document.mime_type or "").startswith("image/")))
+        if readable:
+            parsed = await read_question(update, context)
+            if not parsed:
+                return
+            question, content, _ = parsed
+        else:  # a sticker, gif or video in reply to the bot
+            question = content = describe_message(message) or "…"
+        name = speaker(user)
+        before = "\n".join(log)
+        log.append(f"{name}: {question}")
+        head = (f"Recent messages in the group (oldest first):\n{before or '(none)'}\n\n" if before else "") + f"{name} writes to you:"
+        content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
+        data["group_spoke"][chat_id] = time.monotonic()
+        await group_respond(update, context, message, content, log)
+
+
+def group_instructions(update):
+    return SYSTEM + CODE_RULES + GROUP_STYLE + " Telegram language: " + (update.effective_user.language_code or "ru")
+
+
+async def group_respond(update, context, message, content, log):
+    data = context.bot_data
+    live = GroupReply(message, data)
+    await live.start()
+    try:
+        # No personal tools in groups: someone else's apps, repos and money must not be reachable from a shared chat.
+        answer, _ = await generate(context, live, None, model=data["model"], instructions=group_instructions(update),
+                                   input=[{"role": "user", "content": content}], store=False, max_output_tokens=16000)
+    except BaseException:
+        await live.abort(None)
+        raise
+    text, files = extract_files(answer.strip())
+    if not text and not files:
+        await live.abort(None)
+        return
+    await live.finish(text or "📎")
+    log.append("Secret AI: " + (text or "[files]")[:600])
+    await send_files(update, context, message, files)
+
+
+async def group_interject(context, message, log):
+    data = context.bot_data
+    response = await data["client"].responses.create(
+        model=data["model"], instructions=SYSTEM + GROUP_STYLE, store=False, max_output_tokens=2000,
+        input=[{"role": "user", "content": "Recent messages in the group (oldest first):\n" + "\n".join(log) + "\n\n" + INTERJECT}])
+    text = (response.output_text or "").strip()
+    if not text or text.upper().startswith("SKIP"):
+        return
+    await reply(message, text[:1000])
+    log.append("Secret AI: " + text[:600])
+
+
+async def watch_username(app):
+    """Keep the bot's @username fresh: after a rename in BotFather, mentions of the new name work without a restart."""
+    while True:
+        await asyncio.sleep(USERNAME_REFRESH)
+        try:
+            me = await app.bot.get_me()
+            app.bot_data["bot_name"] = me.username
+        except TelegramError:
+            pass
 
 
 MEDIA_ERRORS = {
@@ -1203,6 +1457,9 @@ async def voice_reply(update, context, target, answer):
 
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat and update.effective_chat.type in GROUP_TYPES:
+        await group_chat(update, context)
+        return
     if not await authorized(update, context):
         return
     message = update.effective_message
@@ -1408,6 +1665,10 @@ async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def unsupported(update, context):
+    if update.effective_chat and update.effective_chat.type in GROUP_TYPES:
+        if update.effective_message and update.effective_user:
+            await group_chat(update, context)  # stickers, videos, gifs: remembered as context, sometimes commented
+        return
     if await authorized(update, context):
         await send(update.effective_message, ui(update, "Отправьте текст, голосовое, аудио или фото. Команды: /help", "Send text, voice, audio or a photo. Commands: /help"))
 
@@ -1490,6 +1751,7 @@ async def ensure_logo(app):
 async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
+    app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     if not app.bot_data.get("logo_id"):
         # The application is not running yet inside post_init, so start a plain task and keep a reference.
         app.bot_data["logo_task"] = asyncio.create_task(ensure_logo(app))
@@ -1648,7 +1910,8 @@ def main():
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
-        locks=defaultdict(asyncio.Lock), last_answer={})
+        web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
+        locks=defaultdict(asyncio.Lock), last_answer={}, group_log={}, group_spoke={})
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("mode", mode))
