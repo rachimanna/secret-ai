@@ -233,24 +233,28 @@ def user_lock(context, user_id):
     return context.bot_data["locks"][user_id]
 
 
-def logo_entities(config):
-    if not config.get("logo_id"):
+def logo_entities(config, kind):
+    if not config.get("logo_id") or kind in config.setdefault("logo_off", set()):
         return None
     return [MessageEntity(MessageEntity.CUSTOM_EMOJI, 0, utf16_len(config["logo"]), custom_emoji_id=config["logo_id"])]
 
 
-async def with_logo(config, send):
-    """Call send(entities) with the custom emoji logo, falling back to the plain emoji if Telegram refuses it."""
-    entities = logo_entities(config)
+async def with_logo(config, send, kind="message"):
+    """Call send(entities) with the custom emoji logo, falling back to the plain emoji if Telegram refuses it.
+
+    kind is "message" or "draft": Telegram may accept the custom emoji in regular messages but not in drafts,
+    so a refusal only turns the logo off for that kind.
+    """
+    entities = logo_entities(config, kind)
     try:
         return await send(entities)
     except BadRequest as exc:
         if not entities or not any(word in str(exc).lower() for word in ("emoji", "entit", "document")):
             raise
         # Bots may use custom emoji only when the owner has Telegram Premium or a Fragment username.
-        config["logo_id"] = ""
+        config.setdefault("logo_off", set()).add(kind)
         # Telegram's error text holds no user data; it tells the owner why the logo is not shown.
-        LOG.warning("Custom emoji logo refused by Telegram (%s); using the plain emoji", exc.message)
+        LOG.warning("Custom emoji logo refused by Telegram in a %s (%s); using the plain emoji there", kind, exc.message)
         return await send(None)
 
 
@@ -404,7 +408,7 @@ class DraftReply:
 
     async def start(self):
         frame = thinking_frame(self.language, self.config["logo"], self.started)
-        await with_logo(self.config, lambda entities: self._push(frame, entities))
+        await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
         self.tasks = [asyncio.create_task(self._loop()), asyncio.create_task(typing_loop(self.target, self.action))]
 
     async def _pause(self, delay):
@@ -417,7 +421,7 @@ class DraftReply:
         if not self.text.strip():
             frame = thinking_frame(self.language, self.config["logo"], self.started, note=self.note)
             if frame != self.shown:
-                await with_logo(self.config, lambda entities: self._push(frame, entities))
+                await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
             return
         pending = self.text[self.offset:]
         # Commit full Telegram-sized parts as real messages and keep drafting the rest.
@@ -485,7 +489,9 @@ class DraftReply:
 
 async def open_reply(target, language, config):
     """Start a live reply: native drafts when Telegram supports them, message edits otherwise."""
-    if config.get("drafts"):
+    # Drafts are smoother, but if Telegram won't show the logo there, the edited message keeps the logo.
+    logo_in_drafts = not config.get("logo_id") or "draft" not in config.get("logo_off", set())
+    if config.get("drafts") and logo_in_drafts:
         draft = DraftReply(target, language, config)
         try:
             await draft.start()
