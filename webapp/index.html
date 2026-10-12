@@ -47,7 +47,7 @@
       radial-gradient(55% 45% at 90% 20%, rgba(43,139,230,.6), transparent 70%),
       linear-gradient(180deg, var(--hero-1) 0%, var(--hero-2) 34%, var(--hero-3) 52%, var(--bg) 82%); }
   .backdrop::after { content: ""; position: absolute; inset: 0; background: radial-gradient(40% 25% at 50% 42%, rgba(255,255,255,.18), transparent 70%); }
-  body[data-tab="apps"] .backdrop, body[data-tab="settings"] .backdrop { opacity: 0; }
+  body[data-tab="apps"] .backdrop, body[data-tab="settings"] .backdrop, body[data-tab="gen"] .backdrop { opacity: 0; }
 
   /* ---------- layout ---------- */
   main { position: relative; z-index: 1; max-width: 560px; margin: 0 auto; padding: calc(var(--safe-top) + 12px) 16px calc(var(--safe-bottom) + 120px); }
@@ -166,20 +166,21 @@
 
   /* ---------- tab bar ---------- */
   .tabbar { position: fixed; z-index: 20; left: 50%; bottom: calc(var(--safe-bottom) + 14px); transform: translateX(-50%);
-            width: min(528px, calc(100vw - 28px)); height: 70px; border-radius: 35px; padding: 5px; display: grid; grid-template-columns: repeat(4, 1fr);
+            width: min(528px, calc(100vw - 28px)); height: 70px; border-radius: 35px; padding: 5px; display: grid; grid-template-columns: repeat(5, 1fr);
             background: rgba(30,30,38,.8); backdrop-filter: blur(28px) saturate(190%); -webkit-backdrop-filter: blur(28px) saturate(190%); }
   :root[data-theme="light"] .tabbar { background: rgba(255,255,255,.82); }
   body::after { content: ""; position: fixed; z-index: 19; left: 0; right: 0; bottom: 0; height: calc(var(--safe-bottom) + 110px); pointer-events: none;
                 background: linear-gradient(to bottom, transparent, var(--bg) 78%); }
-  .tabbar .lens { position: absolute; top: 5px; bottom: 5px; left: 5px; width: calc((100% - 10px) / 4); border-radius: 30px;
+  .tabbar .lens { position: absolute; top: 5px; bottom: 5px; left: 5px; width: calc((100% - 10px) / 5); border-radius: 30px;
                   background: rgba(255,255,255,.12); box-shadow: inset 0 1px 0 rgba(255,255,255,.25), inset 0 0 0 1px rgba(255,255,255,.06);
                   transform: translateX(calc(var(--tab, 0) * 100%)); transition: transform .6s var(--spring); }
   :root[data-theme="light"] .tabbar .lens { background: rgba(0,0,0,.06); }
   .tabbar .lens.squish { animation: squish .6s var(--spring); }
   @keyframes squish { 30% { scale: 1.12 .9; } }
-  .tab { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 12px;
-         font-weight: 600; color: var(--text); transition: color .3s; }
-  .tab svg { width: 28px; height: 28px; transition: transform .5s var(--spring); }
+  .tab { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 10.5px;
+         font-weight: 600; color: var(--text); transition: color .3s; min-width: 0; letter-spacing: -.02em; }
+  .tab span:last-child { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 2px; }
+  .tab svg { width: 26px; height: 26px; transition: transform .5s var(--spring); }
   .tab.on { color: var(--accent); }
   .tab.on svg { transform: scale(1.1); }
   .tab .ghost-ic { width: 30px; height: 30px; }
@@ -236,6 +237,38 @@
   :root[data-theme="light"] .toast { background: rgba(255,255,255,.8); color: var(--text); }
   .toast.show { transform: translate(-50%, 0); }
 
+  /* ---------- generation ---------- */
+  .wallet { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 28px; margin-bottom: 14px; }
+  .wallet .k { color: var(--hint); font-size: 14px; }
+  .wallet .v { font-size: 22px; font-weight: 800; display: flex; align-items: center; gap: 8px; }
+  .wallet .v small { font-size: 14px; color: var(--hint); font-weight: 600; }
+  .wallet .grow { flex: 1; min-width: 0; }
+  .pill-btn { height: 40px; padding: 0 18px; border-radius: 20px; font-weight: 700; color: #fff; background: var(--accent);
+              box-shadow: 0 6px 18px rgba(79,140,255,.35); white-space: nowrap; }
+  .tpl-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .tpl { position: relative; height: 150px; border-radius: 26px; overflow: hidden; text-align: left; padding: 14px; color: #fff;
+         display: flex; flex-direction: column; justify-content: flex-end; background: linear-gradient(145deg, var(--c1), var(--c2));
+         box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 10px 26px rgba(0,0,0,.25); }
+  .tpl .e { position: absolute; top: 10px; right: 12px; font-size: 54px; filter: drop-shadow(0 6px 14px rgba(0,0,0,.25));
+            transition: transform .5s var(--spring); }
+  .tpl:active .e { transform: scale(1.15) rotate(-8deg); }
+  .tpl b { font-size: 17px; text-shadow: 0 1px 8px rgba(0,0,0,.25); }
+  .tpl span { font-size: 13px; opacity: .85; }
+  .tpl .kind { position: absolute; top: 12px; left: 12px; font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 8px;
+               background: rgba(0,0,0,.25); letter-spacing: .03em; text-transform: uppercase; }
+  textarea.field { height: 120px; padding: 14px 16px; resize: none; line-height: 1.35; font: inherit; color: var(--text); }
+  .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 4px 0 14px; }
+  .seg button { height: 44px; border-radius: 16px; font-weight: 600; font-size: 15px; background: rgba(255,255,255,.07); border: 1px solid var(--line);
+                transition: background .25s, color .25s, transform .35s var(--spring); }
+  .seg button.on { background: var(--accent); color: #fff; border-color: transparent; box-shadow: 0 6px 16px rgba(79,140,255,.35); }
+  .cost { text-align: center; color: var(--hint); font-size: 14px; margin: 2px 0 12px; }
+  .packs { display: grid; gap: 10px; margin-bottom: 8px; }
+  .pack { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-radius: 22px; background: rgba(255,255,255,.07);
+          border: 1px solid var(--line); text-align: left; }
+  .pack.best { border-color: rgba(255,214,10,.55); background: linear-gradient(135deg, rgba(255,214,10,.14), rgba(255,159,10,.08)); }
+  .pack .n { font-size: 20px; font-weight: 800; }
+  .pack .s { margin-left: auto; font-weight: 800; font-size: 17px; display: flex; align-items: center; gap: 6px; }
+
   .footer { text-align: center; color: var(--hint-2); font-size: 13px; margin-top: 28px; }
   .footer .mini { width: 44px; height: 44px; margin: 0 auto 6px; opacity: .8; }
 
@@ -278,6 +311,13 @@
     <div id="discover" class="stagger"></div>
   </section>
 
+  <!-- ============ GENERATION ============ -->
+  <section class="view" id="view-gen">
+    <h1 class="page-title" data-t="gen"></h1>
+    <p class="page-sub" data-t="genSub"></p>
+    <div id="gen"></div>
+  </section>
+
   <!-- ============ APPS ============ -->
   <section class="view" id="view-apps">
     <h1 class="page-title" data-t="apps"></h1>
@@ -309,6 +349,7 @@
     <svg viewBox="0 0 128 128"><path fill="currentColor" d="M112.99 66.00 L117.44 68.80 L120.10 71.90 L120.15 74.89 L117.52 77.38 L112.88 79.10 L107.39 80.10 L102.11 80.63 L97.76 81.03 L94.52 81.55 L92.23 82.30 L90.60 83.27 L90.03 84.91 L89.94 87.00 L90.27 89.65 L91.00 93.00 L91.89 96.98 L92.53 101.23 L92.41 105.10 L91.17 107.84 L88.78 108.93 L85.54 108.28 L81.95 106.33 L78.50 103.78 L75.48 101.33 L72.95 99.42 L70.84 98.18 L68.99 97.51 L67.29 97.34 L65.68 98.14 L64.00 99.50 L62.13 101.68 L59.91 104.87 L57.20 108.92 L53.96 113.24 L50.37 116.85 L46.87 118.72 L43.98 118.15 L42.12 115.15 L41.37 110.42 L41.47 105.02 L41.97 99.92 L42.41 95.71 L42.52 92.52 L42.23 90.18 L41.60 88.40 L40.09 87.53 L38.06 87.00 L35.40 86.78 L31.98 86.79 L27.90 86.84 L23.61 86.58 L19.85 85.66 L17.42 83.88 L16.86 81.32 L18.16 78.28 L20.82 75.18 L24.03 72.33 L27.06 69.88 L29.45 67.81 L31.10 66.00 L32.14 64.33 L31.70 62.61 L30.42 60.68 L28.30 58.41 L25.30 55.63 L21.68 52.25 L18.16 48.40 L15.68 44.49 L15.12 41.09 L16.84 38.77 L20.57 37.80 L25.49 38.02 L30.62 38.97 L35.19 40.06 L38.87 40.87 L41.65 41.18 L43.77 41.02 L45.49 40.52 L47.01 39.84 L48.33 38.86 L49.54 37.62 L50.61 35.94 L51.50 33.44 L52.23 29.77 L52.94 24.74 L53.93 18.63 L55.49 12.29 L57.80 7.05 L60.76 4.26 L64.00 4.71 L67.03 8.24 L69.48 13.84 L71.27 20.13 L72.53 25.87 L73.54 30.39 L74.54 33.57 L75.64 35.68 L76.87 37.10 L78.53 37.49 L80.55 37.34 L83.05 36.67 L86.21 35.42 L90.09 33.78 L94.46 32.17 L98.78 31.22 L102.29 31.53 L104.32 33.35 L104.57 36.52 L103.28 40.49 L101.07 44.60 L98.69 48.32 L96.71 51.44 L95.39 53.95 L94.71 56.02 L95.14 57.66 L96.86 59.01 L99.48 60.38 L103.19 61.88 L107.89 63.70Z"/><rect x="50.5" y="54" width="10.5" height="20" rx="5.25" fill="var(--bg)"/><rect x="67.5" y="54" width="10.5" height="20" rx="5.25" fill="var(--bg)"/></svg>
   </span><span data-t="tabAgent"></span></button>
   <button class="tab" data-tab="discover"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span data-t="tabDiscover"></span></button>
+  <button class="tab" data-tab="gen"><svg class="i" viewBox="0 0 24 24"><path d="m4 20 10-10M14 10l2-2M18 3l.6 1.6L20 5.2l-1.4.6L18 7.5l-.6-1.7L16 5.2l1.4-.6zM9 3.5l.4 1 1 .4-1 .4-.4 1-.4-1-1-.4 1-.4zM19.5 12l.4 1 1 .4-1 .4-.4 1-.4-1-1-.4 1-.4z"/></svg><span data-t="tabGen"></span></button>
   <button class="tab" data-tab="apps"><svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg><span data-t="tabApps"></span></button>
   <button class="tab" data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-t="tabSettings"></span></button>
 </nav>
@@ -329,7 +370,20 @@ const T = {
     apps: "Приложения", appsSub: n => n ? `${n.toLocaleString("ru")}+ приложений — нажмите «Подключить», и всё` : "Нажмите «Подключить» — без ссылок и ключей",
     search: "Поиск: Notion, Gmail, Slack…", more: "Больше приложений", connected: "Подключено", connect: "Подключить", connectApp: n => `Подключить ${n}`,
     yours: "Мои подключения", none: "Ничего не нашлось", loadingMore: "Загружаю…",
-    tabAgent: "Агент", tabDiscover: "Открытия", tabApps: "Приложения", tabSettings: "Настройки",
+    tabAgent: "Агент", tabDiscover: "Открытия", tabGen: "Генерация", tabApps: "Приложения", tabSettings: "Настройки",
+    gen: "Генерация", genSub: "Фото и видео по описанию — результат придёт в чат", myGen: "Мои генерации",
+    freeToday: (n, max) => `${n} из ${max} фото бесплатно сегодня`, credits: n => `${n} кредитов`, unlimited: "Без ограничений · вы владелец",
+    topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны",
+    photoSub: "Картинка по описанию за секунды", videoSub: "Ролик 5 секунд — 1–3 минуты",
+    describe: "Опишите, что создать…", describeStyle: s => `Что изобразить в стиле «${s}»?`, create: "Создать ✨",
+    fmtSquare: "Квадрат", fmtPortrait: "Вертикаль", fmtLandscape: "Горизонталь",
+    costFree: n => `Бесплатно · осталось ${n} сегодня`, costCredits: n => `${n} кредит(ов) · у вас ${state.gen.credits}`, costOwner: "Бесплатно для владельца",
+    genStarted: "Генерирую — пришлю в чат ✨", buyTitle: "Пополнить генерации", buySub: c => `Фото — ${c.photo} кредит, видео — ${c.video} кредитов. Оплата звёздами Telegram.`,
+    paidOk: "Оплачено! Кредиты начислены ✨", genNotReady: "Генерация скоро заработает: владелец бота ещё не добавил ключ.",
+    genOwnerSetup: "Добавьте ключ fal.ai — и генерация заработает для всех.", addKey: "Добавить ключ",
+    genKey: "Генерация (fal.ai)", genKeyTitle: "Ключ fal.ai", genKeyLead: "Ключ хранится в зашифрованном виде, его видите только вы. Модели можно не трогать.",
+    genKeyPh: "Ключ fal.ai (оставьте пустым, чтобы не менять)", photoModel: "Модель фото", videoModel: "Модель видео", keySet: "ключ добавлен",
+    noCredits: "Генерации закончились — пополните звёздами", kindPhoto: "фото", kindVideo: "видео",
     ctaNone: "Приложения", ctaSome: n => `${n} подкл.`,
     settings: "Настройки", secretAi: "Secret AI", mode: "Режим ответа", model: "Модель", profile: "Профиль", tgId: "Telegram ID",
     memory: "Память диалога", msgs: n => `${n} сообщ.`, appGroup: "Подключения", gh: "GitHub", ghSub: "Нажмите «Подключить», разрешите доступ на GitHub и выберите репозитории — всё.",
@@ -358,7 +412,20 @@ const T = {
     apps: "Apps", appsSub: n => n ? `${n.toLocaleString("en")}+ apps — just tap Connect` : "Just tap Connect — no links or keys",
     search: "Search: Notion, Gmail, Slack…", more: "More apps", connected: "Connected", connect: "Connect", connectApp: n => `Connect ${n}`,
     yours: "My connections", none: "Nothing found", loadingMore: "Loading…",
-    tabAgent: "Agent", tabDiscover: "Discover", tabApps: "Apps", tabSettings: "Settings",
+    tabAgent: "Agent", tabDiscover: "Discover", tabGen: "Create", tabApps: "Apps", tabSettings: "Settings",
+    gen: "Create", genSub: "Photos and videos from a description — the result arrives in the chat", myGen: "My generations",
+    freeToday: (n, max) => `${n} of ${max} free photos today`, credits: n => `${n} credits`, unlimited: "Unlimited · you're the owner",
+    topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates",
+    photoSub: "A picture from a description in seconds", videoSub: "A 5-second clip in 1–3 minutes",
+    describe: "Describe what to create…", describeStyle: s => `What to show in the “${s}” style?`, create: "Create ✨",
+    fmtSquare: "Square", fmtPortrait: "Portrait", fmtLandscape: "Landscape",
+    costFree: n => `Free · ${n} left today`, costCredits: n => `${n} credit(s) · you have ${state.gen.credits}`, costOwner: "Free for the owner",
+    genStarted: "Generating — it will arrive in the chat ✨", buyTitle: "Top up generations", buySub: c => `Photo — ${c.photo} credit, video — ${c.video} credits. Paid with Telegram Stars.`,
+    paidOk: "Paid! Credits added ✨", genNotReady: "Generation is coming soon: the bot owner hasn't added a key yet.",
+    genOwnerSetup: "Add a fal.ai key and generation works for everyone.", addKey: "Add key",
+    genKey: "Generation (fal.ai)", genKeyTitle: "fal.ai key", genKeyLead: "The key is stored encrypted and only you see this. You can leave the models as they are.",
+    genKeyPh: "fal.ai key (leave empty to keep)", photoModel: "Photo model", videoModel: "Video model", keySet: "key added",
+    noCredits: "Out of generations — top up with Stars", kindPhoto: "photo", kindVideo: "video",
     ctaNone: "Apps", ctaSome: n => `${n} connected`,
     settings: "Settings", secretAi: "Secret AI", mode: "Answer mode", model: "Model", profile: "Profile", tgId: "Telegram ID",
     memory: "Conversation memory", msgs: n => `${n} msgs`, appGroup: "Connections", gh: "GitHub", ghSub: "Tap Connect, allow access on GitHub and pick repositories — that's it.",
@@ -487,7 +554,7 @@ async function api(path, body = {}) {
   return data;
 }
 function errorText(e) {
-  return { github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
+  return { gen_no_key: T.genNotReady, gen_no_credits: T.noCredits, gen_bad_key_format: T.err, github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
 }
 function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
 function appIcon(app, cls = "ic") {
@@ -533,6 +600,7 @@ function renderAll() {
   renderHomeApps();
   renderMyApps();
   renderSettings();
+  renderGen();
   if (!catalog.loaded) loadCatalog(true); else renderCatalog();
 }
 
@@ -906,6 +974,130 @@ function openPersonaSheet() {
   });
 }
 
+/* ---------------- generation ---------------- */
+const GEN_TEMPLATES = (lang === "ru" ? [
+  ["photo", "🧸", "3D-игрушка", "милая 3D-фигурка", "cute 3D collectible toy figurine, pixar style, soft studio lighting, high detail", "#ff9a9e", "#f6416c"],
+  ["photo", "🌸", "Аниме", "как кадр из аниме", "anime key visual, Makoto Shinkai style, vibrant colors, detailed background", "#a18cd1", "#fbc2eb"],
+  ["photo", "🌃", "Киберпанк", "неон и ночной город", "cyberpunk, neon lights, rainy night city, cinematic, ultra detailed", "#0f2027", "#2c5364"],
+  ["photo", "📸", "Студийный портрет", "как фотосессия", "professional studio portrait photo, 85mm lens, soft light, shallow depth of field", "#434343", "#8e9eab"],
+  ["photo", "🎨", "Акварель", "нежный рисунок", "delicate watercolor painting, soft pastel colors, paper texture", "#89f7fe", "#66a6ff"],
+  ["photo", "🧱", "Пластилин", "пластилиновая версия", "claymation style, plasticine figures, handmade look, warm light", "#f6d365", "#fda085"],
+  ["video", "🎬", "Кино", "кинематографичный ролик", "cinematic shot, smooth camera movement, film look, dramatic lighting", "#1d2b64", "#f8cdda"],
+  ["video", "✨", "Аниме-видео", "оживший аниме-кадр", "anime style animation, gentle wind, flowing hair, magical particles", "#5f2c82", "#49a09d"],
+] : [
+  ["photo", "🧸", "3D toy", "a cute 3D figurine", "cute 3D collectible toy figurine, pixar style, soft studio lighting, high detail", "#ff9a9e", "#f6416c"],
+  ["photo", "🌸", "Anime", "like an anime frame", "anime key visual, Makoto Shinkai style, vibrant colors, detailed background", "#a18cd1", "#fbc2eb"],
+  ["photo", "🌃", "Cyberpunk", "neon and night city", "cyberpunk, neon lights, rainy night city, cinematic, ultra detailed", "#0f2027", "#2c5364"],
+  ["photo", "📸", "Studio portrait", "like a photo shoot", "professional studio portrait photo, 85mm lens, soft light, shallow depth of field", "#434343", "#8e9eab"],
+  ["photo", "🎨", "Watercolor", "a soft painting", "delicate watercolor painting, soft pastel colors, paper texture", "#89f7fe", "#66a6ff"],
+  ["photo", "🧱", "Clay", "a plasticine version", "claymation style, plasticine figures, handmade look, warm light", "#f6d365", "#fda085"],
+  ["video", "🎬", "Cinema", "a cinematic clip", "cinematic shot, smooth camera movement, film look, dramatic lighting", "#1d2b64", "#f8cdda"],
+  ["video", "✨", "Anime video", "an anime frame comes alive", "anime style animation, gentle wind, flowing hair, magical particles", "#5f2c82", "#49a09d"],
+]);
+const GEN_ICON = {
+  photo: '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>',
+  video: '<svg class="i" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="3"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/></svg>',
+};
+function genCost(kind) {
+  const g = state.gen;
+  if (g.unlimited) return T.costOwner;
+  if (kind === "photo" && g.free_left > 0) return T.costFree(g.free_left);
+  return T.costCredits(g.cost[kind]);
+}
+function renderGen() {
+  const g = state.gen;
+  const wallet = g.unlimited
+    ? `<div class="wallet glass"><div class="grow"><div class="k">${T.myGen}</div><div class="v">∞ <small>${T.unlimited}</small></div></div></div>`
+    : `<div class="wallet glass"><div class="grow"><div class="k">${T.freeToday(g.free_left, g.free_per_day)}</div>
+         <div class="v">✨ ${g.credits} <small>${T.credits(g.credits).replace(/^\d+\s*/, "")}</small></div></div>
+         <button class="pill-btn press" id="gen-buy">${T.topUp}</button></div>`;
+  const setup = g.ready ? "" : g.owner
+    ? `<div class="notice glass"><span style="font-size:22px">🔑</span><div><b>${T.genOwnerSetup}</b><br><button class="pill-btn press" id="gen-setup" style="margin-top:10px">${T.addKey}</button></div></div>`
+    : `<div class="notice glass"><span style="font-size:22px">⏳</span><div>${T.genNotReady}</div></div>`;
+  $("gen").innerHTML = setup + wallet + `
+    <div class="list">
+      <button class="row press" data-gen="photo"><div class="ic sym">${GEN_ICON.photo}</div><div class="body"><div class="t">${T.makePhoto}</div><div class="d">${T.photoSub}</div></div>${ICON.chev}</button>
+      <button class="row press" data-gen="video"><div class="ic sym">${GEN_ICON.video}</div><div class="body"><div class="t">${T.makeVideo}</div><div class="d">${T.videoSub}</div></div>${ICON.chev}</button>
+    </div>
+    <div class="section"><h2>${T.templates}</h2><div class="tpl-grid" style="margin-top:12px">
+      ${GEN_TEMPLATES.map(([kind, e, t, d, , c1, c2], i) => `<button class="tpl press" data-tpl="${i}" style="--c1:${c1};--c2:${c2}">
+        <span class="kind">${kind === "video" ? T.kindVideo : T.kindPhoto}</span><span class="e">${e}</span><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}
+    </div></div>`;
+  $("gen-buy")?.addEventListener("click", openBuySheet);
+  $("gen-setup")?.addEventListener("click", openGenKeySheet);
+  $("gen").querySelectorAll("[data-gen]").forEach(b => b.onclick = () => openGenSheet(b.dataset.gen));
+  $("gen").querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => {
+    const [kind, , title, , style] = GEN_TEMPLATES[+b.dataset.tpl];
+    openGenSheet(kind, { title, style });
+  });
+}
+function openGenSheet(kind, tpl = null) {
+  if (!state.gen.ready) { toast(state.gen.owner ? T.genOwnerSetup : T.genNotReady); haptic("warning"); if (state.gen.owner) openGenKeySheet(); return; }
+  let fmt = kind === "video" ? "portrait" : "square";
+  openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#5b6cff,#d946ef)">${GEN_ICON[kind].replace('class="i"', 'class="i" style="width:46px;height:46px;stroke:#fff"')}</div>
+      <h3>${tpl ? esc(tpl.title) : kind === "photo" ? T.makePhoto : T.makeVideo}</h3></div>
+    <textarea class="field" id="gen-prompt" maxlength="1200" placeholder="${esc(tpl ? T.describeStyle(tpl.title) : T.describe)}"></textarea>
+    <div class="seg" id="gen-fmt">
+      <button data-fmt="square">${T.fmtSquare}</button><button data-fmt="portrait">${T.fmtPortrait}</button><button data-fmt="landscape">${T.fmtLandscape}</button>
+    </div>
+    <div class="cost" id="gen-cost">${genCost(kind)}</div>
+    <button class="btn" id="gen-go">${T.create}</button>`);
+  const paint = () => $("gen-fmt").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.fmt === fmt));
+  paint();
+  $("gen-fmt").onclick = e => { const b = e.target.closest("[data-fmt]"); if (b) { fmt = b.dataset.fmt; paint(); haptic("select"); } };
+  $("gen-go").onclick = async () => {
+    const text = $("gen-prompt").value.trim();
+    if (!text) { $("gen-prompt").focus(); haptic("warning"); return; }
+    const btn = $("gen-go");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span>${T.opening}`;
+    try {
+      const res = await api("/api/generate", { kind, prompt: tpl ? `${text}, ${tpl.style}` : text, format: fmt });
+      state.gen = res.gen; renderGen();
+      closeSheet(); toast(T.genStarted); haptic("success");
+    } catch (e) {
+      btn.disabled = false; btn.textContent = T.create;
+      haptic("error");
+      if (e.code === "gen_no_credits") { closeSheet(); setTimeout(openBuySheet, 350); toast(T.noCredits); }
+      else toast(errorText(e));
+    }
+  };
+}
+function openBuySheet() {
+  const g = state.gen;
+  openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#ffd60a,#ff9f0a);font-size:44px">⭐</div>
+      <h3>${T.buyTitle}</h3><p class="lead">${T.buySub(g.cost)}</p></div>
+    <div class="packs">${g.packs.map((p, i) => `<button class="pack press ${i === 1 ? "best" : ""}" data-pack="${p.id}">
+      <div><div class="n">${p.credits}</div><div class="d" style="color:var(--hint);font-size:14px">${T.credits(p.credits).replace(/^\d+\s*/, "")}</div></div>
+      <span class="s">⭐ ${p.stars}</span></button>`).join("")}</div>`);
+  $("sheet").querySelectorAll("[data-pack]").forEach(b => b.onclick = async () => {
+    b.disabled = true;
+    try {
+      const { url } = await api("/api/gen/buy", { pack: b.dataset.pack });
+      const done = async status => {
+        if (status === "paid") { toast(T.paidOk); haptic("success"); closeSheet(); setTimeout(() => load(true), 1500); }
+        b.disabled = false;
+      };
+      if (tg?.openInvoice && tg.isVersionAtLeast?.("6.1")) tg.openInvoice(url, done); else { openLink(url); b.disabled = false; }
+    } catch (e) { b.disabled = false; toast(errorText(e)); haptic("error"); }
+  });
+}
+function openGenKeySheet() {
+  const m = state.gen.models || {};
+  openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#5b6cff,#d946ef);font-size:40px">🔑</div>
+      <h3>${T.genKeyTitle}</h3><p class="lead">${T.genKeyLead}</p></div>
+    <input class="field" id="fal-key" type="password" autocomplete="off" placeholder="${T.genKeyPh}">
+    <div class="small">${T.photoModel}</div><input class="field" id="fal-photo" autocomplete="off" value="${esc(m.photo || "")}">
+    <div class="small">${T.videoModel}</div><input class="field" id="fal-video" autocomplete="off" value="${esc(m.video || "")}">
+    <button class="btn" id="fal-save">${T.save}</button>`);
+  $("fal-save").onclick = async () => {
+    try {
+      const res = await api("/api/gen/key", { key: $("fal-key").value, photo: $("fal-photo").value, video: $("fal-video").value });
+      state.gen = res.gen; renderGen(); renderSettings(); closeSheet(); toast(T.saved); haptic("success");
+    } catch (e) { toast(errorText(e)); haptic("error"); }
+  };
+}
+
 /* ---------------- settings ---------------- */
 function renderSettings() {
   const s = state.settings;
@@ -919,6 +1111,7 @@ function renderSettings() {
       row("set-gh", SYM.gh, T.gh, state.github.connected ? "@" + esc(state.github.login) : ""),
       row("set-apps", '<svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg>', T.apps, String((state.apps.connected || []).length)),
       row("set-mcp", SYM.mcp, T.mcp, state.mcp.length ? String(state.mcp.length) : ""),
+      ...(state.gen.owner ? [row("set-gen", SYM.model, T.genKey, state.gen.ready ? T.keySet : "")] : []),
     ], 1),
     group(T.profile, [row("set-id", SYM.user, T.tgId, String(state.user.id)), row("set-mem", SYM.memory, T.memory, T.msgs(s.messages))], 2),
     `<div class="section" style="--i:3;margin-top:26px"><div class="list">${row("set-clear", SYM.trash, T.clear, "", "danger")}</div></div>`,
@@ -928,6 +1121,7 @@ function renderSettings() {
   $("set-gh").onclick = openGitHubSheet;
   $("set-apps").onclick = () => switchTab("apps");
   $("set-mcp").onclick = openMcpSheet;
+  if ($("set-gen")) $("set-gen").onclick = openGenKeySheet;
   $("set-id").onclick = () => { navigator.clipboard?.writeText(String(state.user.id)); toast(T.copied); haptic("light"); };
   $("set-mem").onclick = () => confirm(T.clearAsk, clearMemory);
   $("set-clear").onclick = () => confirm(T.clearAsk, clearMemory);
@@ -938,7 +1132,7 @@ async function clearMemory() {
 }
 
 /* ---------------- tabs ---------------- */
-const TABS = ["agent", "discover", "apps", "settings"];
+const TABS = ["agent", "discover", "gen", "apps", "settings"];
 function switchTab(tab) {
   if (document.body.dataset.tab === tab) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   haptic("select");

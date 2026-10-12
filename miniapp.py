@@ -10,6 +10,7 @@ import httpx
 
 from apps import PipedreamError, featured
 from mcp_oauth import DIRECT_APPS, MCPAuthError, direct_catalog
+from media import PACKS
 from integrations import GITHUB_API, check_init_data, check_mcp, github_headers, read_state, sign_state
 
 LOG = logging.getLogger("secret_ai.miniapp")
@@ -118,6 +119,7 @@ def make_handler(config):
                 "mcp": [{"label": i["label"], "url": i["url"]} for i in items if i["service"] == "mcp"],
                 "apps": self._apps(uid, fresh),
                 "settings": config["bridge"].settings(uid),
+                "gen": config["bridge"].gen_state(uid),
             }
 
         def do_HEAD(self):
@@ -169,6 +171,9 @@ def make_handler(config):
                 self._send(502, {"error": "apps"})
             except (RuntimeError, TimeoutError):
                 self._send(503, {"error": "busy"})
+            except Exception as exc:  # e.g. Telegram refusing an invoice: answer instead of dropping the connection
+                LOG.warning("Mini App request %s failed: %s", path, type(exc).__name__)
+                self._send(500, {"error": "server"})
 
         def _route(self, path, user, data):
             store, uid, bridge = config["store"], user["id"], config["bridge"]
@@ -212,6 +217,39 @@ def make_handler(config):
                 else:
                     pipedream.disconnect(uid, account)
                 self._send(200, self._state(user, fresh=True))
+            elif path == "/api/generate":
+                kind, prompt = str(data.get("kind") or ""), str(data.get("prompt") or "").strip()
+                if kind not in ("photo", "video") or not prompt or len(prompt) > 1500:
+                    self._send(400, {"error": "bad request"})
+                    return
+                error = bridge.generate(user, kind, prompt, str(data.get("format") or "square"))
+                if error:
+                    self._send(400, {"error": f"gen_{error}"})
+                    return
+                self._send(200, {"gen": bridge.gen_state(uid)})
+            elif path == "/api/gen/buy":
+                pack = str(data.get("pack") or "")
+                if pack not in PACKS:
+                    self._send(400, {"error": "bad request"})
+                    return
+                self._send(200, {"url": bridge.invoice(user, pack)})
+            elif path == "/api/gen/key":
+                # Only the bot owner sets the fal.ai key (it spends the owner's money) and the models.
+                if store.claim_owner(uid) != uid:
+                    self._send(403, {"error": "forbidden"})
+                    return
+                key = str(data.get("key") or "").strip()
+                if key:
+                    if len(key) > 200 or not all(c.isalnum() or c in "-_:." for c in key):
+                        self._send(400, {"error": "gen_bad_key_format"})
+                        return
+                    store.set_meta("fal_key", key, secret=True)
+                models = {kind: str(data.get(kind) or "").strip() for kind in ("photo", "video")}
+                if any(len(m) > 120 or (m and not all(c.isalnum() or c in "-_./" for c in m)) for m in models.values()):
+                    self._send(400, {"error": "gen_bad_model"})
+                    return
+                store.set_meta("fal_models", {k: v for k, v in models.items() if v})
+                self._send(200, {"gen": bridge.gen_state(uid)})
             elif path == "/api/settings":
                 bridge.update(uid, persona=data.get("persona"), model=data.get("model"))
                 self._send(200, {"settings": bridge.settings(uid)})

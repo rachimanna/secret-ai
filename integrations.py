@@ -283,20 +283,42 @@ GITHUB_TOOLS = [
 ]
 
 
+MEDIA_TOOLS = [
+    {"type": "function", "name": "generate_image",
+     "description": ("Generate a picture or photo from a description and send it to the user in Telegram. Use it whenever the "
+                     "user asks to draw, create, generate or imagine an image. Write a detailed prompt in English."),
+     "parameters": {"type": "object", "properties": {
+         "prompt": {"type": "string"},
+         "format": {"type": "string", "enum": ["square", "portrait", "landscape"]}},
+         "required": ["prompt"], "additionalProperties": False}},
+    {"type": "function", "name": "generate_video",
+     "description": ("Generate a short (5 s) video from a description and send it to the user. Use it only when the user "
+                     "explicitly asks for a video or animation. Write a detailed prompt in English."),
+     "parameters": {"type": "object", "properties": {
+         "prompt": {"type": "string"},
+         "format": {"type": "string", "enum": ["square", "portrait", "landscape"]}},
+         "required": ["prompt"], "additionalProperties": False}},
+]
+
+
 class Toolbox:
     """Tools available to the model for one user and one reply."""
 
-    def __init__(self, http, store, pending, user_id, language="ru", apps=((), ())):
+    def __init__(self, http, store, pending, user_id, language="ru", apps=((), ()), media=None):
         self.http, self.store, self.pending, self.user_id, self.language = http, store, pending, user_id, language
         github = store.get(user_id, "github")
         self.github = github[0] if github else None
         self.mcp = store.get(user_id, "mcp")
         # Apps connected in one tap (Pipedream Connect): ready MCP tool definitions and their display names.
         self.app_tools, self.app_names = list(apps[0]), list(apps[1])
+        # media(kind, prompt, format) -> text for the model; set when photo/video generation is available.
+        self.media = media
         self.proposals = []
 
     def definitions(self):
         tools = list(GITHUB_TOOLS) if self.github else []
+        if self.media:
+            tools += MEDIA_TOOLS
         for server in self.mcp:
             tool = {"type": "mcp", "server_label": server["label"], "server_url": server["url"], "require_approval": "never"}
             if server["token"]:
@@ -316,6 +338,9 @@ class Toolbox:
                 "prepare the deletion; the user confirms twice in Telegram. Do not tell the user you cannot delete repositories.")
         if self.mcp:
             parts.append("Connected services (MCP): " + ", ".join(s["label"] for s in self.mcp) + ".")
+        if self.media:
+            parts.append("You can generate images (generate_image) and short videos (generate_video); the result arrives in "
+                         "the chat by itself a bit later, so just say briefly that it is being made.")
         if self.app_names:
             parts.append("Connected apps (use their MCP tools when the request involves them): " + ", ".join(self.app_names) + ".")
         return " ".join(parts)
@@ -329,12 +354,17 @@ class Toolbox:
             "github_read_file": (f"Читаю {path}", f"Reading {path}"),
             "github_propose_changes": ("Готовлю изменения", "Preparing changes"),
             "github_delete_repos": ("Готовлю удаление", "Preparing deletion"),
+            "generate_image": ("Запускаю генерацию фото", "Starting the image"),
+            "generate_video": ("Запускаю генерацию видео", "Starting the video"),
         }
         ru_text, en_text = labels.get(name, ("Работаю", "Working"))
         return ru_text if ru else en_text
 
     async def run(self, name, args):
         """Run a tool and return text for the model; errors are returned, not raised."""
+        if name in ("generate_image", "generate_video") and self.media:
+            kind = "photo" if name == "generate_image" else "video"
+            return await self.media(kind, args.get("prompt") or "", args.get("format") or "square")
         if not self.github:
             return "GitHub is not connected. Ask the user to connect it in the Mini App (/app)."
         gh = GitHub(self.http, self.github["token"])

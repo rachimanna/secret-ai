@@ -25,17 +25,18 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, MenuButtonWebApp, MessageEntity,
-                      Update, User, WebAppInfo)
+from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
+                      MessageEntity, Update, User, WebAppInfo)
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
-                          filters)
+                          PreCheckoutQueryHandler, filters)
 
 import miniapp
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
+from media import COST, DEFAULT_MODELS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, PACKS, MediaError, fal_generate
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -110,6 +111,12 @@ class Memory:
         self.db.execute("CREATE TABLE IF NOT EXISTS settings (user_id INTEGER PRIMARY KEY, persona TEXT NOT NULL)")
         if "model" not in [row[1] for row in self.db.execute("PRAGMA table_info(settings)")]:
             self.db.execute("ALTER TABLE settings ADD COLUMN model TEXT")
+        # Generation: free photos per day, bought credits, and paid Stars charges (each counted once).
+        self.db.execute("CREATE TABLE IF NOT EXISTS gen_daily (user_id INTEGER NOT NULL, day TEXT NOT NULL, photos INTEGER NOT NULL, "
+                        "PRIMARY KEY (user_id, day))")
+        self.db.execute("CREATE TABLE IF NOT EXISTS gen_credits (user_id INTEGER PRIMARY KEY, credits INTEGER NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS gen_payments (charge_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, "
+                        "credits INTEGER NOT NULL, stars INTEGER NOT NULL)")
         self.db.commit()
 
     def history(self, user_id):
@@ -163,6 +170,52 @@ class Memory:
 
     def count(self, user_id):
         return self.db.execute("SELECT COUNT(*) FROM messages WHERE user_id=?", (user_id,)).fetchone()[0]
+
+    # ----- generation quota -----
+
+    @staticmethod
+    def _today():
+        return time.strftime("%Y-%m-%d", time.gmtime())
+
+    def gen_info(self, user_id):
+        """(free photos left today, credits)."""
+        used = self.db.execute("SELECT photos FROM gen_daily WHERE user_id=? AND day=?", (user_id, self._today())).fetchone()
+        credits = self.db.execute("SELECT credits FROM gen_credits WHERE user_id=?", (user_id,)).fetchone()
+        return max(0, FREE_PHOTOS_PER_DAY - (used[0] if used else 0)), credits[0] if credits else 0
+
+    def gen_charge(self, user_id, kind):
+        """Take one generation: a free photo first, then credits. Returns 'free', 'credits' or None (not enough)."""
+        free, credits = self.gen_info(user_id)
+        with self.db:
+            if kind == "photo" and free > 0:
+                self.db.execute("INSERT INTO gen_daily(user_id, day, photos) VALUES (?, ?, 1) "
+                                "ON CONFLICT(user_id, day) DO UPDATE SET photos=photos+1", (user_id, self._today()))
+                return "free"
+            if credits >= COST[kind]:
+                self.db.execute("UPDATE gen_credits SET credits=credits-? WHERE user_id=?", (COST[kind], user_id))
+                return "credits"
+        return None
+
+    def gen_refund(self, user_id, kind, how):
+        with self.db:
+            if how == "free":
+                self.db.execute("UPDATE gen_daily SET photos=MAX(0, photos-1) WHERE user_id=? AND day=?", (user_id, self._today()))
+            elif how == "credits":
+                self._add_credits(user_id, COST[kind])
+
+    def _add_credits(self, user_id, credits):
+        self.db.execute("INSERT INTO gen_credits(user_id, credits) VALUES (?, ?) "
+                        "ON CONFLICT(user_id) DO UPDATE SET credits=credits+excluded.credits", (user_id, credits))
+
+    def gen_paid(self, charge_id, user_id, credits, stars):
+        """Credit a Stars payment once; returns False if this charge was already counted."""
+        with self.db:
+            if self.db.execute("SELECT 1 FROM gen_payments WHERE charge_id=?", (charge_id,)).fetchone():
+                return False
+            self.db.execute("INSERT INTO gen_payments(charge_id, user_id, credits, stars) VALUES (?, ?, ?, ?)",
+                            (charge_id, user_id, credits, stars))
+            self._add_credits(user_id, credits)
+        return True
 
     def close(self):
         self.db.close()
@@ -826,8 +879,18 @@ async def respond(update, context, target, content, saved_question, voice=False)
     prune_pending(context.bot_data["pending"])
     await context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id)
     taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
+    media = None
+    if gen_settings(context.bot_data)[0]:
+        async def media(kind, prompt, fmt):
+            error = await start_generation(context.application, user_id, lang(update), kind, prompt, fmt)
+            if error == "no_credits":
+                return ("Not started: the user has no free generations or credits left. Tell them to top up in the Mini App "
+                        "(button Secret AI → Generation) with Telegram Stars.")
+            if error:
+                return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
+            return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
-                      apps=await app_tools(context.bot_data, user_id, taken))
+                      apps=await app_tools(context.bot_data, user_id, taken), media=media)
     instructions = SYSTEM + (" " + persona[3] if persona[3] else "") + " Telegram language: " + (update.effective_user.language_code or "ru")
     if toolbox.instructions():
         instructions += " " + toolbox.instructions()
@@ -858,6 +921,105 @@ async def respond(update, context, target, content, saved_question, voice=False)
         tasks.add(task)
         task.add_done_callback(tasks.discard)
     await show_proposals(update, context, toolbox, target)
+
+
+MEDIA_ERRORS = {
+    "no_key": ("Генерация пока не настроена: владелец бота ещё не добавил ключ.", "Generation isn't set up yet: the bot owner hasn't added a key."),
+    "bad_key": ("Ключ fal.ai не работает или на нём закончился баланс — владельцу бота нужно проверить fal.ai.",
+                "The fal.ai key doesn't work or its balance is empty — the bot owner should check fal.ai."),
+    "model": ("Эта модель генерации недоступна — владельцу бота нужно сменить её в настройках Mini App.",
+              "This generation model is unavailable — the bot owner should change it in the Mini App settings."),
+    "timeout": ("Генерация заняла слишком много времени. Попробуйте ещё раз.", "Generation took too long. Please try again."),
+    "blocked": ("Запрос отклонён фильтром безопасности. Попробуйте описать иначе.", "The request was blocked by the safety filter. Try describing it differently."),
+    "failed": ("Не получилось сгенерировать. Попробуйте ещё раз.", "Generation failed. Please try again."),
+}
+
+
+def gen_settings(bot_data):
+    """fal key (Mini App, or FAL_KEY env) and the photo/video models."""
+    store = bot_data["connections"]
+    key = store.get_meta("fal_key", secret=True) or bot_data.get("fal_env_key") or ""
+    models = store.get_meta("fal_models") or {}
+    return key, {kind: models.get(kind) or default for kind, default in DEFAULT_MODELS.items()}
+
+
+def gen_state(bot_data, user_id):
+    key, models = gen_settings(bot_data)
+    free, credits = bot_data["memory"].gen_info(user_id)
+    owner = bot_data["connections"].get_meta("owner") == user_id
+    state = {"ready": bool(key), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
+             "credits": credits, "cost": COST, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
+    if owner:
+        state["models"] = models
+    return state
+
+
+async def start_generation(app, user_id, language, kind, prompt, fmt):
+    """Check the key and quota, take the generation and run it in the background. Returns None or an error code."""
+    data = app.bot_data
+    prompt = (prompt or "").strip()[:MAX_PROMPT]
+    if kind not in COST or not prompt:
+        return "bad_request"
+    key, models = gen_settings(data)
+    if not key:
+        return "no_key"
+    how = "owner" if data["connections"].get_meta("owner") == user_id else data["memory"].gen_charge(user_id, kind)
+    if not how:
+        return "no_credits"
+    task = asyncio.create_task(generation_job(app, user_id, language, kind, prompt, fmt if fmt in FORMATS else "square",
+                                              key, models[kind], how))
+    jobs = data.setdefault("gen_tasks", set())
+    jobs.add(task)
+    task.add_done_callback(jobs.discard)
+    return None
+
+
+async def generation_job(app, user_id, language, kind, prompt, fmt, key, model, how):
+    bot, data, ru = app.bot, app.bot_data, language == "ru"
+    waiting = {"photo": ("🎨 Рисую… обычно это 10–30 секунд", "🎨 Drawing… usually 10–30 seconds"),
+               "video": ("🎬 Снимаю видео… это займёт 1–3 минуты", "🎬 Making the video… this takes 1–3 minutes")}[kind]
+    status = None
+    try:
+        status = await bot.send_message(user_id, waiting[0] if ru else waiting[1])
+    except TelegramError:
+        pass
+    try:
+        url = await fal_generate(data["http"], key, model, kind, prompt, fmt)
+        await send_media(bot, data["http"], user_id, kind, url, prompt[:900])
+    except Exception as exc:  # any failure: give the generation back and explain
+        if how != "owner":
+            data["memory"].gen_refund(user_id, kind, how)
+        code = exc.code if isinstance(exc, MediaError) else "failed"
+        # Only the error code: fal's details may echo the prompt, which is user content.
+        LOG.warning("Generation failed: %s %s", code, type(exc).__name__)
+        text = MEDIA_ERRORS[code][0 if ru else 1]
+        if how in ("free", "credits"):
+            text += " " + ("Генерация не списана." if ru else "Nothing was charged.")
+        try:
+            await bot.send_message(user_id, "⚠️ " + text)
+        except TelegramError:
+            pass
+    finally:
+        if status:
+            try:
+                await status.delete()
+            except TelegramError:
+                pass
+
+
+async def send_media(bot, http, chat_id, kind, url, caption):
+    """Send by URL; if Telegram can't fetch it, download and upload the file."""
+    send = bot.send_photo if kind == "photo" else bot.send_video
+    field = "photo" if kind == "photo" else "video"
+    try:
+        await send(chat_id, **{field: url}, caption=caption)
+        return
+    except BadRequest:
+        pass
+    response = await http.get(url, timeout=120)
+    response.raise_for_status()
+    name = "secret-ai.png" if kind == "photo" else "secret-ai.mp4"
+    await send(chat_id, **{field: InputFile(response.content, filename=name)}, caption=caption)
 
 
 async def voice_reply(update, context, target, answer):
@@ -1050,6 +1212,34 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
 
+def parse_payload(payload):
+    """'gen:<pack>:<user id>' -> (pack, user id) or None."""
+    try:
+        kind, pack, user_id = (payload or "").split(":")
+        return (pack, int(user_id)) if kind == "gen" and pack in PACKS else None
+    except ValueError:
+        return None
+
+
+async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.pre_checkout_query
+    parsed = parse_payload(query.invoice_payload)
+    ok = bool(parsed) and parsed[1] == query.from_user.id and query.currency == "XTR" and query.total_amount == PACKS[parsed[0]][1]
+    await query.answer(ok=ok, error_message=None if ok else "This invoice is no longer valid.")
+
+
+async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    payment = update.effective_message.successful_payment
+    parsed = parse_payload(payment.invoice_payload)
+    if not parsed or parsed[1] != update.effective_user.id:
+        LOG.warning("Payment with an unknown payload")
+        return
+    credits = PACKS[parsed[0]][0]
+    if context.bot_data["memory"].gen_paid(payment.telegram_payment_charge_id, parsed[1], credits, payment.total_amount):
+        await send(update.effective_message, ui(update, f"✅ Готово! +{credits} генераций. Открывайте «Генерация» в Secret AI.",
+                                                f"✅ Done! +{credits} generations. Open “Generation” in Secret AI."))
+
+
 async def unsupported(update, context):
     if await authorized(update, context):
         await send(update.effective_message, ui(update, "Отправьте текст, голосовое, аудио или фото. Команды: /help", "Send text, voice, audio or a photo. Commands: /help"))
@@ -1221,6 +1411,26 @@ class Bridge:
                 memory.set_model(user_id, model)
         self._run(write())
 
+    def gen_state(self, user_id):
+        async def read():
+            return gen_state(self.app.bot_data, user_id)
+        return self._run(read())
+
+    def generate(self, tg_user, kind, prompt, fmt):
+        language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
+        return self._run(start_generation(self.app, tg_user["id"], language, kind, prompt, fmt))
+
+    def invoice(self, tg_user, pack):
+        """Telegram Stars invoice link for a credit pack."""
+        credits, stars = PACKS[pack]
+        ru = (tg_user.get("language_code") or "ru").startswith("ru")
+        return self._run(self.app.bot.create_invoice_link(
+            title=f"{credits} генераций" if ru else f"{credits} generations",
+            description=(f"Кредиты Secret AI: фото — {COST['photo']}, видео — {COST['video']}" if ru
+                         else f"Secret AI credits: photo — {COST['photo']}, video — {COST['video']}"),
+            payload=f"gen:{pack}:{tg_user['id']}", currency="XTR",
+            prices=[LabeledPrice(f"{credits} credits", stars)]))
+
     def reset(self, user_id):
         async def clear():
             async with self.app.bot_data["locks"][user_id]:
@@ -1267,6 +1477,7 @@ def main():
         logo_id=os.environ.get("BRAND_EMOJI_ID", "").strip(),
         tts_model=os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip(),
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
+        fal_env_key=os.environ.get("FAL_KEY", "").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={})
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
@@ -1277,6 +1488,8 @@ def main():
     app.add_handler(CommandHandler("emojiid", emojiid))
     app.add_handler(CommandHandler(["app", "connect"], open_app))
     app.add_handler(CallbackQueryHandler(on_button))
+    app.add_handler(PreCheckoutQueryHandler(precheckout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.PHOTO | filters.Document.IMAGE,
         chat))
@@ -1290,7 +1503,7 @@ def main():
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        app.run_polling(allowed_updates=["message", "callback_query"], drop_pending_updates=False, bootstrap_retries=3)
+        app.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query"], drop_pending_updates=False, bootstrap_retries=3)
     finally:
         server.shutdown()
         server.server_close()
