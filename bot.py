@@ -32,10 +32,11 @@ from codefiles import extract_files, site_file
 from fun import GroupStore, MemeError, demotivator, quote_card, tiktok_meme
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
-from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
+from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           PreCheckoutQueryHandler, filters)
 
 import miniapp
+import secretary as sec
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
@@ -774,6 +775,7 @@ HELP_RU = (
     "/export — скачать историю диалога\n"
     "/myid — ваш Telegram ID\n"
     "/app — Mini App: приложения в одно касание, режимы, модель\n"
+    "/secretary — ИИ-секретарь: отвечает людям в твоей личке, пока ты занят (Telegram Business)\n"
     "/emojiid — узнать ID анимированного эмодзи\n"
     "/help — эта справка\n\n"
     "Я помню последние 30 сообщений нашего диалога."
@@ -790,6 +792,7 @@ HELP_EN = (
     "/export — download the conversation\n"
     "/myid — your Telegram ID\n"
     "/app — Mini App: one-tap apps, modes, model\n"
+    "/secretary — AI secretary: answers people in your chats while you're busy (Telegram Business)\n"
     "/emojiid — get a custom emoji ID\n"
     "/help — this help\n\n"
     "I remember our last 30 messages."
@@ -980,7 +983,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
                 return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
             return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
-                      apps=apps, media=media)
+                      apps=apps, media=media, extra=[secretary_tool(context, user_id, lang(update) == "ru")])
     instructions = (SYSTEM + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
     if toolbox.instructions():
@@ -1425,6 +1428,131 @@ async def watch_username(app):
             app.bot_data["bot_name"] = me.username
         except TelegramError:
             pass
+
+
+# ----- AI secretary (Telegram Business) -----
+
+def secretary_tool(context, user_id, ru):
+    """The secretary_settings tool for the private chat: the owner turns the secretary on and tells it how to answer."""
+    store = context.bot_data["connections"]
+
+    async def run(args):
+        current = sec.settings(store, user_id)
+        current["enabled"] = bool(args.get("enabled"))
+        if (args.get("rules") or "").strip():
+            current["rules"] = args["rules"].strip()[:1000]
+        if args.get("notify") is not None:
+            current["notify"] = bool(args["notify"])
+        if current["enabled"] and not current["rules"]:
+            current["rules"] = ("Привет! Я сейчас занят и отвечу позже. Это ИИ-помощник." if ru
+                                else "Hi! I'm busy right now and will answer later. This is an AI assistant.")
+        sec.save_settings(store, user_id, current)
+        return "Saved. " + sec.status_text(store, user_id, ru)
+
+    return {"definition": sec.TOOL, "run": run, "status": ("Настраиваю секретаря", "Setting up the secretary"),
+            "hint": sec.status_text(store, user_id, ru) + " Change it with secretary_settings when the user asks; tell them "
+                    "briefly what is now set and, if the connection is not set up, how to connect."}
+
+
+async def business_connection(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The owner connected or changed the bot in Telegram Business settings."""
+    connection = update.business_connection
+    store = context.bot_data["connections"]
+    value = sec.save_connection(store, connection)
+    ru = (connection.user.language_code or "ru").startswith("ru")
+    current = sec.settings(store, value["user_id"])
+    if not value["enabled"]:
+        text = "Секретарь отключён от твоего аккаунта." if ru else "The secretary was disconnected from your account."
+    elif not value["can_reply"]:
+        text = ("Бот подключён, но ему не разрешено отвечать. Включи «Отвечать на сообщения» в настройках Telegram для бизнеса → "
+                "Чат-боты." if ru else "Connected, but the bot may not reply. Allow replying in Telegram Business → Chatbots.")
+    else:
+        rules = current["rules"] or "—"
+        text = (f"✅ Секретарь подключён. Сейчас он {'включён' if current['enabled'] else 'выключен'}, правила: «{rules}».\n\n"
+                "Напиши мне, как отвечать, например: «отвечай всем: привет, я занят или сплю, отвечу позже, это ИИ». "
+                "Выключить — «выключи секретаря». Когда ты сам пишешь в чате, я там 10 минут молчу." if ru else
+                f"✅ The secretary is connected. It is {'on' if current['enabled'] else 'off'}, rules: «{rules}».\n\n"
+                "Tell me how to answer, e.g. “reply to everyone: hi, I'm busy, I'll answer later, this is an AI”. "
+                "Turn it off with “turn off the secretary”. When you write in a chat yourself, I stay quiet there for 10 minutes.")
+    try:
+        await context.bot.send_message(value["chat_id"], text)
+    except TelegramError:
+        LOG.warning("Could not tell the owner about the business connection")
+
+
+async def business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """A message in the owner's personal chat: answer it for the owner when the secretary is on and the owner is away."""
+    message = update.business_message
+    if not message or not message.business_connection_id:
+        return
+    try:
+        await secretary_answer(context, message)
+    except Exception as exc:  # never show errors to the person the owner is talking to
+        LOG.warning("Secretary failed: %s", type(exc).__name__)
+
+
+async def secretary_answer(context, message):
+    data, store = context.bot_data, context.bot_data["connections"]
+    conn_id = message.business_connection_id
+    conn = sec.connection(store, conn_id)
+    if not conn:
+        conn = sec.save_connection(store, await context.bot.get_business_connection(conn_id))
+    chat_id, sender, activity = message.chat.id, message.from_user, data["biz_activity"]
+    said = describe_message(message) or "…"
+    if sender and sender.id == conn["user_id"]:
+        activity.owner_wrote(chat_id)  # the owner is here: stay quiet in this chat for a while
+        activity.log(chat_id, f"{conn.get('name', 'Owner')} (owner): {said}")
+        return
+    name = speaker(sender) if sender else "?"
+    activity.log(chat_id, f"{name}: {said}")
+    current = sec.settings(store, conn["user_id"])
+    if (not current["enabled"] or not conn["enabled"] or not conn["can_reply"] or message.chat.type != "private"
+            or (sender and sender.is_bot) or not activity.may_answer(chat_id)):
+        return
+    activity.answered_now(chat_id)
+    try:
+        await context.bot.send_chat_action(chat_id, ChatAction.TYPING, business_connection_id=conn_id)
+    except TelegramError:
+        pass
+    response = await data["client"].responses.create(
+        model=data["model"], instructions=sec.instructions(conn.get("name", "the owner"), current["rules"]), store=False,
+        max_output_tokens=1500,
+        input="Chat (oldest first):\n" + "\n".join(activity.lines.get(chat_id, [])) + f"\n\nAnswer {name}'s last message.")
+    text = (response.output_text or "").strip()
+    if not text or text.upper().startswith("SKIP"):
+        return
+    await context.bot.send_message(chat_id, text[:3500], business_connection_id=conn_id)
+    activity.log(chat_id, f"AI secretary: {text}")
+    if current.get("notify", True):
+        try:
+            await context.bot.send_message(conn["chat_id"], f"🤖 {name}: «{said[:200]}»\n↳ {text[:500]}")
+        except TelegramError:
+            pass
+
+
+async def secretary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/secretary: status and how to connect."""
+    if not await authorized(update, context):
+        return
+    ru = lang(update) == "ru"
+    store, user_id = context.bot_data["connections"], update.effective_user.id
+    conn_id = store.get_meta(f"biz:{user_id}")
+    conn = sec.connection(store, conn_id) if conn_id else None
+    current = sec.settings(store, user_id)
+    ready = bool(conn and conn["enabled"] and conn["can_reply"])
+    if ru:
+        text = (f"🤖 Секретарь: {'включён' if current['enabled'] else 'выключен'}\n"
+                f"Подключение к аккаунту: {'есть' if ready else 'нет'}\n"
+                f"Правила: «{current['rules'] or '—'}»\n"
+                f"Уведомления: {'вкл' if current.get('notify', True) else 'выкл'}\n\n"
+                + ("" if ready else sec.SETUP_RU + " Нужен Telegram Premium.\n\n") +
+                "Просто напиши мне, как отвечать: «отвечай всем: привет, я занят, отвечу позже, это ИИ» или «выключи секретаря».")
+    else:
+        text = (f"🤖 Secretary: {'on' if current['enabled'] else 'off'}\nAccount connection: {'yes' if ready else 'no'}\n"
+                f"Rules: «{current['rules'] or '—'}»\nNotifications: {'on' if current.get('notify', True) else 'off'}\n\n"
+                + ("" if ready else sec.SETUP_EN + " Telegram Premium is required.\n\n") +
+                "Just tell me how to answer, e.g. “reply to everyone: hi, I'm busy, I'll answer later” or “turn off the secretary”.")
+    await send(update.effective_message, text)
 
 
 MEDIA_ERRORS = {
@@ -1926,7 +2054,7 @@ async def on_error(update, context):
     error = context.error
     # Never log exception bodies: they can contain tokens, URLs or user content.
     LOG.error("Handler error: %s", type(error).__name__)
-    if not isinstance(update, Update) or not update.effective_message or not update.effective_user:
+    if not isinstance(update, Update) or not update.effective_message or not update.effective_user or update.business_message:
         return
     try:
         await send(update.effective_message, ui(update, *error_text(error)))
@@ -1953,9 +2081,9 @@ def error_text(error):
 
 
 COMMANDS = {
-    "ru": [("app", "Подключения"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
+    "ru": [("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
            ("export", "Скачать историю"), ("myid", "Мой Telegram ID")],
-    "en": [("app", "Connections"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
+    "en": [("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
            ("export", "Download history"), ("myid", "My Telegram ID")],
 }
 
@@ -2169,8 +2297,13 @@ def main():
         web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
         # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),
-        locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={})
+        locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},
+        biz_activity=sec.Activity())
+    # Business updates first: their messages must not reach the regular chat handlers.
+    app.add_handler(BusinessConnectionHandler(business_connection))
+    app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGES, business_message))
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler(["secretary", "sekretar"], secretary_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("mode", mode))
     app.add_handler(CommandHandler("reset", reset))
@@ -2197,7 +2330,7 @@ def main():
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        app.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query"], drop_pending_updates=False, bootstrap_retries=3)
+        app.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query", "business_connection", "business_message"], drop_pending_updates=False, bootstrap_retries=3)
     finally:
         server.shutdown()
         server.server_close()

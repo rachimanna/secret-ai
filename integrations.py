@@ -326,7 +326,7 @@ MEDIA_TOOLS = [
 class Toolbox:
     """Tools available to the model for one user and one reply."""
 
-    def __init__(self, http, store, pending, user_id, language="ru", apps=((), ()), media=None):
+    def __init__(self, http, store, pending, user_id, language="ru", apps=((), ()), media=None, extra=()):
         self.http, self.store, self.pending, self.user_id, self.language = http, store, pending, user_id, language
         github = store.get(user_id, "github")
         self.github = github[0] if github else None
@@ -335,6 +335,8 @@ class Toolbox:
         self.app_tools, self.app_names = list(apps[0]), list(apps[1])
         # media(kind, prompt, format) -> text for the model; set when photo/video generation is available.
         self.media = media
+        # Extra tools: dicts with "definition", "run" (async args -> text), "hint" (instructions) and "status" (ru, en).
+        self.extra = {tool["definition"]["name"]: tool for tool in extra}
         self.proposals = []
 
     def definitions(self):
@@ -346,7 +348,7 @@ class Toolbox:
             if server["token"]:
                 tool["headers"] = {"Authorization": f"Bearer {server['token']}"}
             tools.append(tool)
-        return tools + self.app_tools
+        return tools + [tool["definition"] for tool in self.extra.values()] + self.app_tools
 
     def instructions(self):
         parts = []
@@ -365,6 +367,7 @@ class Toolbox:
                          "the chat by itself a bit later, so just say briefly that it is being made.")
         if self.app_names:
             parts.append("Connected apps (use their MCP tools when the request involves them): " + ", ".join(self.app_names) + ".")
+        parts += [tool["hint"] for tool in self.extra.values() if tool.get("hint")]
         return " ".join(parts)
 
     def status(self, name, args):
@@ -379,11 +382,13 @@ class Toolbox:
             "generate_image": ("Запускаю генерацию фото", "Starting the image"),
             "generate_video": ("Запускаю генерацию видео", "Starting the video"),
         }
-        ru_text, en_text = labels.get(name, ("Работаю", "Working"))
+        ru_text, en_text = labels.get(name) or (self.extra[name].get("status") if name in self.extra else None) or ("Работаю", "Working")
         return ru_text if ru else en_text
 
     async def run(self, name, args):
         """Run a tool and return text for the model; errors are returned, not raised."""
+        if name in self.extra:
+            return await self.extra[name]["run"](args)
         if name in ("generate_image", "generate_video") and self.media:
             kind = "photo" if name == "generate_image" else "video"
             if kind == "photo":
