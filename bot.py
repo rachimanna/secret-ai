@@ -9,7 +9,7 @@ import random
 import sqlite3
 import tempfile
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from threading import Thread
@@ -25,9 +25,10 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
+from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
                       MessageEntity, Update, User, WebAppInfo)
 from codefiles import extract_files, site_file
+from fun import GroupStore, demotivator, quote_card
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
@@ -81,9 +82,8 @@ INTERJECT = (
     "If nothing fun fits, answer exactly SKIP."
 )
 GROUP_TYPES = ("group", "supergroup")
-GROUP_CONTEXT = 40  # recent group messages the bot keeps in mind
-GROUP_RANDOM_CHANCE = 0.07  # chance to chime in on a message nobody addressed to the bot
-GROUP_RANDOM_PAUSE = 240  # seconds between such remarks in one chat
+GROUP_RANDOM_CHANCE = 0.1  # chance to do something on a message nobody addressed to the bot
+GROUP_RANDOM_PAUSE = 180  # seconds between such surprises in one chat
 USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
 HISTORY_LIMIT = 30
@@ -766,7 +766,8 @@ HELP_RU = (
     "Пока я думаю, вы увидите мой логотип, а ответ будет появляться прямо по ходу печати.\n"
     "На голосовое я отвечаю голосом.\n"
     "Код и скрипты присылаю файлами, а сайт ещё и публикую — с кнопкой «Открыть сайт».\n"
-    "Добавьте меня в группу: отвечаю на reply и на @упоминание, а иногда и сам вставляю словечко.\n\n"
+    "Добавьте меня в группу: отвечаю на reply и на @упоминание, помню чат, иногда сам кидаю мемы, цитаты и демотиваторы. "
+    "В группе: /q — цитата (ответом на сообщение), /dem — демотиватор.\n\n"
     "/mode — режим: ассистент, программист, переводчик, креатив\n"
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
@@ -781,7 +782,8 @@ HELP_EN = (
     "While I'm thinking you'll see my logo, and the answer appears as it is being written.\n"
     "I answer voice messages with my voice.\n"
     "Code and scripts come as files; a website is also published with an “Open” button.\n"
-    "Add me to a group: I answer replies and @mentions, and sometimes chime in myself.\n\n"
+    "Add me to a group: I answer replies and @mentions, remember the chat and sometimes post memes, quotes and demotivators. "
+    "In a group: /q — quote (reply to a message), /dem — demotivator.\n\n"
     "/mode — mode: assistant, coder, translator, creative\n"
     "/reset — clear memory\n"
     "/export — download the conversation\n"
@@ -1090,10 +1092,6 @@ def addressed_to_bot(message, bot, bot_data):
     return False
 
 
-def group_log(bot_data, chat_id):
-    return bot_data["group_log"].setdefault(chat_id, deque(maxlen=GROUP_CONTEXT))
-
-
 def describe_message(message):
     text = message.text or message.caption or ""
     kind = ("фото" if message.photo else "голосовое" if message.voice else "кружок" if message.video_note else
@@ -1102,30 +1100,44 @@ def describe_message(message):
     return f"[{kind}] {text}".strip() if kind else text
 
 
+def remember_group_message(store, message, name):
+    """Keep the line for context, the chat's stickers/gifs/photos and its catchphrases."""
+    chat_id = message.chat_id
+    said = describe_message(message)
+    if said:
+        store.add_line(chat_id, f"{name}: {said}")
+    if message.sticker:
+        store.add_media(chat_id, "sticker", message.sticker.file_unique_id, message.sticker.file_id)
+    elif message.animation:
+        store.add_media(chat_id, "gif", message.animation.file_unique_id, message.animation.file_id)
+    elif message.photo:
+        store.add_media(chat_id, "photo", message.photo[-1].file_unique_id, message.photo[-1].file_id)
+    if message.text and not message.text.startswith("/"):
+        store.add_phrase(chat_id, message.text)
+
+
 async def group_chat(update, context):
-    """Group chats: answer when addressed, remember who says what, and sometimes chime in uninvited."""
+    """Group chats: remember the chat, answer when addressed, and sometimes do something uninvited."""
     message, user, data = update.effective_message, update.effective_user, context.bot_data
     if not user or user.is_bot or (data["allowed"] and user.id not in data["allowed"]):
         return
-    chat_id = message.chat_id
-    log = group_log(data, chat_id)
+    chat_id, store, name = message.chat_id, data["groups"], speaker(user)
     lock = data["locks"][chat_id]
     if not addressed_to_bot(message, context.bot, data):
-        said = describe_message(message)
-        if said:
-            log.append(f"{speaker(user)}: {said}")
+        remember_group_message(store, message, name)
         quiet = time.monotonic() - data["group_spoke"].get(chat_id, 0)
-        if (not message.text or len(message.text.split()) < 3 or lock.locked() or quiet < GROUP_RANDOM_PAUSE
-                or random.random() >= GROUP_RANDOM_CHANCE):
+        if lock.locked() or quiet < GROUP_RANDOM_PAUSE or random.random() >= GROUP_RANDOM_CHANCE:
             return
         data["group_spoke"][chat_id] = time.monotonic()
         async with lock:
             try:
-                await group_interject(context, message, log)
+                await group_surprise(context, message, user)
             except Exception as exc:  # an uninvited joke that failed is no reason to bother the chat
-                LOG.warning("Group remark failed: %s", type(exc).__name__)
+                LOG.warning("Group surprise failed: %s", type(exc).__name__)
         return
     async with lock:
+        if await meme_request(update, context):
+            return
         readable = (message.text or message.caption or message.voice or message.audio or message.video_note or message.photo
                     or (message.document and (message.document.mime_type or "").startswith("image/")))
         if readable:
@@ -1135,20 +1147,19 @@ async def group_chat(update, context):
             question, content, _ = parsed
         else:  # a sticker, gif or video in reply to the bot
             question = content = describe_message(message) or "…"
-        name = speaker(user)
-        before = "\n".join(log)
-        log.append(f"{name}: {question}")
-        head = (f"Recent messages in the group (oldest first):\n{before or '(none)'}\n\n" if before else "") + f"{name} writes to you:"
+        before = "\n".join(store.lines(chat_id))
+        store.add_line(chat_id, f"{name}: {question}")
+        head = (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:"
         content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
         data["group_spoke"][chat_id] = time.monotonic()
-        await group_respond(update, context, message, content, log)
+        await group_respond(update, context, message, content)
 
 
 def group_instructions(update):
     return SYSTEM + CODE_RULES + GROUP_STYLE + " Telegram language: " + (update.effective_user.language_code or "ru")
 
 
-async def group_respond(update, context, message, content, log):
+async def group_respond(update, context, message, content):
     data = context.bot_data
     live = GroupReply(message, data)
     await live.start()
@@ -1164,20 +1175,172 @@ async def group_respond(update, context, message, content, log):
         await live.abort(None)
         return
     await live.finish(text or "📎")
-    log.append("Secret AI: " + (text or "[files]")[:600])
+    data["groups"].add_line(message.chat_id, "Secret AI: " + (text or "[files]")[:600])
     await send_files(update, context, message, files)
 
 
-async def group_interject(context, message, log):
+# ----- uninvited: no logo, no "typing", nothing that gives it away -----
+
+async def group_surprise(context, message, user):
+    """Pick something to do on its own: a remark, the chat's sticker or gif, a catchphrase, a quote picture or a demotivator."""
+    store, chat_id = context.bot_data["groups"], message.chat_id
+    options = [("remark", 35)]
+    if store.has_media(chat_id, "sticker") or store.has_media(chat_id, "gif"):
+        options.append(("media", 25))
+    if store.catchphrase(chat_id):
+        options.append(("phrase", 12))
+    if message.text and 3 <= len(message.text.split()) and len(message.text) <= 300:
+        options.append(("quote", 18))
+    if store.has_media(chat_id, "photo"):
+        options.append(("demotivator", 10))
+    action = random.choices([o[0] for o in options], weights=[o[1] for o in options])[0]
+    if action == "media":
+        await send_chat_media(context, chat_id, ("sticker", "gif"))
+    elif action == "phrase":
+        phrase = store.catchphrase(chat_id)
+        await context.bot.send_message(chat_id, phrase)
+        store.add_line(chat_id, "Secret AI: " + phrase)
+    elif action == "quote":
+        await send_quote(context, chat_id, message.text, user)
+    elif action == "demotivator":
+        await send_demotivator(context, chat_id, None)
+    else:
+        await group_remark(context, message)
+
+
+async def group_remark(context, message):
     data = context.bot_data
+    lines = data["groups"].lines(message.chat_id, 120)
     response = await data["client"].responses.create(
         model=data["model"], instructions=SYSTEM + GROUP_STYLE, store=False, max_output_tokens=2000,
-        input=[{"role": "user", "content": "Recent messages in the group (oldest first):\n" + "\n".join(log) + "\n\n" + INTERJECT}])
+        input=[{"role": "user", "content": "Recent messages in the group (oldest first):\n" + "\n".join(lines) + "\n\n" + INTERJECT}])
     text = (response.output_text or "").strip()
     if not text or text.upper().startswith("SKIP"):
         return
-    await reply(message, text[:1000])
-    log.append("Secret AI: " + text[:600])
+    if random.random() < 0.5:
+        await reply(message, text[:1000])
+    else:
+        await context.bot.send_message(message.chat_id, text[:1000])
+    data["groups"].add_line(message.chat_id, "Secret AI: " + text[:600])
+
+
+async def send_chat_media(context, chat_id, kinds):
+    store = context.bot_data["groups"]
+    for _ in range(3):  # a file Telegram no longer knows is forgotten and another one tried
+        picked = store.random_media(chat_id, kinds)
+        if not picked:
+            return
+        kind, file_id = picked
+        try:
+            if kind == "sticker":
+                await context.bot.send_sticker(chat_id, file_id)
+            elif kind == "gif":
+                await context.bot.send_animation(chat_id, file_id)
+            else:
+                await context.bot.send_photo(chat_id, file_id)
+            store.add_line(chat_id, f"Secret AI: [{'стикер' if kind == 'sticker' else 'гифка' if kind == 'gif' else 'фото'}]")
+            return
+        except BadRequest:
+            store.forget_media(chat_id, file_id)
+
+
+async def avatar_bytes(bot, user_id):
+    try:
+        photos = await bot.get_user_profile_photos(user_id, limit=1)
+        if photos.photos:
+            remote = await photos.photos[0][0].get_file()
+            return bytes(await remote.download_as_bytearray())
+    except TelegramError:
+        pass
+    return None
+
+
+async def send_quote(context, chat_id, text, user, reply_to=None):
+    """A quote picture: the mascot says the member's message, signed with their name and avatar."""
+    avatar = await avatar_bytes(context.bot, user.id)
+    picture = await asyncio.to_thread(quote_card, speaker(user), text, avatar)
+    await context.bot.send_photo(chat_id, picture, reply_to_message_id=reply_to)
+    context.bot_data["groups"].add_line(chat_id, f"Secret AI: [цитата {speaker(user)}: {text[:200]}]")
+
+
+async def demotivator_caption(context, chat_id, hint):
+    """A big title and a small subtitle for a demotivator, in the chat's spirit."""
+    data = context.bot_data
+    lines = data["groups"].lines(chat_id, 60)
+    try:
+        response = await data["client"].responses.create(
+            model=data["model"], store=False, max_output_tokens=800, text={"format": {"type": "json_object"}},
+            instructions=("Write a caption for a classic Russian demotivator poster in the language of the chat: 'title' is 1-3 "
+                          "words, 'subtitle' is one short ironic line. Funny, based on the chat; no insults about "
+                          'ethnicity, religion, orientation or looks. Return JSON {"title": "...", "subtitle": "..."}.'),
+            input="Chat:\n" + "\n".join(lines) + (f"\n\nPhoto caption or request: {hint}" if hint else ""))
+        caption = json.loads(response.output_text)
+        return str(caption.get("title") or "").strip()[:60] or "Ну да", str(caption.get("subtitle") or "").strip()[:140]
+    except Exception as exc:  # a catchphrase still makes a demotivator
+        LOG.warning("Demotivator caption failed: %s", type(exc).__name__)
+        return data["groups"].catchphrase(chat_id) or "Без комментариев", ""
+
+
+async def send_demotivator(context, chat_id, photo, hint="", reply_to=None):
+    """A demotivator from the given photo (a PhotoSize) or a random photo the chat posted."""
+    store = context.bot_data["groups"]
+    file_id = photo.file_id if photo else None
+    if not file_id:
+        picked = store.random_media(chat_id, ("photo",))
+        if not picked:
+            return False
+        file_id = picked[1]
+    try:
+        remote = await context.bot.get_file(file_id)
+        data = bytes(await remote.download_as_bytearray())
+    except BadRequest:
+        store.forget_media(chat_id, file_id)
+        return False
+    title, subtitle = await demotivator_caption(context, chat_id, hint)
+    picture = await asyncio.to_thread(demotivator, data, title, subtitle)
+    await context.bot.send_photo(chat_id, picture, reply_to_message_id=reply_to)
+    store.add_line(chat_id, f"Secret AI: [демотиватор «{title}. {subtitle}»]")
+    return True
+
+
+async def meme_request(update, context):
+    """"@bot цитата" / "демотиватор" (in reply to a message): make the picture. True if handled."""
+    message = update.effective_message
+    text = (message.text or message.caption or "").lower()
+    target = message.reply_to_message
+    if "цитат" in text or "quote" in text:
+        if target and target.from_user and target.from_user.id != context.bot.id and (target.text or target.caption):
+            await send_quote(context, message.chat_id, target.text or target.caption, target.from_user, message.message_id)
+            return True
+    if "демотиватор" in text or "demotivator" in text:
+        photo = (message.photo or (target.photo if target else None) or [None])[-1]
+        hint = (target.caption if target and target.caption else "") or message.caption or ""
+        if await send_demotivator(context, message.chat_id, photo, hint, message.message_id):
+            return True
+    return False
+
+
+async def quote_command(update, context):
+    """/q in reply to a message: a quote picture of it."""
+    message = update.effective_message
+    if not message or update.effective_chat.type not in GROUP_TYPES:
+        return
+    target = message.reply_to_message
+    if not target or not target.from_user or not (target.text or target.caption):
+        await reply(message, "Ответь командой /q на сообщение, которое надо процитировать.")
+        return
+    await send_quote(context, message.chat_id, target.text or target.caption, target.from_user, message.message_id)
+
+
+async def demotivator_command(update, context):
+    """/dem (in reply to a photo, or a random photo from the chat): a demotivator."""
+    message = update.effective_message
+    if not message or update.effective_chat.type not in GROUP_TYPES:
+        return
+    target = message.reply_to_message
+    photo = (message.photo or (target.photo if target else None) or [None])[-1]
+    if not await send_demotivator(context, message.chat_id, photo, (target.caption if target else "") or "", message.message_id):
+        await reply(message, "Пока нет фоток из чата. Ответь /dem на фото — сделаю демотиватор.")
 
 
 async def watch_username(app):
@@ -1771,6 +1934,10 @@ async def post_init(app):
     try:
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
+        group = [BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото")]
+        await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
+        await app.bot.set_my_commands([BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo")],
+                                      scope=BotCommandScopeAllGroupChats())
         if app.bot_data["public_url"]:
             # The button next to the message field opens the Mini App, like in large AI bots.
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp("Secret AI", WebAppInfo(app.bot_data["public_url"] + "/app")))
@@ -1784,6 +1951,7 @@ async def shutdown(app):
     app.bot_data["pipedream"].http.close()
     app.bot_data["direct"].http.close()
     app.bot_data["memory"].close()
+    app.bot_data["groups"].close()
     app.bot_data["connections"].close()
 
 
@@ -1926,7 +2094,7 @@ def main():
         web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
         # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),
-        locks=defaultdict(asyncio.Lock), last_answer={}, group_log={}, group_spoke={})
+        locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={})
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("mode", mode))
@@ -1935,6 +2103,8 @@ def main():
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("emojiid", emojiid))
     app.add_handler(CommandHandler(["app", "connect"], open_app))
+    app.add_handler(CommandHandler(["q", "quote"], quote_command))
+    app.add_handler(CommandHandler(["dem", "demotivator"], demotivator_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
