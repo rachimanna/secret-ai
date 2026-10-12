@@ -4,7 +4,7 @@ import json
 import logging
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 
@@ -50,8 +50,8 @@ def result_page(title, text, ok=True):
 
 
 def make_handler(config):
-    """config: token, allowed, store, public_url, oauth_id, oauth_secret, bridge, pipedream."""
-    pipedream = config["pipedream"]
+    """config: token, allowed, store, public_url, github (GitHubApps), bot_name(), bridge, pipedream."""
+    pipedream, github = config["pipedream"], config["github"]
 
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status, body, content_type="application/json; charset=utf-8", head=False, cache="no-store"):
@@ -67,6 +67,13 @@ def make_handler(config):
 
         def _page(self, title, text, ok=True):
             self._send(200, result_page(title, text, ok), "text/html; charset=utf-8")
+
+        def _redirect(self, url):
+            self.send_response(302)
+            self.send_header("Location", url)
+            self.send_header("Content-Length", "0")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
 
         def _user(self):
             user = check_init_data(self.headers.get("X-Telegram-Init-Data", ""), config["token"])
@@ -99,11 +106,12 @@ def make_handler(config):
         def _state(self, user, fresh=False):
             uid = user["id"]
             items = config["store"].public(uid)
-            github = next((item for item in items if item["service"] == "github"), None)
+            saved = next((item for item in items if item["service"] == "github"), None)
             return {
                 "user": {"first_name": user.get("first_name") or "", "id": uid},
-                "github": {"connected": bool(github), "login": github["meta"].get("login") if github else None,
-                           "oauth": bool(config["oauth_id"] and config["public_url"])},
+                "github": {"connected": bool(saved), "login": saved["meta"].get("login") if saved else None,
+                           "ready": bool(github.creds() and config["public_url"]),
+                           "owner": config["store"].claim_owner(uid) == uid},
                 "mcp": [{"label": i["label"], "url": i["url"]} for i in items if i["service"] == "mcp"],
                 "apps": self._apps(uid, fresh),
                 "settings": config["bridge"].settings(uid),
@@ -130,6 +138,12 @@ def make_handler(config):
                     self._page("Не получилось", "Подключение не завершено. Вернитесь в Telegram и попробуйте ещё раз.", ok=False)
             elif url.path == "/oauth/github/callback":
                 self._oauth_callback(parse_qs(url.query))
+            elif url.path == "/oauth/github/installed":
+                self._page("GitHub подключён", "Репозитории выбраны. Вернитесь в Telegram — Secret AI уже может с ними работать.")
+            elif url.path == "/setup/github":
+                self._setup_start(parse_qs(url.query))
+            elif url.path == "/setup/github/done":
+                self._setup_done(parse_qs(url.query))
             else:
                 self._send(404, {"error": "not found"})
 
@@ -198,13 +212,17 @@ def make_handler(config):
                     return
                 store.save(uid, "github", "github", token, meta={"login": login})
                 self._send(200, self._state(user))
-            elif path == "/api/github/oauth":
-                if not (config["oauth_id"] and config["public_url"]):
-                    self._send(400, {"error": "oauth_disabled"})
-                    return
-                query = urlencode({"client_id": config["oauth_id"], "scope": "repo", "state": sign_state(config["token"], uid),
-                                   "redirect_uri": config["public_url"] + "/oauth/github/callback", "allow_signup": "true"})
-                self._send(200, {"url": "https://github.com/login/oauth/authorize?" + query})
+            elif path == "/api/github/connect":
+                public_url = config["public_url"]
+                if not public_url:
+                    self._send(400, {"error": "no_public_url"})
+                elif github.creds():
+                    self._send(200, {"url": github.authorize_url(public_url, sign_state(config["token"], uid))})
+                elif store.claim_owner(uid) == uid:
+                    # First connection ever: the owner lets the bot create its GitHub App in one click.
+                    self._send(200, {"url": f"{public_url}/setup/github?s={sign_state(config['token'], uid)}"})
+                else:
+                    self._send(400, {"error": "github_setup"})
             elif path == "/api/mcp":
                 try:
                     label, server_url = check_mcp(data.get("label"), data.get("url"))
@@ -219,28 +237,55 @@ def make_handler(config):
             else:
                 self._send(404, {"error": "not found"})
 
+        def _owner_state(self, query):
+            """User ID from a signed state if it belongs to the bot owner, else None."""
+            user_id = read_state(config["token"], (query.get("state") or query.get("s") or [""])[0])
+            return user_id if user_id and config["store"].claim_owner(user_id) == user_id else None
+
+        def _setup_start(self, query):
+            user_id = self._owner_state(query)
+            if not user_id or github.creds():
+                self._page("Ссылка устарела", "Откройте Secret AI в Telegram и нажмите «Подключить» у GitHub ещё раз.", ok=False)
+                return
+            page = github.manifest_page(config["public_url"], sign_state(config["token"], user_id), config["bot_name"]())
+            self._send(200, page, "text/html; charset=utf-8")
+
+        def _setup_done(self, query):
+            user_id = self._owner_state(query)
+            code = (query.get("code") or [""])[0]
+            if not user_id or not code:
+                self._page("Ссылка устарела", "Откройте Secret AI в Telegram и нажмите «Подключить» у GitHub ещё раз.", ok=False)
+                return
+            try:
+                created = github.creds() or github.finish_setup(code)
+            except (httpx.HTTPError, ValueError, KeyError):
+                created = None
+            if not created:
+                self._page("Не получилось", "GitHub не создал приложение. Попробуйте ещё раз из Secret AI.", ok=False)
+                return
+            # The app exists now: continue straight to signing in.
+            self._redirect(github.authorize_url(config["public_url"], sign_state(config["token"], user_id)))
+
         def _oauth_callback(self, query):
             user_id = read_state(config["token"], (query.get("state") or [""])[0])
             code = (query.get("code") or [""])[0]
-            if not user_id or not code or not config["oauth_id"]:
+            if not user_id or not code or not github.creds():
                 self._page("Ссылка устарела", "Откройте Secret AI в Telegram и подключите GitHub ещё раз.", ok=False)
                 return
-            try:
-                response = httpx.post("https://github.com/login/oauth/access_token", headers={"Accept": "application/json"}, timeout=15, data={
-                    "client_id": config["oauth_id"], "client_secret": config["oauth_secret"], "code": code,
-                    "redirect_uri": config["public_url"] + "/oauth/github/callback"})
-                token = response.json().get("access_token")
-            except (httpx.HTTPError, ValueError):
-                token = None
+            token, meta = github.exchange(code, config["public_url"])
             login = github_login(token) if token else None
             if not login:
                 self._page("Не получилось", "GitHub не выдал доступ. Попробуйте ещё раз из Secret AI.", ok=False)
                 return
-            config["store"].save(user_id, "github", "github", token, meta={"login": login})
+            config["store"].save(user_id, "github", "github", token, meta={"login": login, **meta})
             try:
                 config["bridge"].notify(user_id, f"✅ GitHub подключён: @{login}\nТеперь можно писать, например: «покажи мои репозитории» или «измени README в моём репо …»")
             except RuntimeError:
                 pass
+            install = github.install_url()
+            if install and not github.has_installation(token):
+                self._redirect(install)  # let the user pick repositories for the app
+                return
             self._page("GitHub подключён", f"Аккаунт @{login}. Вернитесь в Telegram.")
 
         def log_message(self, *args):

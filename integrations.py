@@ -123,6 +123,44 @@ class Connections:
             return self.db.execute("DELETE FROM connections WHERE user_id=? AND service=? AND label=?",
                                    (user_id, service, label)).rowcount
 
+    # ----- bot-wide settings (owner, the GitHub App created in one click) -----
+
+    def _meta_table(self):
+        self.db.execute("CREATE TABLE IF NOT EXISTS bot_meta (key TEXT PRIMARY KEY, value BLOB NOT NULL)")
+
+    def get_meta(self, key, secret=False):
+        with self.lock, self.db:
+            self._meta_table()
+            row = self.db.execute("SELECT value FROM bot_meta WHERE key=?", (key,)).fetchone()
+        if not row:
+            return None
+        try:
+            value = self.fernet.decrypt(row[0]).decode() if secret else row[0]
+        except InvalidToken:
+            return None
+        return json.loads(value)
+
+    def set_meta(self, key, value, secret=False):
+        data = json.dumps(value)
+        stored = self.fernet.encrypt(data.encode()) if secret else data
+        with self.lock, self.db:
+            self._meta_table()
+            self.db.execute("INSERT INTO bot_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, stored))
+
+    def claim_owner(self, user_id):
+        """The bot owner: the earliest user in the chat history, otherwise the first person who uses the bot."""
+        owner = self.get_meta("owner")
+        if owner:
+            return owner
+        with self.lock:
+            try:
+                row = self.db.execute("SELECT user_id FROM messages ORDER BY id LIMIT 1").fetchone()
+            except sqlite3.OperationalError:
+                row = None
+        owner = row[0] if row else user_id
+        self.set_meta("owner", owner)
+        return owner
+
     def close(self):
         self.db.close()
 

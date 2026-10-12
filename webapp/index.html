@@ -32,7 +32,7 @@
     --glass-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 10px 30px rgba(30,30,60,.14);
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  html, body { margin: 0; background: var(--bg); color: var(--text); overscroll-behavior: none; }
   body { font: 17px/1.35 -apple-system, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif; letter-spacing: -.01em;
          -webkit-font-smoothing: antialiased; overflow-x: hidden; min-height: 100vh; }
   button { font: inherit; color: inherit; border: 0; background: none; padding: 0; cursor: pointer; }
@@ -46,17 +46,16 @@
       radial-gradient(60% 40% at 15% 8%, rgba(139,92,246,.55), transparent 70%),
       radial-gradient(55% 45% at 90% 20%, rgba(43,139,230,.6), transparent 70%),
       linear-gradient(180deg, var(--hero-1) 0%, var(--hero-2) 34%, var(--hero-3) 52%, var(--bg) 82%); }
-  .backdrop::after { content: ""; position: absolute; inset: 0; background: radial-gradient(40% 25% at 50% 42%, rgba(255,255,255,.18), transparent 70%);
-    animation: drift 12s ease-in-out infinite alternate; }
-  @keyframes drift { to { transform: translate3d(0, 40px, 0) scale(1.15); } }
+  .backdrop::after { content: ""; position: absolute; inset: 0; background: radial-gradient(40% 25% at 50% 42%, rgba(255,255,255,.18), transparent 70%); }
   body[data-tab="apps"] .backdrop, body[data-tab="settings"] .backdrop { opacity: 0; }
 
   /* ---------- layout ---------- */
   main { position: relative; z-index: 1; max-width: 560px; margin: 0 auto; padding: calc(var(--safe-top) + 12px) 16px calc(var(--safe-bottom) + 120px); }
   .view { display: none; }
-  .view.active { display: block; animation: view-in .55s var(--ease) both; }
-  @keyframes view-in { from { opacity: 0; transform: translateY(14px) scale(.985); filter: blur(6px); } }
-  .stagger > * { animation: rise .6s var(--ease) both; animation-delay: calc(var(--i, 0) * 55ms + 60ms); }
+  .view.active { display: block; animation: view-in .45s var(--ease) both; }
+  @keyframes view-in { from { opacity: 0; transform: translate3d(0, 10px, 0); } }
+  .stagger > * { animation: rise .55s var(--ease) both; animation-delay: calc(var(--i, 0) * 50ms + 40ms); }
+  .stagger.settled > * { animation: none; }
   @keyframes rise { from { opacity: 0; transform: translateY(18px); } }
 
   /* ---------- glass ---------- */
@@ -76,10 +75,14 @@
                                   box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 8px 24px rgba(20,20,90,.25); }
   .pill .model-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
   .hero { text-align: center; padding: 26px 0 28px; color: #fff; }
-  .hero .logo { width: 150px; height: 150px; margin: 0 auto; position: relative; filter: drop-shadow(0 14px 30px rgba(20,20,80,.45)); }
-  .hero .logo::before { content: ""; position: absolute; inset: 14%; border-radius: 50%; background: radial-gradient(circle, rgba(255,255,255,.45), transparent 65%);
-                        animation: halo 3.6s ease-in-out infinite; z-index: -1; }
-  @keyframes halo { 50% { transform: scale(1.25); opacity: .55; } }
+  .hero .logo { width: 156px; height: 156px; margin: 0 auto; position: relative; isolation: isolate; }
+  .hero .logo svg { position: relative; z-index: 1; will-change: transform; }
+  .hero .logo::before { content: ""; position: absolute; inset: 8%; border-radius: 50%; z-index: 0;
+                        background: radial-gradient(circle, rgba(170,200,255,.55), rgba(124,92,255,.25) 45%, transparent 70%);
+                        animation: halo 4s ease-in-out infinite; will-change: transform, opacity; }
+  .hero .logo::after { content: ""; position: absolute; left: 22%; right: 22%; bottom: 0; height: 14px; border-radius: 50%; z-index: 0;
+                       background: radial-gradient(closest-side, rgba(10,10,60,.45), transparent); }
+  @keyframes halo { 50% { transform: scale(1.18); opacity: .6; } }
   .hero h1 { font-size: 34px; line-height: 1.1; margin: 14px 0 6px; font-weight: 800; letter-spacing: -.025em; }
   .hero p { margin: 0 auto; max-width: 330px; color: rgba(255,255,255,.78); font-size: 16px; }
 
@@ -180,6 +183,7 @@
   .tab.on { color: var(--accent); }
   .tab.on svg { transform: scale(1.1); }
   .tab .ghost-ic { width: 30px; height: 30px; }
+  .tab .ghost-ic svg { width: 30px; height: 30px; }
 
   /* ---------- sheets ---------- */
   .scrim { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .35s; }
@@ -208,6 +212,7 @@
   .btn:disabled { filter: saturate(.4) brightness(.8); }
   .btn.ok { background: linear-gradient(135deg, #30d158, #22a447); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 10px 30px rgba(48,209,88,.35); }
   .btn.ghost { background: transparent; box-shadow: none; color: var(--danger); height: 48px; margin-top: 6px; }
+  .btn.link { background: none; box-shadow: none; color: var(--hint); font-weight: 600; font-size: 15px; height: 44px; margin-top: 6px; }
   .btn.secondary { background: rgba(255,255,255,.1); box-shadow: none; color: var(--text); margin-top: 10px; }
   .btn .spinner { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid rgba(255,255,255,.35); border-top-color: #fff; animation: spin .8s linear infinite; }
   .field { width: 100%; height: 52px; padding: 0 16px; border-radius: 18px; border: 1px solid var(--line); background: rgba(255,255,255,.06); outline: none;
@@ -301,7 +306,7 @@
 <nav class="tabbar glass" id="tabbar">
   <div class="lens" id="lens"></div>
   <button class="tab on" data-tab="agent"><span class="ghost-ic">
-    <svg viewBox="0 0 128 128"><path fill="currentColor" d="M64 9c28.7 0 47 21.6 47 50v41c0 9.4-10 13.8-16.6 7.3-4.3-4.3-10.4-4.3-14.7 0-4.4 4.4-11 4.4-15.4 0-4.4-4.4-11-4.4-15.4 0-4.3 4.3-10.4 4.3-14.7 0C27 113.8 17 109.4 17 100V59C17 30.6 35.3 9 64 9Z"/><path fill="var(--bg)" d="M24 50h80v6l-4 9c-2 6-7 9-13 9h-6c-6 0-10-4-12-9l-1-4h-8l-1 4c-2 5-6 9-12 9h-6c-6 0-11-3-13-9l-4-9z"/></svg>
+    <svg viewBox="0 0 128 128"><path fill="currentColor" d="M112.99 66.00 L117.44 68.80 L120.10 71.90 L120.15 74.89 L117.52 77.38 L112.88 79.10 L107.39 80.10 L102.11 80.63 L97.76 81.03 L94.52 81.55 L92.23 82.30 L90.60 83.27 L90.03 84.91 L89.94 87.00 L90.27 89.65 L91.00 93.00 L91.89 96.98 L92.53 101.23 L92.41 105.10 L91.17 107.84 L88.78 108.93 L85.54 108.28 L81.95 106.33 L78.50 103.78 L75.48 101.33 L72.95 99.42 L70.84 98.18 L68.99 97.51 L67.29 97.34 L65.68 98.14 L64.00 99.50 L62.13 101.68 L59.91 104.87 L57.20 108.92 L53.96 113.24 L50.37 116.85 L46.87 118.72 L43.98 118.15 L42.12 115.15 L41.37 110.42 L41.47 105.02 L41.97 99.92 L42.41 95.71 L42.52 92.52 L42.23 90.18 L41.60 88.40 L40.09 87.53 L38.06 87.00 L35.40 86.78 L31.98 86.79 L27.90 86.84 L23.61 86.58 L19.85 85.66 L17.42 83.88 L16.86 81.32 L18.16 78.28 L20.82 75.18 L24.03 72.33 L27.06 69.88 L29.45 67.81 L31.10 66.00 L32.14 64.33 L31.70 62.61 L30.42 60.68 L28.30 58.41 L25.30 55.63 L21.68 52.25 L18.16 48.40 L15.68 44.49 L15.12 41.09 L16.84 38.77 L20.57 37.80 L25.49 38.02 L30.62 38.97 L35.19 40.06 L38.87 40.87 L41.65 41.18 L43.77 41.02 L45.49 40.52 L47.01 39.84 L48.33 38.86 L49.54 37.62 L50.61 35.94 L51.50 33.44 L52.23 29.77 L52.94 24.74 L53.93 18.63 L55.49 12.29 L57.80 7.05 L60.76 4.26 L64.00 4.71 L67.03 8.24 L69.48 13.84 L71.27 20.13 L72.53 25.87 L73.54 30.39 L74.54 33.57 L75.64 35.68 L76.87 37.10 L78.53 37.49 L80.55 37.34 L83.05 36.67 L86.21 35.42 L90.09 33.78 L94.46 32.17 L98.78 31.22 L102.29 31.53 L104.32 33.35 L104.57 36.52 L103.28 40.49 L101.07 44.60 L98.69 48.32 L96.71 51.44 L95.39 53.95 L94.71 56.02 L95.14 57.66 L96.86 59.01 L99.48 60.38 L103.19 61.88 L107.89 63.70Z"/><rect x="50.5" y="54" width="10.5" height="20" rx="5.25" fill="var(--bg)"/><rect x="67.5" y="54" width="10.5" height="20" rx="5.25" fill="var(--bg)"/></svg>
   </span><span data-t="tabAgent"></span></button>
   <button class="tab" data-tab="discover"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span data-t="tabDiscover"></span></button>
   <button class="tab" data-tab="apps"><svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg><span data-t="tabApps"></span></button>
@@ -327,7 +332,7 @@ const T = {
     tabAgent: "Агент", tabDiscover: "Открытия", tabApps: "Приложения", tabSettings: "Настройки",
     ctaNone: "Приложения", ctaSome: n => `${n} подкл.`,
     settings: "Настройки", secretAi: "Secret AI", mode: "Режим ответа", model: "Модель", profile: "Профиль", tgId: "Telegram ID",
-    memory: "Память диалога", msgs: n => `${n} сообщ.`, appGroup: "Подключения", gh: "GitHub", ghSub: "Правки в репозиториях с подтверждением",
+    memory: "Память диалога", msgs: n => `${n} сообщ.`, appGroup: "Подключения", gh: "GitHub", ghSub: "Нажмите «Подключить», разрешите доступ на GitHub и выберите репозитории — всё.",
     mcp: "Свой MCP-сервер", mcpSub: "Для продвинутых: любой URL", clear: "Очистить память", clearAsk: "Удалить историю диалога? Это нельзя отменить.",
     cleared: "Память очищена 🧹", copied: "Скопировано", saved: "Сохранено ✓", removed: "Отключено", sent: "Отправил в чат ✨",
     waiting: "Ожидаю подтверждения…", waitingSub: "Войдите в аккаунт в открывшемся окне и вернитесь сюда.",
@@ -335,7 +340,9 @@ const T = {
     disconnect: "Отключить", disconnectAsk: n => `Отключить ${n}?`, tryAsk: "Попробуйте попросить", ask: "Спросить",
     notReady: "Каталог приложений ещё не включён владельцем бота", notReadySub: "Нужны ключи Pipedream Connect (см. README). GitHub работает и без них.",
     ghToken: "Fine-grained токен GitHub", ghTokenHint: 'Создайте <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">токен</a> с правами Contents — Read and write (для PR ещё Pull requests).',
-    ghOauth: "Войти через GitHub", ghConnected: l => `Подключено: @${l}`, save: "Сохранить", cancel: "Отмена",
+    ghFirst: "Нажмите «Подключить». Первый раз GitHub попросит нажать «Create GitHub App» — так бот один раз создаёт себе доступ. Потом всем пользователям хватит одной кнопки.",
+    ghNotReady: "Владелец бота ещё не включил вход через GitHub. Можно войти по токену.", byToken: "Войти по токену",
+    ghConnected: l => `Подключено: @${l}`, save: "Сохранить", cancel: "Отмена",
     mcpName: "Название, например zapier", mcpUrl: "https://… URL MCP-сервера", mcpKey: "Ключ (необязательно)", add: "Добавить",
     mcpWarn: "Действия MCP выполняются без отдельного подтверждения — подключайте только то, чему доверяете.",
     errToken: "Токен не подошёл — проверьте права", errLabel: "Название: латиница, цифры и _", errUrl: "URL должен начинаться с https://",
@@ -353,7 +360,7 @@ const T = {
     tabAgent: "Agent", tabDiscover: "Discover", tabApps: "Apps", tabSettings: "Settings",
     ctaNone: "Apps", ctaSome: n => `${n} connected`,
     settings: "Settings", secretAi: "Secret AI", mode: "Answer mode", model: "Model", profile: "Profile", tgId: "Telegram ID",
-    memory: "Conversation memory", msgs: n => `${n} msgs`, appGroup: "Connections", gh: "GitHub", ghSub: "Repository edits with confirmation",
+    memory: "Conversation memory", msgs: n => `${n} msgs`, appGroup: "Connections", gh: "GitHub", ghSub: "Tap Connect, allow access on GitHub and pick repositories — that's it.",
     mcp: "Custom MCP server", mcpSub: "Advanced: any URL", clear: "Clear memory", clearAsk: "Delete the conversation history? This can't be undone.",
     cleared: "Memory cleared 🧹", copied: "Copied", saved: "Saved ✓", removed: "Disconnected", sent: "Sent to the chat ✨",
     waiting: "Waiting for confirmation…", waitingSub: "Sign in in the window that opened, then come back here.",
@@ -361,7 +368,9 @@ const T = {
     disconnect: "Disconnect", disconnectAsk: n => `Disconnect ${n}?`, tryAsk: "Try asking", ask: "Ask",
     notReady: "The app catalog isn't enabled by the bot owner yet", notReadySub: "It needs Pipedream Connect keys (see README). GitHub works without them.",
     ghToken: "GitHub fine-grained token", ghTokenHint: 'Create a <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">token</a> with Contents: Read and write (plus Pull requests for PRs).',
-    ghOauth: "Sign in with GitHub", ghConnected: l => `Connected: @${l}`, save: "Save", cancel: "Cancel",
+    ghFirst: "Tap Connect. The first time GitHub asks you to press “Create GitHub App” — that's the bot setting up its access once. After that everyone needs just one tap.",
+    ghNotReady: "The bot owner hasn't enabled GitHub sign-in yet. You can use a token.", byToken: "Use a token instead",
+    ghConnected: l => `Connected: @${l}`, save: "Save", cancel: "Cancel",
     mcpName: "Name, e.g. zapier", mcpUrl: "https://… MCP server URL", mcpKey: "Key (optional)", add: "Add",
     mcpWarn: "MCP actions run without a separate confirmation — connect only services you trust.",
     errToken: "The token didn't work — check its permissions", errLabel: "Name: latin letters, digits and _", errUrl: "URL must start with https://",
@@ -459,7 +468,8 @@ const SYM = {
   mcp: '<svg class="i" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M15 7l5 5-5 5"/></svg>',
   trash: '<svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
 };
-const GH_LOGO = "https://cdn.simpleicons.org/github";
+// Inline so it never depends on an external CDN.
+const GH_LOGO = "data:image/svg+xml," + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path fill="#181717" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>');
 
 function toast(text, icon = "") {
   const el = $("toast");
@@ -475,7 +485,7 @@ async function api(path, body = {}) {
   return data;
 }
 function errorText(e) {
-  return { github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
+  return { github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
 }
 function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
 function appIcon(app, cls = "ic") {
@@ -485,7 +495,7 @@ function appIcon(app, cls = "ic") {
 }
 function logoSvg(prefix) {
   // Each inline copy needs its own gradient ids.
-  return $("logo-tpl").innerHTML.replace(/sai-(body|sheen|lens|lenses)/g, `${prefix}-$1`);
+  return $("logo-tpl").innerHTML.replace(/(id="|url\(#)sai-/g, `$1${prefix}-`);
 }
 
 /* ---------------- state ---------------- */
@@ -495,14 +505,19 @@ const connectedCount = () => (state?.apps?.connected || []).length + (state?.git
 
 async function load(fresh = false) {
   try {
-    state = await api("/api/state", { fresh });
-    renderAll();
+    const next = await api("/api/state", { fresh });
+    // Re-render only when something changed, so lists don't jump on every refresh.
+    if (JSON.stringify(next) !== JSON.stringify(state)) { state = next; renderAll(); }
   } catch (e) {
     if (!state) toast(errorText(e));
   }
   return state;
 }
 
+function settle() {
+  // Entrance animations play once; later re-renders must not make the lists jump.
+  setTimeout(() => document.querySelectorAll("#quick, #home-apps, #discover, #settings").forEach(el => el.classList.add("settled")), 1400);
+}
 function renderAll() {
   renderHeader();
   renderHomeApps();
@@ -804,26 +819,36 @@ function openGitHubSheet() {
     });
     return;
   }
-  openSheet(`<div class="head">${icon}<h3>GitHub</h3><p class="lead" id="lead">${T.ghSub}</p></div>
-    ${gh.oauth ? `<button class="btn" id="go">${T.ghOauth}</button><div style="height:18px"></div>` : ""}
-    <input class="field" id="gh-token" type="password" autocomplete="off" placeholder="${T.ghToken}">
-    <div class="small">${T.ghTokenHint}</div>
-    <button class="btn ${gh.oauth ? "secondary" : ""}" id="gh-save">${T.save}</button>`);
-  if (gh.oauth) $("go").onclick = async () => {
+  const canConnect = gh.ready || gh.owner;
+  const lead = !gh.ready && gh.owner ? T.ghFirst : canConnect ? T.ghSub : T.ghNotReady;
+  openSheet(`<div class="head">${icon}<h3>GitHub</h3><p class="lead" id="lead">${lead}</p></div>
+    ${canConnect ? `<button class="btn" id="go">${T.connectApp("GitHub")}</button>` : ""}
+    <button class="btn link" id="tok-toggle">${T.byToken}</button>
+    <div id="tok" hidden style="margin-top:14px">
+      <input class="field" id="gh-token" type="password" autocomplete="off" placeholder="${T.ghToken}">
+      <div class="small">${T.ghTokenHint}</div>
+      <button class="btn" id="gh-save">${T.save}</button>
+    </div>`);
+  $("tok-toggle").onclick = () => { $("tok").hidden = false; $("tok-toggle").hidden = true; $("gh-token").focus(); };
+  if (canConnect) $("go").onclick = async () => {
+    const btn = $("go");
+    btn.disabled = true;
+    btn.innerHTML = `<span class="spinner"></span>${T.opening}`;
     try {
-      const { url } = await api("/api/github/oauth");
+      const { url } = await api("/api/github/connect");
       openLink(url);
       $("big").classList.add("wait");
-      $("go").innerHTML = `<span class="spinner"></span>${T.waiting}`;
+      $("lead").textContent = T.waitingSub;
+      btn.innerHTML = `<span class="spinner"></span>${T.waiting}`;
       const started = Date.now();
       stopWaiting();
       waitTimer = setInterval(async () => {
         if (document.hidden) return;
         const s = await load();
         if (s?.github?.connected) { stopWaiting(); connectedAnimation({ name: "GitHub" }, {}); }
-        else if (Date.now() - started > 5 * 60 * 1000) stopWaiting();
+        else if (Date.now() - started > 5 * 60 * 1000) { stopWaiting(); btn.disabled = false; btn.textContent = T.connectApp("GitHub"); }
       }, 2500);
-    } catch (e) { toast(errorText(e)); }
+    } catch (e) { btn.disabled = false; btn.textContent = T.connectApp("GitHub"); toast(errorText(e)); haptic("error"); }
   };
   $("gh-save").onclick = async e => {
     e.target.disabled = true;
@@ -944,7 +969,7 @@ function init() {
     tg.onEvent?.("themeChanged", () => location.reload());
   }
   paintHeader();
-  load();
+  load().then(settle);
   // Re-check connections after returning from a sign-in page.
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state) load(true); });
 }

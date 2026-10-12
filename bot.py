@@ -25,8 +25,8 @@ from openai import (
     PermissionDeniedError,
     RateLimitError,
 )
-from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, MessageEntity, Update,
-                      User, WebAppInfo)
+from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, MenuButtonWebApp, MessageEntity,
+                      Update, User, WebAppInfo)
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
@@ -34,6 +34,7 @@ from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, Co
 
 import miniapp
 from apps import Pipedream, PipedreamError
+from github_app import GitHubApps
 from integrations import Connections, GitHubError, Toolbox, apply_change, describe, prune_pending
 
 LOG = logging.getLogger("secret_ai")
@@ -50,18 +51,21 @@ HISTORY_LIMIT = 30
 
 # id: (emoji, Russian name, English name, extra instructions)
 PERSONAS = {
-    "assistant": ("🕶", "Ассистент", "Assistant", ""),
+    "assistant": ("✨", "Ассистент", "Assistant", ""),
     "coder": ("💻", "Программист", "Coder",
               "Act as a senior software engineer: give complete working code, explain decisions briefly and point out pitfalls."),
     "translator": ("🌍", "Переводчик", "Translator",
                    "Act as a translator: translate Russian text into English and any other language into Russian. "
                    "Preserve tone and line breaks. Output only the translation."),
-    "creative": ("✨", "Креатив", "Creative",
+    "creative": ("🎨", "Креатив", "Creative",
                  "Be bold and original: suggest unexpected ideas and write vividly."),
 }
 DEFAULT_PERSONA = "assistant"
 
-# The thinking bubble starts with the logo: an animated custom emoji when BRAND_EMOJI_ID is set.
+# The thinking bubble starts with the logo: an animated custom emoji made from webapp/logo-emoji.webm
+# (the bot creates the emoji pack itself) or the one from BRAND_EMOJI_ID.
+LOGO_EMOJI_FILE = Path(__file__).with_name("webapp") / "logo-emoji.webm"
+LOGO_EMOJI_VERSION = "v1"
 THINKING = {
     "ru": ["Думаю", "Анализирую вопрос", "Ищу лучший ответ", "Формулирую", "Почти готово"],
     "en": ["Thinking", "Analyzing your question", "Looking for the best answer", "Writing", "Almost done"],
@@ -610,11 +614,14 @@ async def authorized(update, context):
     if update.effective_chat.type != "private":
         await send(update.effective_message, ui(update, "Напишите Secret AI в личные сообщения.", "Please message Secret AI privately."))
         return False
+    context.bot_data["connections"].claim_owner(update.effective_user.id)
+    if not context.bot_data.get("logo_id") and not context.bot_data.get("logo_tried"):
+        context.application.create_task(ensure_logo(context.application))
     return True
 
 
 HELP_RU = (
-    "Я Secret AI 🕶 Отправьте текст, голосовое, аудио, кружок или фото (можно файлом) с вопросом.\n\n"
+    "Я Secret AI ✨ Отправьте текст, голосовое, аудио, кружок или фото (можно файлом) с вопросом.\n\n"
     "Пока я думаю, вы увидите анимацию, а ответ будет появляться прямо по ходу печати.\n"
     "Под ответом есть кнопки: 🔄 другой ответ, 🔊 озвучить, 🧹 новый диалог.\n\n"
     "/mode — режим: ассистент, программист, переводчик, креатив\n"
@@ -627,7 +634,7 @@ HELP_RU = (
     "Я помню последние 30 сообщений нашего диалога."
 )
 HELP_EN = (
-    "I'm Secret AI 🕶 Send text, a voice message, audio, a video note or a photo (also as a file) with a question.\n\n"
+    "I'm Secret AI ✨ Send text, a voice message, audio, a video note or a photo (also as a file) with a question.\n\n"
     "While I'm thinking you'll see an animation, and the answer appears as it is being written.\n"
     "Buttons under each answer: 🔄 regenerate, 🔊 read aloud, 🧹 new chat.\n\n"
     "/mode — mode: assistant, coder, translator, creative\n"
@@ -679,8 +686,8 @@ async def emojiid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     found = [(text, entity.custom_emoji_id) for entity, text in message.parse_entities([MessageEntity.CUSTOM_EMOJI]).items()]
     if not found:
-        await send(message, ui(update, "Отправьте /emojiid вместе с анимированным эмодзи, например: /emojiid 🕶",
-                               "Send /emojiid together with a custom emoji, e.g. /emojiid 🕶"))
+        await send(message, ui(update, "Отправьте /emojiid вместе с анимированным эмодзи, например: /emojiid ✨",
+                               "Send /emojiid together with a custom emoji, e.g. /emojiid ✨"))
         return
     await send(message, "\n".join(f"{text}  BRAND_EMOJI={text}  BRAND_EMOJI_ID={emoji_id}" for text, emoji_id in found))
 
@@ -799,6 +806,7 @@ async def respond(update, context, target, content, saved_question):
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
     prune_pending(context.bot_data["pending"])
+    await context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id)
     taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                       apps=await app_tools(context.bot_data, user_id, taken))
@@ -893,6 +901,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         change["applying"] = True
         await query.answer(ui(update, "Применяю…", "Applying…"))
         try:
+            await context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id)
             commit_url, pull_url = await apply_change(context.bot_data["http"], context.bot_data["connections"], change)
         except (GitHubError, httpx.HTTPError) as exc:
             change["applying"] = False
@@ -984,8 +993,46 @@ COMMANDS = {
 }
 
 
+async def ensure_logo(app):
+    """Create (once) a custom emoji pack with the animated logo and use it in the thinking bubble.
+
+    The pack belongs to the bot owner. Telegram shows custom emoji from bots only if the owner has Premium;
+    otherwise with_logo() falls back to the plain BRAND_EMOJI.
+    """
+    data = app.bot_data
+    data["logo_tried"] = True
+    if data.get("logo_id") or not LOGO_EMOJI_FILE.is_file():
+        return
+    store = data["connections"]
+    saved = store.get_meta("logo_emoji")
+    if saved and saved.get("version") == LOGO_EMOJI_VERSION:
+        data["logo"], data["logo_id"] = saved["emoji"], saved["id"]
+        return
+    owner = store.get_meta("owner")
+    if not owner:
+        data["logo_tried"] = False  # try again once someone uses the bot
+        return
+    name = f"secretai_{LOGO_EMOJI_VERSION}_by_{app.bot.username}"
+    try:
+        try:
+            pack = await app.bot.get_sticker_set(name)
+        except BadRequest:
+            sticker = InputSticker(InputFile(LOGO_EMOJI_FILE.read_bytes(), filename="logo.webm"), ["✨"], format="video")
+            await app.bot.create_new_sticker_set(owner, name, "Secret AI", [sticker], sticker_type="custom_emoji")
+            pack = await app.bot.get_sticker_set(name)
+        emoji_id = pack.stickers[0].custom_emoji_id
+    except (TelegramError, IndexError) as exc:
+        LOG.warning("Could not create the logo emoji: %s", type(exc).__name__)
+        return
+    store.set_meta("logo_emoji", {"version": LOGO_EMOJI_VERSION, "emoji": "✨", "id": emoji_id})
+    data["logo"], data["logo_id"] = "✨", emoji_id
+
+
 async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
+    app.bot_data["bot_name"] = app.bot.username
+    if not app.bot_data.get("logo_id"):
+        app.create_task(ensure_logo(app))
     try:
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
@@ -1099,6 +1146,7 @@ def main():
     model = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
     # Models offered in the Mini App picker; the first one stays the default for users who never chose.
     models = [model] + [m for m in dict.fromkeys(x.strip() for x in os.environ.get("OPENAI_MODELS", "").split(",")) if m and m != model]
+    github_apps = GitHubApps(connections, os.environ.get("GITHUB_CLIENT_ID", "").strip(), os.environ.get("GITHUB_CLIENT_SECRET", "").strip())
     pipedream = Pipedream(os.environ.get("PIPEDREAM_CLIENT_ID", "").strip(), os.environ.get("PIPEDREAM_CLIENT_SECRET", "").strip(),
                           os.environ.get("PIPEDREAM_PROJECT_ID", "").strip(), os.environ.get("PIPEDREAM_ENVIRONMENT", "production").strip(),
                           os.environ.get("PIPEDREAM_MCP_URL", "").strip())
@@ -1107,10 +1155,10 @@ def main():
         connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key, timeout=120, max_retries=2),
         memory=Memory(database), allowed=allowed,
-        model=model, models=models, pipedream=pipedream,
+        model=model, models=models, pipedream=pipedream, github_apps=github_apps,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
-        logo=os.environ.get("BRAND_EMOJI", "🕶").strip() or "🕶",
+        logo=os.environ.get("BRAND_EMOJI", "✨").strip() or "✨",
         logo_id=os.environ.get("BRAND_EMOJI_ID", "").strip(),
         tts_model=os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip(),
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
@@ -1131,7 +1179,7 @@ def main():
     app.add_error_handler(on_error)
     handler = miniapp.make_handler({
         "token": token, "allowed": allowed, "store": connections, "public_url": public_url,
-        "oauth_id": os.environ.get("GITHUB_CLIENT_ID", "").strip(), "oauth_secret": os.environ.get("GITHUB_CLIENT_SECRET", "").strip(),
+        "github": github_apps, "bot_name": lambda: app.bot_data.get("bot_name") or "bot",
         "bridge": Bridge(app), "pipedream": pipedream})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
