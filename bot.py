@@ -48,9 +48,9 @@ SYSTEM = (
     "Introduce yourself as Secret AI when asked. Reply in the user's language. "
     "Use the language of their latest message, caption or voice transcription; "
     "if none is available, use their Telegram language. "
-    "Think the problem through before answering and get facts, numbers and code right. Give complete, practical "
-    "answers: concrete steps, examples and working solutions instead of generic advice; for simple questions be brief. "
-    "When something may have changed recently (news, prices, versions, events), search the web if you can. "
+    "Get facts, numbers and code right. Give complete, practical answers: concrete steps, examples and working "
+    "solutions instead of generic advice; for simple questions and small talk be brief and quick. "
+    "Search the web only when the answer depends on recent or changing facts (news, prices, versions, events). "
     "Admit uncertainty instead of guessing. "
     "Reply in plain text, without Markdown formatting (no **bold**, no # headings). "
     "Previous photo markers are not images; do not invent unseen visual details."
@@ -111,10 +111,10 @@ ANIMATION_INTERVAL = 1.5
 STREAM_EDIT_INTERVAL = 1.2
 TYPING_INTERVAL = 4.5
 # Native drafts (sendMessageDraft) animate smoothly and are not limited like edits.
-DRAFT_INTERVAL = 0.4
+DRAFT_INTERVAL = 0.3
 # A draft disappears after 30 seconds without updates.
 DRAFT_KEEPALIVE = 10
-REVEAL_MIN_STEP = 12
+REVEAL_MIN_STEP = 24
 MAX_TOOL_ROUNDS = 12
 DIFF_INLINE_LIMIT = 2500
 VOICE_TIMEOUT = 60
@@ -535,7 +535,7 @@ class DraftReply:
         # Typewriter: reveal the backlog in steps so the text flows instead of jumping.
         backlog = len(pending) - self.revealed
         if backlog > 0:
-            self.revealed = min(len(pending), self.revealed + max(REVEAL_MIN_STEP, backlog // 3))
+            self.revealed = min(len(pending), self.revealed + max(REVEAL_MIN_STEP, backlog // 2))
             space = pending.find(" ", self.revealed)
             if 0 <= space - self.revealed <= 8:
                 self.revealed = space
@@ -652,6 +652,24 @@ def echo_items(output):
     return items
 
 
+def drop_unsupported(context, request, error):
+    """Leave out an option the model refused (reasoning effort, web search) from now on; False if none matched."""
+    if "reasoning" in request and "reasoning" in error:
+        context.bot_data["reasoning"] = ""
+        request.pop("reasoning")
+        LOG.warning("The model does not accept a reasoning effort; using its default")
+        return True
+    if context.bot_data.get("web_search") and "web_search" in error:
+        context.bot_data["web_search"] = False
+        LOG.warning("Web search is not available for this model; answering without it")
+        request["tools"] = [tool for tool in request["tools"] if tool.get("type") != "web_search"]
+        if not request["tools"]:
+            request.pop("tools")
+            request.pop("include", None)
+        return True
+    return False
+
+
 async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
     tools = list(toolbox.definitions()) if toolbox else []
@@ -660,21 +678,16 @@ async def generate(context, live, toolbox=None, **request):
     if tools:
         # store=False: reasoning must travel with the tool calls we send back.
         request.update(tools=tools, include=["reasoning.encrypted_content"])
+    if context.bot_data.get("reasoning"):
+        request["reasoning"] = {"effort": context.bot_data["reasoning"]}
     answer, incomplete = "", False
     for _ in range(MAX_TOOL_ROUNDS):
         prefix = answer + "\n\n" if answer.strip() else ""
         try:
             response = await model_round(context, live, prefix, request)
         except BadRequestError as exc:
-            # Web search isn't available for every model or account: answer without it from now on.
-            if not context.bot_data.get("web_search") or live.text or "web_search" not in str(exc):
+            if live.text or not drop_unsupported(context, request, str(exc).lower()):
                 raise
-            context.bot_data["web_search"] = False
-            LOG.warning("Web search is not available for this model; answering without it")
-            request["tools"] = [tool for tool in request["tools"] if tool.get("type") != "web_search"]
-            if not request["tools"]:
-                request.pop("tools")
-                request.pop("include", None)
             response = await model_round(context, live, prefix, request)
         text = (response.output_text or "").strip()
         if text:
@@ -944,8 +957,15 @@ async def respond(update, context, target, content, saved_question, voice=False)
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
     prune_pending(context.bot_data["pending"])
-    await context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id)
-    taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
+    # The logo shows at once; tokens and connected apps are prepared meanwhile, in parallel.
+    live = await open_reply(target, lang(update), context.bot_data)
+    try:
+        taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
+        _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
+                                       app_tools(context.bot_data, user_id, taken))
+    except BaseException:
+        await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
+        raise
     media = None
     if gen_settings(context.bot_data)[0]:
         async def media(kind, prompt, fmt, seconds=5, voice=True):
@@ -957,12 +977,11 @@ async def respond(update, context, target, content, saved_question, voice=False)
                 return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
             return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
-                      apps=await app_tools(context.bot_data, user_id, taken), media=media)
+                      apps=apps, media=media)
     instructions = (SYSTEM + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
     if toolbox.instructions():
         instructions += " " + toolbox.instructions()
-    live = await open_reply(target, lang(update), context.bot_data)
     try:
         answer, incomplete = await generate(
             context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
@@ -1905,6 +1924,8 @@ def main():
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
         web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
+        # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
+        reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={}, group_log={}, group_spoke={})
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
