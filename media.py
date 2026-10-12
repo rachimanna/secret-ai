@@ -12,7 +12,10 @@ import httpx
 import imageio_ffmpeg
 
 FAL_QUEUE = "https://queue.fal.run"
-DEFAULT_MODELS = {"photo": "fal-ai/flux/schnell", "video": "fal-ai/kling-video/v2.6/pro/text-to-video"}
+# Photos: fal.ai. Videos: Google Veo 3.1 (Gemini API, the model behind Google Flow) with sound and speech;
+# a fal video model id can still be set instead.
+DEFAULT_MODELS = {"photo": "fal-ai/flux/schnell", "video": "veo-3.1-fast-generate-preview"}
+OLD_VIDEO_DEFAULTS = ("fal-ai/kling-video/v2.6/pro/text-to-video",)
 TIMEOUTS = {"photo": 180, "video": 1800}
 POLL_SECONDS = 3
 
@@ -20,19 +23,20 @@ POLL_SECONDS = 3
 FORMATS = {"square": ("square_hd", "1:1"), "portrait": ("portrait_16_9", "9:16"), "landscape": ("landscape_16_9", "16:9")}
 
 FREE_PHOTOS_PER_DAY = 5
-COST = {"photo": 1, "video": 15}  # in credits; video is the 5-second price, longer videos cost VIDEO_PRICES
-# Video length (s) -> credits. Models make 5-10 s per clip; longer videos are 10-second scenes joined together.
-VIDEO_PRICES = {5: 15, 10: 25, 30: 75, 60: 150, 120: 300}
-SCENE_SECONDS = 10
+COST = {"photo": 1, "video": 60}  # in credits; video is the shortest video's price, see VIDEO_PRICES
+# Video length (s) -> credits. Veo makes 8 s per clip (about $0.10/s on Veo 3.1 Fast); longer videos are 8-second
+# scenes joined together. 1 credit is sold for about 1 Telegram Star.
+VIDEO_PRICES = {8: 60, 16: 120, 32: 240, 64: 480}
+SCENE_SECONDS = 8
 FRAME = {"square": (720, 720), "portrait": (720, 1280), "landscape": (1280, 720)}
 
 
 def price(kind, seconds=5):
-    return COST["photo"] if kind == "photo" else VIDEO_PRICES.get(seconds, VIDEO_PRICES[5])
+    return COST["photo"] if kind == "photo" else VIDEO_PRICES.get(seconds, COST["video"])
 
 
 # Credit packs sold for Telegram Stars.
-PACKS = {"s": (20, 25), "m": (100, 100), "l": (300, 250)}  # id: (credits, stars)
+PACKS = {"s": (60, 60), "m": (250, 230), "l": (1000, 880)}  # id: (credits, stars)
 MAX_PROMPT = 1500
 
 
@@ -185,3 +189,66 @@ async def montage(clips, fmt, voice=None, keep_sound=False):
                       "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
                       str(final))
         return final.read_bytes()
+
+
+# ---------- Google Veo (Gemini API): video with sound and speech ----------
+
+GEMINI = "https://generativelanguage.googleapis.com/v1beta"
+
+
+def is_veo(model):
+    return model.startswith("veo")
+
+
+async def veo_generate(http, key, model, prompt, fmt):
+    """One 8-second Veo clip with sound; returns the MP4 bytes."""
+    headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
+    body = {"instances": [{"prompt": prompt}],
+            "parameters": {"aspectRatio": "16:9" if fmt == "landscape" else "9:16", "durationSeconds": 8}}
+    try:
+        response = await http.post(f"{GEMINI}/models/{model}:predictLongRunning", headers=headers, json=body, timeout=60)
+    except httpx.HTTPError as exc:
+        raise MediaError("failed", type(exc).__name__) from None
+    detail = _google_error(response)
+    if response.status_code in (401, 403) or "api key" in detail.lower():
+        raise MediaError("bad_video_key", detail)
+    if response.status_code == 429:
+        raise MediaError("video_billing", detail)
+    if response.status_code == 404:
+        raise MediaError("model", model)
+    if response.status_code >= 400:
+        raise MediaError("failed", f"submit {response.status_code} {detail}")
+    operation = response.json().get("name")
+    if not operation:
+        raise MediaError("failed", "no operation")
+    deadline = time.monotonic() + 900
+    while time.monotonic() < deadline:
+        await asyncio.sleep(POLL_SECONDS * 3)
+        try:
+            data = (await http.get(f"{GEMINI}/{operation}", headers=headers, timeout=30)).json()
+        except (httpx.HTTPError, ValueError):
+            continue
+        if not data.get("done"):
+            continue
+        if data.get("error"):
+            message = str(data["error"].get("message", ""))
+            raise MediaError("blocked" if "safety" in message.lower() or "policy" in message.lower() else "failed", message[:200])
+        result = (data.get("response") or {}).get("generateVideoResponse") or {}
+        samples = result.get("generatedSamples") or []
+        if not samples:
+            raise MediaError("blocked" if result.get("raiMediaFilteredCount") else "failed", "no video")
+        uri = (samples[0].get("video") or {}).get("uri")
+        if not uri:
+            raise MediaError("failed", "no video uri")
+        video = await http.get(uri, headers={"x-goog-api-key": key}, timeout=180, follow_redirects=True)
+        if video.status_code >= 400:
+            raise MediaError("failed", f"download {video.status_code}")
+        return video.content
+    raise MediaError("timeout")
+
+
+def _google_error(response):
+    try:
+        return str(response.json().get("error", {}).get("message", ""))[:200]
+    except (ValueError, AttributeError):
+        return ""

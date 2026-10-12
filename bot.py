@@ -36,8 +36,8 @@ import miniapp
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, PACKS, SCENE_SECONDS, VIDEO_PRICES, MediaError,
-                   fal_generate, montage, price)
+from media import (COST, DEFAULT_MODELS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+                   VIDEO_PRICES, MediaError, fal_generate, is_veo, montage, price, veo_generate)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -933,6 +933,13 @@ MEDIA_ERRORS = {
     "timeout": ("Генерация заняла слишком много времени. Попробуйте ещё раз.", "Generation took too long. Please try again."),
     "blocked": ("Запрос отклонён фильтром безопасности. Попробуйте описать иначе.", "The request was blocked by the safety filter. Try describing it differently."),
     "failed": ("Не получилось сгенерировать. Попробуйте ещё раз.", "Generation failed. Please try again."),
+    "no_video_key": ("Видео пока не настроено: владелец бота ещё не добавил ключ Google AI Studio.",
+                     "Video isn't set up yet: the bot owner hasn't added a Google AI Studio key."),
+    "bad_video_key": ("Ключ Google AI Studio не работает — владельцу бота нужно проверить его на aistudio.google.com.",
+                      "The Google AI Studio key doesn't work — the bot owner should check it at aistudio.google.com."),
+    "video_billing": ("У ключа Google закончилась квота или не включена оплата — владельцу бота нужно включить Billing "
+                      "в Google AI Studio.", "The Google key is out of quota or billing is off — the bot owner should enable "
+                      "billing in Google AI Studio."),
 }
 
 
@@ -941,17 +948,27 @@ def gen_settings(bot_data):
     store = bot_data["connections"]
     key = store.get_meta("fal_key", secret=True) or bot_data.get("fal_env_key") or ""
     models = store.get_meta("fal_models") or {}
+    if models.get("video") in OLD_VIDEO_DEFAULTS:
+        models["video"] = ""  # an old default saved from the form: use the current one (Veo)
     return key, {kind: models.get(kind) or default for kind, default in DEFAULT_MODELS.items()}
+
+
+def video_key(bot_data, model):
+    """Key for the video model: Google AI Studio for Veo, fal for anything else."""
+    if is_veo(model):
+        return bot_data["connections"].get_meta("gemini_key", secret=True) or bot_data.get("gemini_env_key") or ""
+    return gen_settings(bot_data)[0]
 
 
 def gen_state(bot_data, user_id):
     key, models = gen_settings(bot_data)
     free, credits = bot_data["memory"].gen_info(user_id)
     owner = bot_data["connections"].get_meta("owner") == user_id
-    state = {"ready": bool(key), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
+    state = {"ready": bool(key), "video_ready": bool(video_key(bot_data, models["video"])), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
              "credits": credits, "cost": COST, "video_prices": VIDEO_PRICES, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
     if owner:
         state["models"] = models
+        state["gemini"] = bool(bot_data["connections"].get_meta("gemini_key", secret=True))
     return state
 
 
@@ -962,13 +979,17 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
     if kind not in COST or not prompt or (kind == "video" and seconds not in VIDEO_PRICES):
         return "bad_request"
     key, models = gen_settings(data)
-    if not key:
+    if kind == "video":
+        key = video_key(data, models["video"])
+        if not key:
+            return "no_video_key" if is_veo(models["video"]) else "no_key"
+    elif not key:
         return "no_key"
     cost = price(kind, seconds)
     how = "owner" if data["connections"].get_meta("owner") == user_id else data["memory"].gen_charge(user_id, kind, cost)
     if not how:
         return "no_credits"
-    job = {"user_id": user_id, "language": language, "kind": kind, "prompt": prompt, "fmt": fmt if fmt in FORMATS else "square",
+    job = {"user_id": user_id, "language": language, "kind": kind, "prompt": prompt, "fmt": fmt if fmt in FORMATS else "portrait",
            "seconds": seconds, "voice": bool(voice), "key": key, "model": models[kind], "how": how, "cost": cost}
     task = asyncio.create_task(generation_job(app, job))
     jobs = data.setdefault("gen_tasks", set())
@@ -982,13 +1003,13 @@ def waiting_text(job):
     if job["kind"] == "photo":
         return "🎨 Рисую… обычно это 10–30 секунд" if ru else "🎨 Drawing… usually 10–30 seconds"
     seconds = job["seconds"]
-    length = (f"{seconds // 60} мин" if seconds >= 60 else f"{seconds} с") if ru else (f"{seconds // 60} min" if seconds >= 60 else f"{seconds} s")
+    length = (f"{seconds} с" if seconds < 60 else "~1 мин") if ru else (f"{seconds} s" if seconds < 60 else "~1 min")
     if seconds <= SCENE_SECONDS:
         return f"🎬 Снимаю видео ({length})… это займёт 1–3 минуты" if ru else f"🎬 Making the video ({length})… 1–3 minutes"
     scenes = seconds // SCENE_SECONDS
     word = "сцены" if 2 <= scenes % 10 <= 4 and not 12 <= scenes % 100 <= 14 else "сцен"
-    return (f"🎬 Снимаю видео ({length}): {scenes} {word} параллельно, потом монтаж и озвучка. Это займёт 3–10 минут."
-            if ru else f"🎬 Making the video ({length}): {scenes} scenes in parallel, then editing and voice-over. 3–10 minutes.")
+    return (f"🎬 Снимаю видео ({length}): {scenes} {word} параллельно, потом монтаж. Это займёт 3–10 минут."
+            if ru else f"🎬 Making the video ({length}): {scenes} scenes in parallel, then editing. 3–10 minutes.")
 
 
 async def plan_scenes(data, job):
@@ -1035,6 +1056,40 @@ async def english_prompt(data, prompt):
         return prompt
 
 
+async def plan_veo(data, job, count):
+    """English prompts for consecutive 8-second Veo scenes; spoken lines in the user's language, quoted."""
+    language = "Russian" if job["language"] == "ru" else "the language of the request"
+    speech = (f"If people appear, they speak {language} on camera with natural lip sync: write their exact lines in "
+              f"{language} in quotes (for example: The woman looks at the camera and says in Russian: \"...\"), at most "
+              f"about 16 words per 8-second scene, and add 'The dialogue is in {language}.' A short narrator line in "
+              f"{language} is fine when nobody is on screen." if job["voice"]
+              else "Nobody speaks: no dialogue, no voice-over; music and ambient sound only.")
+    instructions = (
+        f"You write prompts for Google Veo 3.1. The video is {count} consecutive 8-second scene(s) of one story. Each "
+        "prompt is in English and self-contained: subject (repeat the characters' exact look every time), action, setting, "
+        "camera, lighting, style, sound. No on-screen text. " + speech +
+        ' Return JSON: {"prompts": ["...", ...]} with exactly ' + str(count) + " prompts.")
+    try:
+        response = await data["client"].responses.create(
+            model=data["model"], instructions=instructions, input=job["prompt"], store=False, max_output_tokens=4000,
+            text={"format": {"type": "json_object"}})
+        prompts = [str(p).strip() for p in json.loads(response.output_text)["prompts"] if str(p).strip()][:count]
+    except Exception as exc:  # planning is a nicety: fall back to the raw idea
+        LOG.warning("Veo planning failed: %s", type(exc).__name__)
+        prompts = []
+    note = f" Any dialogue is spoken in {language}." if job["voice"] else " No dialogue."
+    prompts += [job["prompt"] + note + (f" Part {i + 1} of {count}." if count > 1 else "") for i in range(len(prompts), count)]
+    return prompts
+
+
+async def make_veo_video(data, job):
+    """Veo scenes in parallel with their own sound and speech, joined into one MP4."""
+    count = max(1, job["seconds"] // SCENE_SECONDS)
+    prompts = await plan_veo(data, job, count)
+    clips = await asyncio.gather(*[veo_generate(data["http"], job["key"], job["model"], prompt, job["fmt"]) for prompt in prompts])
+    return await montage(list(clips), job["fmt"], keep_sound=True)
+
+
 async def make_video(data, job):
     """Generate the scenes in parallel, voice them and edit them into one MP4. Returns the video bytes."""
     scenes = await plan_scenes(data, job)
@@ -1075,7 +1130,7 @@ async def generation_job(app, job):
             url = await fal_generate(data["http"], job["key"], job["model"], "photo", prompt, job["fmt"])
             await send_media(bot, data["http"], user_id, "photo", url, caption)
         else:
-            video = await make_video(data, job)
+            video = await (make_veo_video(data, job) if is_veo(job["model"]) else make_video(data, job))
             await bot.send_video(user_id, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
                                  write_timeout=180, read_timeout=180)
     except Exception as exc:  # any failure: give the generation back and explain
@@ -1569,7 +1624,7 @@ def main():
         logo_id=os.environ.get("BRAND_EMOJI_ID", "").strip(),
         tts_model=os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip(),
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
-        fal_env_key=os.environ.get("FAL_KEY", "").strip(),
+        fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={})
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))

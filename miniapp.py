@@ -223,9 +223,9 @@ def make_handler(config):
                     self._send(400, {"error": "bad request"})
                     return
                 try:
-                    seconds = int(data.get("seconds") or 5)
+                    seconds = int(data.get("seconds") or 8)
                 except (TypeError, ValueError):
-                    seconds = 5
+                    seconds = 8
                 error = bridge.generate(user, kind, prompt, str(data.get("format") or "square"), seconds, data.get("voice") is not False)
                 if error:
                     self._send(400, {"error": f"gen_{error}"})
@@ -248,6 +248,12 @@ def make_handler(config):
                         self._send(400, {"error": "gen_bad_key_format"})
                         return
                     store.set_meta("fal_key", key, secret=True)
+                gemini = str(data.get("gemini") or "").strip()
+                if gemini:
+                    if len(gemini) > 200 or not all(c.isalnum() or c in "-_" for c in gemini):
+                        self._send(400, {"error": "gen_bad_key_format"})
+                        return
+                    store.set_meta("gemini_key", gemini, secret=True)
                 models = {kind: str(data.get(kind) or "").strip() for kind in ("photo", "video")}
                 if any(len(m) > 120 or (m and not all(c.isalnum() or c in "-_./" for c in m)) for m in models.values()):
                     self._send(400, {"error": "gen_bad_model"})

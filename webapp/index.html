@@ -374,16 +374,17 @@ const T = {
     gen: "Генерация", genSub: "Фото и видео по описанию — результат придёт в чат", myGen: "Мои генерации",
     freeToday: (n, max) => `${n} из ${max} фото бесплатно сегодня`, credits: n => `${n} кредитов`, unlimited: "Без ограничений · вы владелец",
     topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны",
-    photoSub: "Картинка по описанию за секунды", videoSub: "От 5 секунд до 2 минут, с русской озвучкой",
-    length: "Длительность", sec: " с", min: " мин", withVoice: "С озвучкой", noVoice: "Без голоса", scenes: n => `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "сцены" : "сцен"}`,
+    photoSub: "Картинка по описанию за секунды", videoSub: "Люди в кадре говорят по-русски · 8 с – 1 мин",
+    length: "Длительность", sec: " с", min: " мин", withVoice: "Речь на русском", noVoice: "Без речи", scenes: n => `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "сцены" : "сцен"}`,
     describe: "Опишите, что создать…", describeStyle: s => `Что изобразить в стиле «${s}»?`, create: "Создать ✨",
     fmtSquare: "Квадрат", fmtPortrait: "Вертикаль", fmtLandscape: "Горизонталь",
     costFree: n => `Бесплатно · осталось ${n} сегодня`, costCredits: n => `${n} кредит(ов) · у вас ${state.gen.credits}`, costOwner: "Бесплатно для владельца",
     genStarted: "Генерирую — пришлю в чат ✨", buyTitle: "Пополнить генерации", buySub: c => `Фото — ${c.photo} кредит, видео — ${c.video} кредитов. Оплата звёздами Telegram.`,
     paidOk: "Оплачено! Кредиты начислены ✨", genNotReady: "Генерация скоро заработает: владелец бота ещё не добавил ключ.",
     genOwnerSetup: "Добавьте ключ fal.ai — и генерация заработает для всех.", addKey: "Добавить ключ",
-    genKey: "Генерация (fal.ai)", genKeyTitle: "Ключ fal.ai", genKeyLead: "Ключ хранится в зашифрованном виде, его видите только вы. Модели можно не трогать.",
+    videoNotReady: "Видео заработает, когда владелец бота добавит ключ Google AI Studio.", genKey: "Генерация (fal.ai, Veo)", genKeyTitle: "Ключи генерации", genKeyLead: "Ключ хранится в зашифрованном виде, его видите только вы. Модели можно не трогать.",
     genKeyPh: "Ключ fal.ai (оставьте пустым, чтобы не менять)", photoModel: "Модель фото", videoModel: "Модель видео", keySet: "ключ добавлен",
+    geminiKey: "Ключ Google AI Studio (видео Veo)", geminiPh: "Ключ Google AI Studio (оставьте пустым, чтобы не менять)",
     noCredits: "Генерации закончились — пополните звёздами", kindPhoto: "фото", kindVideo: "видео",
     ctaNone: "Приложения", ctaSome: n => `${n} подкл.`,
     settings: "Настройки", secretAi: "Secret AI", mode: "Режим ответа", model: "Модель", profile: "Профиль", tgId: "Telegram ID",
@@ -417,16 +418,17 @@ const T = {
     gen: "Create", genSub: "Photos and videos from a description — the result arrives in the chat", myGen: "My generations",
     freeToday: (n, max) => `${n} of ${max} free photos today`, credits: n => `${n} credits`, unlimited: "Unlimited · you're the owner",
     topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates",
-    photoSub: "A picture from a description in seconds", videoSub: "5 seconds to 2 minutes, with a voice-over",
-    length: "Length", sec: " s", min: " min", withVoice: "Voice-over", noVoice: "No voice", scenes: n => `${n} scenes`,
+    photoSub: "A picture from a description in seconds", videoSub: "People on screen speak your language · 8 s – 1 min",
+    length: "Length", sec: " s", min: " min", withVoice: "With speech", noVoice: "No speech", scenes: n => `${n} scenes`,
     describe: "Describe what to create…", describeStyle: s => `What to show in the “${s}” style?`, create: "Create ✨",
     fmtSquare: "Square", fmtPortrait: "Portrait", fmtLandscape: "Landscape",
     costFree: n => `Free · ${n} left today`, costCredits: n => `${n} credit(s) · you have ${state.gen.credits}`, costOwner: "Free for the owner",
     genStarted: "Generating — it will arrive in the chat ✨", buyTitle: "Top up generations", buySub: c => `Photo — ${c.photo} credit, video — ${c.video} credits. Paid with Telegram Stars.`,
     paidOk: "Paid! Credits added ✨", genNotReady: "Generation is coming soon: the bot owner hasn't added a key yet.",
     genOwnerSetup: "Add a fal.ai key and generation works for everyone.", addKey: "Add key",
-    genKey: "Generation (fal.ai)", genKeyTitle: "fal.ai key", genKeyLead: "The key is stored encrypted and only you see this. You can leave the models as they are.",
+    videoNotReady: "Video works once the bot owner adds a Google AI Studio key.", genKey: "Generation (fal.ai, Veo)", genKeyTitle: "Generation keys", genKeyLead: "The key is stored encrypted and only you see this. You can leave the models as they are.",
     genKeyPh: "fal.ai key (leave empty to keep)", photoModel: "Photo model", videoModel: "Video model", keySet: "key added",
+    geminiKey: "Google AI Studio key (Veo video)", geminiPh: "Google AI Studio key (leave empty to keep)",
     noCredits: "Out of generations — top up with Stars", kindPhoto: "photo", kindVideo: "video",
     ctaNone: "Apps", ctaSome: n => `${n} connected`,
     settings: "Settings", secretAi: "Secret AI", mode: "Answer mode", model: "Model", profile: "Profile", tgId: "Telegram ID",
@@ -556,7 +558,7 @@ async function api(path, body = {}) {
   return data;
 }
 function errorText(e) {
-  return { gen_no_key: T.genNotReady, gen_no_credits: T.noCredits, gen_bad_key_format: T.err, github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
+  return { gen_no_video_key: T.videoNotReady, gen_no_key: T.genNotReady, gen_no_credits: T.noCredits, gen_bad_key_format: T.err, github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
 }
 function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
 function appIcon(app, cls = "ic") {
@@ -1034,28 +1036,29 @@ function renderGen() {
   });
 }
 function openGenSheet(kind, tpl = null) {
-  if (!state.gen.ready) { toast(state.gen.owner ? T.genOwnerSetup : T.genNotReady); haptic("warning"); if (state.gen.owner) openGenKeySheet(); return; }
-  let fmt = kind === "video" ? "portrait" : "square", seconds = 10, voice = true;
+  const ready = kind === "video" ? state.gen.video_ready : state.gen.ready;
+  if (!ready) { toast(state.gen.owner ? T.genOwnerSetup : kind === "video" ? T.videoNotReady : T.genNotReady); haptic("warning"); if (state.gen.owner) openGenKeySheet(); return; }
+  let fmt = kind === "video" ? "portrait" : "square", seconds = 8, voice = true;
   openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#5b6cff,#d946ef)">${GEN_ICON[kind].replace('class="i"', 'class="i" style="width:46px;height:46px;stroke:#fff"')}</div>
       <h3>${tpl ? esc(tpl.title) : kind === "photo" ? T.makePhoto : T.makeVideo}</h3></div>
     <textarea class="field" id="gen-prompt" maxlength="1200" placeholder="${esc(tpl ? T.describeStyle(tpl.title) : T.describe)}"></textarea>
-    <div class="seg" id="gen-fmt">
-      <button data-fmt="square">${T.fmtSquare}</button><button data-fmt="portrait">${T.fmtPortrait}</button><button data-fmt="landscape">${T.fmtLandscape}</button>
+    <div class="seg" id="gen-fmt" ${kind === "video" ? 'style="grid-template-columns:1fr 1fr"' : ""}>
+      ${kind === "photo" ? `<button data-fmt="square">${T.fmtSquare}</button>` : ""}<button data-fmt="portrait">${T.fmtPortrait}</button><button data-fmt="landscape">${T.fmtLandscape}</button>
     </div>
     ${kind === "video" ? `<div class="small" style="margin:0 4px 6px">${T.length}</div>
-    <div class="seg" id="gen-len" style="grid-template-columns:repeat(5,1fr)">
-      ${[5, 10, 30, 60, 120].map(n => `<button data-len="${n}">${n < 60 ? n + T.sec : n / 60 + T.min}</button>`).join("")}
+    <div class="seg" id="gen-len" style="grid-template-columns:repeat(4,1fr)">
+      ${[8, 16, 32, 64].map(n => `<button data-len="${n}">${n < 60 ? n + T.sec : "~1" + T.min}</button>`).join("")}
     </div>
     <div class="seg" id="gen-voice" style="grid-template-columns:1fr 1fr">
       <button data-voice="1">🎙 ${T.withVoice}</button><button data-voice="0">${T.noVoice}</button>
     </div>` : ""}
-    <div class="cost" id="gen-cost">${genCost(kind, 10)}</div>
+    <div class="cost" id="gen-cost">${genCost(kind, 8)}</div>
     <button class="btn" id="gen-go">${T.create}</button>`);
   const paint = () => {
     $("gen-fmt").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.fmt === fmt));
     $("gen-len")?.querySelectorAll("button").forEach(b => b.classList.toggle("on", +b.dataset.len === seconds));
     $("gen-voice")?.querySelectorAll("button").forEach(b => b.classList.toggle("on", (b.dataset.voice === "1") === voice));
-    $("gen-cost").textContent = genCost(kind, seconds) + (kind === "video" && seconds > 10 ? " · " + T.scenes(seconds / 10) : "");
+    $("gen-cost").textContent = genCost(kind, seconds) + (kind === "video" && seconds > 8 ? " · " + T.scenes(seconds / 8) : "");
   };
   paint();
   $("gen-fmt").onclick = e => { const b = e.target.closest("[data-fmt]"); if (b) { fmt = b.dataset.fmt; paint(); haptic("select"); } };
@@ -1103,12 +1106,14 @@ function openGenKeySheet() {
   openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#5b6cff,#d946ef);font-size:40px">🔑</div>
       <h3>${T.genKeyTitle}</h3><p class="lead">${T.genKeyLead}</p></div>
     <input class="field" id="fal-key" type="password" autocomplete="off" placeholder="${T.genKeyPh}">
+    <div class="small">${T.geminiKey}${state.gen.gemini ? " · " + T.keySet : ""}</div>
+    <input class="field" id="gemini-key" type="password" autocomplete="off" placeholder="${T.geminiPh}">
     <div class="small">${T.photoModel}</div><input class="field" id="fal-photo" autocomplete="off" value="${esc(m.photo || "")}">
     <div class="small">${T.videoModel}</div><input class="field" id="fal-video" autocomplete="off" value="${esc(m.video || "")}">
     <button class="btn" id="fal-save">${T.save}</button>`);
   $("fal-save").onclick = async () => {
     try {
-      const res = await api("/api/gen/key", { key: $("fal-key").value, photo: $("fal-photo").value, video: $("fal-video").value });
+      const res = await api("/api/gen/key", { key: $("fal-key").value, gemini: $("gemini-key").value, photo: $("fal-photo").value, video: $("fal-video").value });
       state.gen = res.gen; renderGen(); renderSettings(); closeSheet(); toast(T.saved); haptic("success");
     } catch (e) { toast(errorText(e)); haptic("error"); }
   };

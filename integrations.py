@@ -294,12 +294,12 @@ MEDIA_TOOLS = [
     {"type": "function", "name": "generate_video",
      "description": ("Generate a video from a description and send it to the user. Use it only when the user explicitly "
                      "asks for a video or animation. Pass the user's idea in their own words; the bot splits it into scenes "
-                     "and adds a voice-over in the user's language. Default 10 seconds unless the user asks for a length."),
+                     "and people speak the user's language on camera. Default 8 seconds unless the user asks for a length."),
      "parameters": {"type": "object", "properties": {
          "prompt": {"type": "string"},
          "format": {"type": "string", "enum": ["square", "portrait", "landscape"]},
-         "seconds": {"type": "integer", "enum": [5, 10, 30, 60, 120]},
-         "voiceover": {"type": "boolean", "description": "voice-over narration; true unless the user asks for no voice"}},
+         "seconds": {"type": "integer", "enum": [8, 16, 32, 64]},
+         "voiceover": {"type": "boolean", "description": "speech in the video; true unless the user asks for no voice"}},
          "required": ["prompt"], "additionalProperties": False}},
 ]
 
@@ -370,7 +370,7 @@ class Toolbox:
             if kind == "photo":
                 return await self.media(kind, args.get("prompt") or "", args.get("format") or "square")
             return await self.media(kind, args.get("prompt") or "", args.get("format") or "portrait",
-                                    int(args.get("seconds") or 10), args.get("voiceover", True) is not False)
+                                    int(args.get("seconds") or 8), args.get("voiceover", True) is not False)
         if not self.github:
             return "GitHub is not connected. Ask the user to connect it in the Mini App (/app)."
         gh = GitHub(self.http, self.github["token"])
