@@ -105,11 +105,6 @@ DEFAULT_PERSONA = "assistant"
 # (the bot creates the emoji pack itself) or the one from BRAND_EMOJI_ID.
 LOGO_EMOJI_FILE = Path(__file__).with_name("webapp") / "logo-emoji.webm"
 LOGO_EMOJI_VERSION = "v2"
-THINKING = {
-    "ru": ["Думаю", "Анализирую вопрос", "Ищу лучший ответ", "Формулирую", "Почти готово"],
-    "en": ["Thinking", "Analyzing your question", "Looking for the best answer", "Writing", "Almost done"],
-}
-PHRASE_SECONDS = 4
 CURSOR = " ▌"
 # Telegram allows roughly one edit per second per chat; faster edits get RetryAfter.
 ANIMATION_INTERVAL = 1.5
@@ -352,11 +347,8 @@ async def with_logo(config, send, kind="message"):
 
 
 def thinking_frame(language, logo, started, dots=None, note=None):
-    elapsed = int(time.monotonic() - started)
-    phrases = THINKING[language]
-    phrase = note or phrases[min(len(phrases) - 1, elapsed // PHRASE_SECONDS)]
-    unit = "с" if language == "ru" else "s"
-    return f"{logo} {phrase}{'.' * dots if dots else ''}\n{elapsed}{unit}"
+    """While the model thinks: just the animated logo (plus what the bot is doing, e.g. reading a file)."""
+    return f"{logo} {note}…" if note else logo
 
 
 async def typing_loop(target, action):
@@ -521,7 +513,8 @@ class DraftReply:
     async def _tick(self):
         if not self.text.strip():
             frame = thinking_frame(self.language, self.config["logo"], self.started, note=self.note)
-            if frame != self.shown:
+            # The frame rarely changes now: re-send it before Telegram drops a draft that saw no updates for 30 s.
+            if frame != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE:
                 await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
             return
         pending = self.text[self.offset:]
@@ -756,7 +749,7 @@ async def authorized(update, context):
 
 HELP_RU = (
     "Я Secret AI ✨ Отправьте текст, голосовое, аудио, кружок или фото (можно файлом) с вопросом.\n\n"
-    "Пока я думаю, вы увидите анимацию, а ответ будет появляться прямо по ходу печати.\n"
+    "Пока я думаю, вы увидите мой логотип, а ответ будет появляться прямо по ходу печати.\n"
     "На голосовое я отвечаю голосом.\n"
     "Код и скрипты присылаю файлами, а сайт ещё и публикую — с кнопкой «Открыть сайт».\n"
     "Добавьте меня в группу: отвечаю на reply и на @упоминание, а иногда и сам вставляю словечко.\n\n"
@@ -771,7 +764,7 @@ HELP_RU = (
 )
 HELP_EN = (
     "I'm Secret AI ✨ Send text, a voice message, audio, a video note or a photo (also as a file) with a question.\n\n"
-    "While I'm thinking you'll see an animation, and the answer appears as it is being written.\n"
+    "While I'm thinking you'll see my logo, and the answer appears as it is being written.\n"
     "I answer voice messages with my voice.\n"
     "Code and scripts come as files; a website is also published with an “Open” button.\n"
     "Add me to a group: I answer replies and @mentions, and sometimes chime in myself.\n\n"
