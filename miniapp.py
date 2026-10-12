@@ -222,7 +222,11 @@ def make_handler(config):
                 if kind not in ("photo", "video") or not prompt or len(prompt) > 1500:
                     self._send(400, {"error": "bad request"})
                     return
-                error = bridge.generate(user, kind, prompt, str(data.get("format") or "square"))
+                try:
+                    seconds = int(data.get("seconds") or 5)
+                except (TypeError, ValueError):
+                    seconds = 5
+                error = bridge.generate(user, kind, prompt, str(data.get("format") or "square"), seconds, data.get("voice") is not False)
                 if error:
                     self._send(400, {"error": f"gen_{error}"})
                     return

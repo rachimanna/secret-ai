@@ -36,7 +36,8 @@ import miniapp
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import COST, DEFAULT_MODELS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, PACKS, MediaError, fal_generate
+from media import (COST, DEFAULT_MODELS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, PACKS, SCENE_SECONDS, VIDEO_PRICES, MediaError,
+                   fal_generate, montage, price)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -183,7 +184,7 @@ class Memory:
         credits = self.db.execute("SELECT credits FROM gen_credits WHERE user_id=?", (user_id,)).fetchone()
         return max(0, FREE_PHOTOS_PER_DAY - (used[0] if used else 0)), credits[0] if credits else 0
 
-    def gen_charge(self, user_id, kind):
+    def gen_charge(self, user_id, kind, cost):
         """Take one generation: a free photo first, then credits. Returns 'free', 'credits' or None (not enough)."""
         free, credits = self.gen_info(user_id)
         with self.db:
@@ -191,17 +192,17 @@ class Memory:
                 self.db.execute("INSERT INTO gen_daily(user_id, day, photos) VALUES (?, ?, 1) "
                                 "ON CONFLICT(user_id, day) DO UPDATE SET photos=photos+1", (user_id, self._today()))
                 return "free"
-            if credits >= COST[kind]:
-                self.db.execute("UPDATE gen_credits SET credits=credits-? WHERE user_id=?", (COST[kind], user_id))
+            if credits >= cost:
+                self.db.execute("UPDATE gen_credits SET credits=credits-? WHERE user_id=?", (cost, user_id))
                 return "credits"
         return None
 
-    def gen_refund(self, user_id, kind, how):
+    def gen_refund(self, user_id, how, cost):
         with self.db:
             if how == "free":
                 self.db.execute("UPDATE gen_daily SET photos=MAX(0, photos-1) WHERE user_id=? AND day=?", (user_id, self._today()))
             elif how == "credits":
-                self._add_credits(user_id, COST[kind])
+                self._add_credits(user_id, cost)
 
     def _add_credits(self, user_id, credits):
         self.db.execute("INSERT INTO gen_credits(user_id, credits) VALUES (?, ?) "
@@ -881,8 +882,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
     taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
     media = None
     if gen_settings(context.bot_data)[0]:
-        async def media(kind, prompt, fmt):
-            error = await start_generation(context.application, user_id, lang(update), kind, prompt, fmt)
+        async def media(kind, prompt, fmt, seconds=5, voice=True):
+            error = await start_generation(context.application, user_id, lang(update), kind, prompt, fmt, seconds, voice)
             if error == "no_credits":
                 return ("Not started: the user has no free generations or credits left. Tell them to top up in the Mini App "
                         "(button Secret AI → Generation) with Telegram Stars.")
@@ -948,52 +949,126 @@ def gen_state(bot_data, user_id):
     free, credits = bot_data["memory"].gen_info(user_id)
     owner = bot_data["connections"].get_meta("owner") == user_id
     state = {"ready": bool(key), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
-             "credits": credits, "cost": COST, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
+             "credits": credits, "cost": COST, "video_prices": VIDEO_PRICES, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
     if owner:
         state["models"] = models
     return state
 
 
-async def start_generation(app, user_id, language, kind, prompt, fmt):
+async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5, voice=True):
     """Check the key and quota, take the generation and run it in the background. Returns None or an error code."""
     data = app.bot_data
     prompt = (prompt or "").strip()[:MAX_PROMPT]
-    if kind not in COST or not prompt:
+    if kind not in COST or not prompt or (kind == "video" and seconds not in VIDEO_PRICES):
         return "bad_request"
     key, models = gen_settings(data)
     if not key:
         return "no_key"
-    how = "owner" if data["connections"].get_meta("owner") == user_id else data["memory"].gen_charge(user_id, kind)
+    cost = price(kind, seconds)
+    how = "owner" if data["connections"].get_meta("owner") == user_id else data["memory"].gen_charge(user_id, kind, cost)
     if not how:
         return "no_credits"
-    task = asyncio.create_task(generation_job(app, user_id, language, kind, prompt, fmt if fmt in FORMATS else "square",
-                                              key, models[kind], how))
+    job = {"user_id": user_id, "language": language, "kind": kind, "prompt": prompt, "fmt": fmt if fmt in FORMATS else "square",
+           "seconds": seconds, "voice": bool(voice), "key": key, "model": models[kind], "how": how, "cost": cost}
+    task = asyncio.create_task(generation_job(app, job))
     jobs = data.setdefault("gen_tasks", set())
     jobs.add(task)
     task.add_done_callback(jobs.discard)
     return None
 
 
-async def generation_job(app, user_id, language, kind, prompt, fmt, key, model, how):
-    bot, data, ru = app.bot, app.bot_data, language == "ru"
-    waiting = {"photo": ("🎨 Рисую… обычно это 10–30 секунд", "🎨 Drawing… usually 10–30 seconds"),
-               "video": ("🎬 Снимаю видео… это займёт 1–3 минуты", "🎬 Making the video… this takes 1–3 minutes")}[kind]
+def waiting_text(job):
+    ru = job["language"] == "ru"
+    if job["kind"] == "photo":
+        return "🎨 Рисую… обычно это 10–30 секунд" if ru else "🎨 Drawing… usually 10–30 seconds"
+    seconds = job["seconds"]
+    length = (f"{seconds // 60} мин" if seconds >= 60 else f"{seconds} с") if ru else (f"{seconds // 60} min" if seconds >= 60 else f"{seconds} s")
+    if seconds <= SCENE_SECONDS:
+        return f"🎬 Снимаю видео ({length})… это займёт 1–3 минуты" if ru else f"🎬 Making the video ({length})… 1–3 minutes"
+    scenes = seconds // SCENE_SECONDS
+    word = "сцены" if 2 <= scenes % 10 <= 4 and not 12 <= scenes % 100 <= 14 else "сцен"
+    return (f"🎬 Снимаю видео ({length}): {scenes} {word} параллельно, потом монтаж и озвучка. Это займёт 3–10 минут."
+            if ru else f"🎬 Making the video ({length}): {scenes} scenes in parallel, then editing and voice-over. 3–10 minutes.")
+
+
+async def plan_scenes(data, job):
+    """Split the idea into scenes: an English visual prompt and a voice-over line in the user's language for each."""
+    seconds, ru = job["seconds"], job["language"] == "ru"
+    count = max(1, seconds // SCENE_SECONDS)
+    per_scene = min(seconds, SCENE_SECONDS)
+    words = max(6, int(per_scene * 1.8))
+    instructions = (
+        f"You plan a {seconds}-second AI video made of {count} consecutive scene(s), {per_scene} seconds each. "
+        "For every scene write 'visual': a self-contained English prompt for a text-to-video model (repeat the main "
+        "characters' look, setting and style in every scene so they stay consistent; camera movement; no on-screen text; "
+        "nobody speaks). " +
+        (f"Also write 'voice': a natural voice-over line in {'Russian' if ru else 'the language of the request'} for that "
+         f"scene, at most {words} words, together telling the story. " if job["voice"] else "Set 'voice' to an empty string. ") +
+        'Return JSON: {"scenes": [{"visual": "...", "voice": "..."}]}.')
+    try:
+        response = await data["client"].responses.create(
+            model=data["model"], instructions=instructions, input=job["prompt"], store=False, max_output_tokens=4000,
+            text={"format": {"type": "json_object"}})
+        scenes = json.loads(response.output_text)["scenes"][:count]
+        scenes = [{"visual": str(s["visual"]).strip(), "voice": str(s.get("voice") or "").strip()} for s in scenes if s.get("visual")]
+    except Exception as exc:  # planning is a nicety: fall back to the raw idea
+        LOG.warning("Scene planning failed: %s", type(exc).__name__)
+        scenes = []
+    if len(scenes) < count:
+        scenes += [{"visual": f"{job['prompt']} (part {i + 1} of {count})", "voice": ""} for i in range(len(scenes), count)]
+    return scenes
+
+
+async def make_video(data, job):
+    """Generate the scenes in parallel, voice them and edit them into one MP4. Returns the video bytes."""
+    scenes = await plan_scenes(data, job)
+    clip_seconds = min(job["seconds"], SCENE_SECONDS)
+    quiet = " No dialogue, nobody talks; natural ambient sound only." if job["voice"] else ""
+    urls = await asyncio.gather(*[
+        fal_generate(data["http"], job["key"], job["model"], "video", scene["visual"].rstrip(". ") + "." + quiet, job["fmt"], clip_seconds)
+        for scene in scenes])
+    clips = []
+    for url in urls:
+        response = await data["http"].get(url, timeout=180)
+        response.raise_for_status()
+        clips.append(response.content)
+    narration = " ".join(scene["voice"] for scene in scenes if scene["voice"])
+    voice = None
+    if job["voice"] and narration and data.get("tts_model"):
+        try:
+            speech = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"],
+                                                              input=narration[:4000], response_format="mp3")
+            voice = speech.content
+        except Exception as exc:  # a video without voice is still a result
+            LOG.warning("Voice-over failed: %s", type(exc).__name__)
+    return await montage(clips, job["fmt"], voice)
+
+
+async def generation_job(app, job):
+    bot, data = app.bot, app.bot_data
+    user_id, ru, kind = job["user_id"], job["language"] == "ru", job["kind"]
     status = None
     try:
-        status = await bot.send_message(user_id, waiting[0] if ru else waiting[1])
+        status = await bot.send_message(user_id, waiting_text(job))
     except TelegramError:
         pass
     try:
-        url = await fal_generate(data["http"], key, model, kind, prompt, fmt)
-        await send_media(bot, data["http"], user_id, kind, url, prompt[:900])
+        caption = job["prompt"][:900]
+        if kind == "photo":
+            url = await fal_generate(data["http"], job["key"], job["model"], "photo", job["prompt"], job["fmt"])
+            await send_media(bot, data["http"], user_id, "photo", url, caption)
+        else:
+            video = await make_video(data, job)
+            await bot.send_video(user_id, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
+                                 write_timeout=180, read_timeout=180)
     except Exception as exc:  # any failure: give the generation back and explain
-        if how != "owner":
-            data["memory"].gen_refund(user_id, kind, how)
+        if job["how"] != "owner":
+            data["memory"].gen_refund(user_id, job["how"], job["cost"])
         code = exc.code if isinstance(exc, MediaError) else "failed"
         # Only the error code: fal's details may echo the prompt, which is user content.
         LOG.warning("Generation failed: %s %s", code, type(exc).__name__)
         text = MEDIA_ERRORS[code][0 if ru else 1]
-        if how in ("free", "credits"):
+        if job["how"] in ("free", "credits"):
             text += " " + ("Генерация не списана." if ru else "Nothing was charged.")
         try:
             await bot.send_message(user_id, "⚠️ " + text)
@@ -1416,9 +1491,9 @@ class Bridge:
             return gen_state(self.app.bot_data, user_id)
         return self._run(read())
 
-    def generate(self, tg_user, kind, prompt, fmt):
+    def generate(self, tg_user, kind, prompt, fmt, seconds=5, voice=True):
         language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
-        return self._run(start_generation(self.app, tg_user["id"], language, kind, prompt, fmt))
+        return self._run(start_generation(self.app, tg_user["id"], language, kind, prompt, fmt, seconds, voice))
 
     def invoice(self, tg_user, pack):
         """Telegram Stars invoice link for a credit pack."""
@@ -1426,8 +1501,8 @@ class Bridge:
         ru = (tg_user.get("language_code") or "ru").startswith("ru")
         return self._run(self.app.bot.create_invoice_link(
             title=f"{credits} генераций" if ru else f"{credits} generations",
-            description=(f"Кредиты Secret AI: фото — {COST['photo']}, видео — {COST['video']}" if ru
-                         else f"Secret AI credits: photo — {COST['photo']}, video — {COST['video']}"),
+            description=(f"Кредиты Secret AI: фото — {COST['photo']}, видео — от {COST['video']}" if ru
+                         else f"Secret AI credits: photo — {COST['photo']}, video — from {COST['video']}"),
             payload=f"gen:{pack}:{tg_user['id']}", currency="XTR",
             prices=[LabeledPrice(f"{credits} credits", stars)]))
 

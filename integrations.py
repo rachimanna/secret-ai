@@ -292,11 +292,14 @@ MEDIA_TOOLS = [
          "format": {"type": "string", "enum": ["square", "portrait", "landscape"]}},
          "required": ["prompt"], "additionalProperties": False}},
     {"type": "function", "name": "generate_video",
-     "description": ("Generate a short (5 s) video from a description and send it to the user. Use it only when the user "
-                     "explicitly asks for a video or animation. Write a detailed prompt in English."),
+     "description": ("Generate a video from a description and send it to the user. Use it only when the user explicitly "
+                     "asks for a video or animation. Pass the user's idea in their own words; the bot splits it into scenes "
+                     "and adds a voice-over in the user's language. Default 10 seconds unless the user asks for a length."),
      "parameters": {"type": "object", "properties": {
          "prompt": {"type": "string"},
-         "format": {"type": "string", "enum": ["square", "portrait", "landscape"]}},
+         "format": {"type": "string", "enum": ["square", "portrait", "landscape"]},
+         "seconds": {"type": "integer", "enum": [5, 10, 30, 60, 120]},
+         "voiceover": {"type": "boolean", "description": "voice-over narration; true unless the user asks for no voice"}},
          "required": ["prompt"], "additionalProperties": False}},
 ]
 
@@ -364,7 +367,10 @@ class Toolbox:
         """Run a tool and return text for the model; errors are returned, not raised."""
         if name in ("generate_image", "generate_video") and self.media:
             kind = "photo" if name == "generate_image" else "video"
-            return await self.media(kind, args.get("prompt") or "", args.get("format") or "square")
+            if kind == "photo":
+                return await self.media(kind, args.get("prompt") or "", args.get("format") or "square")
+            return await self.media(kind, args.get("prompt") or "", args.get("format") or "portrait",
+                                    int(args.get("seconds") or 10), args.get("voiceover", True) is not False)
         if not self.github:
             return "GitHub is not connected. Ask the user to connect it in the Mini App (/app)."
         gh = GitHub(self.http, self.github["token"])
