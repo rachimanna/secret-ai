@@ -7,7 +7,6 @@ and demotivators from the chat's photos.
 import io
 import random
 import sqlite3
-import textwrap
 import time
 from pathlib import Path
 
@@ -30,6 +29,8 @@ class GroupStore:
             self.db.execute("CREATE TABLE IF NOT EXISTS group_messages (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, "
                             "line TEXT NOT NULL, created INTEGER NOT NULL)")
             self.db.execute("CREATE INDEX IF NOT EXISTS group_messages_chat ON group_messages(chat_id, id)")
+            if "message_id" not in [row[1] for row in self.db.execute("PRAGMA table_info(group_messages)")]:
+                self.db.execute("ALTER TABLE group_messages ADD COLUMN message_id INTEGER")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_media (chat_id INTEGER NOT NULL, kind TEXT NOT NULL, "
                             "unique_id TEXT NOT NULL, file_id TEXT NOT NULL, seen INTEGER NOT NULL, added INTEGER NOT NULL, "
                             "PRIMARY KEY (chat_id, unique_id))")
@@ -38,10 +39,10 @@ class GroupStore:
 
     # ----- conversation -----
 
-    def add_line(self, chat_id, line):
+    def add_line(self, chat_id, line, message_id=None):
         with self.db:
-            self.db.execute("INSERT INTO group_messages(chat_id, line, created) VALUES (?, ?, ?)",
-                            (chat_id, line[:1500], int(time.time())))
+            self.db.execute("INSERT INTO group_messages(chat_id, line, created, message_id) VALUES (?, ?, ?, ?)",
+                            (chat_id, line[:1500], int(time.time()), message_id))
             self.db.execute("DELETE FROM group_messages WHERE chat_id=? AND id NOT IN "
                             "(SELECT id FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?)",
                             (chat_id, chat_id, GROUP_MESSAGES))
@@ -50,6 +51,11 @@ class GroupStore:
         rows = self.db.execute("SELECT line FROM (SELECT id, line FROM group_messages WHERE chat_id=? ORDER BY id DESC "
                                "LIMIT ?) ORDER BY id", (chat_id, limit)).fetchall()
         return [row[0] for row in rows]
+
+    def recent_messages(self, chat_id, limit=15):
+        """Recent members' messages that can be replied to: [(message_id, line)], newest first."""
+        return self.db.execute("SELECT message_id, line FROM group_messages WHERE chat_id=? AND message_id IS NOT NULL "
+                               "AND line NOT LIKE 'Secret AI:%' ORDER BY id DESC LIMIT ?", (chat_id, limit)).fetchall()
 
     # ----- stickers, gifs, photos -----
 

@@ -26,7 +26,7 @@ from openai import (
     RateLimitError,
 )
 from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
-                      MessageEntity, Update, User, WebAppInfo)
+                      MessageEntity, ReplyParameters, Update, User, WebAppInfo)
 from codefiles import extract_files, site_file
 from fun import GroupStore, demotivator, quote_card
 from telegram.constants import ChatAction
@@ -1105,7 +1105,7 @@ def remember_group_message(store, message, name):
     chat_id = message.chat_id
     said = describe_message(message)
     if said:
-        store.add_line(chat_id, f"{name}: {said}")
+        store.add_line(chat_id, f"{name}: {said}", message.message_id)
     if message.sticker:
         store.add_media(chat_id, "sticker", message.sticker.file_unique_id, message.sticker.file_id)
     elif message.animation:
@@ -1148,7 +1148,7 @@ async def group_chat(update, context):
         else:  # a sticker, gif or video in reply to the bot
             question = content = describe_message(message) or "…"
         before = "\n".join(store.lines(chat_id))
-        store.add_line(chat_id, f"{name}: {question}")
+        store.add_line(chat_id, f"{name}: {question}", message.message_id)
         head = (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:"
         content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
         data["group_spoke"][chat_id] = time.monotonic()
@@ -1181,8 +1181,28 @@ async def group_respond(update, context, message, content):
 
 # ----- uninvited: no logo, no "typing", nothing that gives it away -----
 
+def reply_to(message_id):
+    """Reply to a message if it still exists, otherwise just post."""
+    return ReplyParameters(message_id=message_id, allow_sending_without_reply=True) if message_id else None
+
+
+def surprise_target(store, message):
+    """Whom to answer: usually the fresh message, sometimes an earlier one, sometimes nobody (just post)."""
+    roll = random.random()
+    if roll < 0.5:
+        return message.message_id, None
+    if roll < 0.75:
+        earlier = [row for row in store.recent_messages(message.chat_id, 15) if row[0] != message.message_id]
+        if earlier:
+            return random.choice(earlier)
+    return None, None
+
+
 async def group_surprise(context, message, user):
-    """Pick something to do on its own: a remark, the chat's sticker or gif, a catchphrase, a quote picture or a demotivator."""
+    """Do one thing on its own: a remark, the chat's sticker or gif, a catchphrase, a quote picture or a demotivator.
+
+    Often as a reply to someone's message (the fresh one or an earlier one), sometimes as a plain post.
+    """
     store, chat_id = context.bot_data["groups"], message.chat_id
     options = [("remark", 35)]
     if store.has_media(chat_id, "sticker") or store.has_media(chat_id, "gif"):
@@ -1194,37 +1214,39 @@ async def group_surprise(context, message, user):
     if store.has_media(chat_id, "photo"):
         options.append(("demotivator", 10))
     action = random.choices([o[0] for o in options], weights=[o[1] for o in options])[0]
+    target, target_line = surprise_target(store, message)
     if action == "media":
-        await send_chat_media(context, chat_id, ("sticker", "gif"))
+        await send_chat_media(context, chat_id, ("sticker", "gif"), target)
     elif action == "phrase":
         phrase = store.catchphrase(chat_id)
-        await context.bot.send_message(chat_id, phrase)
+        await context.bot.send_message(chat_id, phrase, reply_parameters=reply_to(target))
         store.add_line(chat_id, "Secret AI: " + phrase)
     elif action == "quote":
-        await send_quote(context, chat_id, message.text, user)
+        await send_quote(context, chat_id, message.text, user, message.message_id if target else None)
     elif action == "demotivator":
-        await send_demotivator(context, chat_id, None)
+        await send_demotivator(context, chat_id, None, reply_id=target)
     else:
-        await group_remark(context, message)
+        if target == message.message_id:
+            target_line = f"{speaker(user)}: {describe_message(message)}"
+        await group_remark(context, message.chat_id, target, target_line)
 
 
-async def group_remark(context, message):
+async def group_remark(context, chat_id, target=None, target_line=None):
     data = context.bot_data
-    lines = data["groups"].lines(message.chat_id, 120)
+    lines = data["groups"].lines(chat_id, 120)
+    task = (f"You are replying directly to this message: «{target_line}». React to it (address its author by name). "
+            if target_line else "") + INTERJECT
     response = await data["client"].responses.create(
         model=data["model"], instructions=SYSTEM + GROUP_STYLE, store=False, max_output_tokens=2000,
-        input=[{"role": "user", "content": "Recent messages in the group (oldest first):\n" + "\n".join(lines) + "\n\n" + INTERJECT}])
+        input=[{"role": "user", "content": "Recent messages in the group (oldest first):\n" + "\n".join(lines) + "\n\n" + task}])
     text = (response.output_text or "").strip()
     if not text or text.upper().startswith("SKIP"):
         return
-    if random.random() < 0.5:
-        await reply(message, text[:1000])
-    else:
-        await context.bot.send_message(message.chat_id, text[:1000])
-    data["groups"].add_line(message.chat_id, "Secret AI: " + text[:600])
+    await context.bot.send_message(chat_id, text[:1000], reply_parameters=reply_to(target))
+    data["groups"].add_line(chat_id, "Secret AI: " + text[:600])
 
 
-async def send_chat_media(context, chat_id, kinds):
+async def send_chat_media(context, chat_id, kinds, target=None):
     store = context.bot_data["groups"]
     for _ in range(3):  # a file Telegram no longer knows is forgotten and another one tried
         picked = store.random_media(chat_id, kinds)
@@ -1233,11 +1255,11 @@ async def send_chat_media(context, chat_id, kinds):
         kind, file_id = picked
         try:
             if kind == "sticker":
-                await context.bot.send_sticker(chat_id, file_id)
+                await context.bot.send_sticker(chat_id, file_id, reply_parameters=reply_to(target))
             elif kind == "gif":
-                await context.bot.send_animation(chat_id, file_id)
+                await context.bot.send_animation(chat_id, file_id, reply_parameters=reply_to(target))
             else:
-                await context.bot.send_photo(chat_id, file_id)
+                await context.bot.send_photo(chat_id, file_id, reply_parameters=reply_to(target))
             store.add_line(chat_id, f"Secret AI: [{'стикер' if kind == 'sticker' else 'гифка' if kind == 'gif' else 'фото'}]")
             return
         except BadRequest:
@@ -1255,11 +1277,11 @@ async def avatar_bytes(bot, user_id):
     return None
 
 
-async def send_quote(context, chat_id, text, user, reply_to=None):
+async def send_quote(context, chat_id, text, user, reply_id=None):
     """A quote picture: the mascot says the member's message, signed with their name and avatar."""
     avatar = await avatar_bytes(context.bot, user.id)
     picture = await asyncio.to_thread(quote_card, speaker(user), text, avatar)
-    await context.bot.send_photo(chat_id, picture, reply_to_message_id=reply_to)
+    await context.bot.send_photo(chat_id, picture, reply_parameters=reply_to(reply_id))
     context.bot_data["groups"].add_line(chat_id, f"Secret AI: [цитата {speaker(user)}: {text[:200]}]")
 
 
@@ -1281,7 +1303,7 @@ async def demotivator_caption(context, chat_id, hint):
         return data["groups"].catchphrase(chat_id) or "Без комментариев", ""
 
 
-async def send_demotivator(context, chat_id, photo, hint="", reply_to=None):
+async def send_demotivator(context, chat_id, photo, hint="", reply_id=None):
     """A demotivator from the given photo (a PhotoSize) or a random photo the chat posted."""
     store = context.bot_data["groups"]
     file_id = photo.file_id if photo else None
@@ -1298,7 +1320,7 @@ async def send_demotivator(context, chat_id, photo, hint="", reply_to=None):
         return False
     title, subtitle = await demotivator_caption(context, chat_id, hint)
     picture = await asyncio.to_thread(demotivator, data, title, subtitle)
-    await context.bot.send_photo(chat_id, picture, reply_to_message_id=reply_to)
+    await context.bot.send_photo(chat_id, picture, reply_parameters=reply_to(reply_id))
     store.add_line(chat_id, f"Secret AI: [демотиватор «{title}. {subtitle}»]")
     return True
 
