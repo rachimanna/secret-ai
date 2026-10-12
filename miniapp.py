@@ -254,6 +254,12 @@ def make_handler(config):
                         self._send(400, {"error": "gen_bad_key_format"})
                         return
                     store.set_meta("gemini_key", gemini, secret=True)
+                hf = str(data.get("hf") or "").strip()
+                if hf:
+                    if len(hf) > 300 or hf.count(":") != 1 or not all(c.isalnum() or c in "-_:" for c in hf):
+                        self._send(400, {"error": "gen_bad_hf_key"})
+                        return
+                    store.set_meta("hf_key", hf, secret=True)
                 models = {kind: str(data.get(kind) or "").strip() for kind in ("photo", "video")}
                 if any(len(m) > 120 or (m and not all(c.isalnum() or c in "-_./" for c in m)) for m in models.values()):
                     self._send(400, {"error": "gen_bad_model"})

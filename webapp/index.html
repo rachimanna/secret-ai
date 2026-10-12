@@ -382,9 +382,10 @@ const T = {
     genStarted: "Генерирую — пришлю в чат ✨", buyTitle: "Пополнить генерации", buySub: c => `Фото — ${c.photo} кредит, видео — ${c.video} кредитов. Оплата звёздами Telegram.`,
     paidOk: "Оплачено! Кредиты начислены ✨", genNotReady: "Генерация скоро заработает: владелец бота ещё не добавил ключ.",
     genOwnerSetup: "Добавьте ключ fal.ai — и генерация заработает для всех.", addKey: "Добавить ключ",
-    videoNotReady: "Видео заработает, когда владелец бота добавит ключ Google AI Studio.", genKey: "Генерация (fal.ai, Veo)", genKeyTitle: "Ключи генерации", genKeyLead: "Ключ хранится в зашифрованном виде, его видите только вы. Модели можно не трогать.",
+    videoNotReady: "Видео заработает, когда владелец бота добавит ключ Higgsfield.", genKey: "Генерация (fal.ai, Higgsfield)", genKeyTitle: "Ключи генерации", genKeyLead: "Ключ хранится в зашифрованном виде, его видите только вы. Модели можно не трогать.",
     genKeyPh: "Ключ fal.ai (оставьте пустым, чтобы не менять)", photoModel: "Модель фото", videoModel: "Модель видео", keySet: "ключ добавлен",
-    geminiKey: "Ключ Google AI Studio (видео Veo)", geminiPh: "Ключ Google AI Studio (оставьте пустым, чтобы не менять)",
+    geminiKey: "Ключ Google AI Studio (только для моделей veo-…)", geminiPh: "Ключ Google AI Studio (оставьте пустым, чтобы не менять)",
+    hfKey: "Ключ Higgsfield для видео (KEY_ID:KEY_SECRET)", hfPh: "KEY_ID:KEY_SECRET (оставьте пустым, чтобы не менять)", errHfKey: "Ключ Higgsfield вставляется целиком в виде KEY_ID:KEY_SECRET",
     noCredits: "Генерации закончились — пополните звёздами", kindPhoto: "фото", kindVideo: "видео",
     ctaNone: "Приложения", ctaSome: n => `${n} подкл.`,
     settings: "Настройки", secretAi: "Secret AI", mode: "Режим ответа", model: "Модель", profile: "Профиль", tgId: "Telegram ID",
@@ -426,9 +427,10 @@ const T = {
     genStarted: "Generating — it will arrive in the chat ✨", buyTitle: "Top up generations", buySub: c => `Photo — ${c.photo} credit, video — ${c.video} credits. Paid with Telegram Stars.`,
     paidOk: "Paid! Credits added ✨", genNotReady: "Generation is coming soon: the bot owner hasn't added a key yet.",
     genOwnerSetup: "Add a fal.ai key and generation works for everyone.", addKey: "Add key",
-    videoNotReady: "Video works once the bot owner adds a Google AI Studio key.", genKey: "Generation (fal.ai, Veo)", genKeyTitle: "Generation keys", genKeyLead: "The key is stored encrypted and only you see this. You can leave the models as they are.",
+    videoNotReady: "Video works once the bot owner adds a Higgsfield key.", genKey: "Generation (fal.ai, Higgsfield)", genKeyTitle: "Generation keys", genKeyLead: "The key is stored encrypted and only you see this. You can leave the models as they are.",
     genKeyPh: "fal.ai key (leave empty to keep)", photoModel: "Photo model", videoModel: "Video model", keySet: "key added",
-    geminiKey: "Google AI Studio key (Veo video)", geminiPh: "Google AI Studio key (leave empty to keep)",
+    geminiKey: "Google AI Studio key (only for veo-… models)", geminiPh: "Google AI Studio key (leave empty to keep)",
+    hfKey: "Higgsfield video key (KEY_ID:KEY_SECRET)", hfPh: "KEY_ID:KEY_SECRET (leave empty to keep)", errHfKey: "Paste the whole Higgsfield key as KEY_ID:KEY_SECRET",
     noCredits: "Out of generations — top up with Stars", kindPhoto: "photo", kindVideo: "video",
     ctaNone: "Apps", ctaSome: n => `${n} connected`,
     settings: "Settings", secretAi: "Secret AI", mode: "Answer mode", model: "Model", profile: "Profile", tgId: "Telegram ID",
@@ -558,7 +560,7 @@ async function api(path, body = {}) {
   return data;
 }
 function errorText(e) {
-  return { gen_no_video_key: T.videoNotReady, gen_no_key: T.genNotReady, gen_no_credits: T.noCredits, gen_bad_key_format: T.err, github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
+  return { gen_no_video_key: T.videoNotReady, gen_no_key: T.genNotReady, gen_no_credits: T.noCredits, gen_bad_key_format: T.err, gen_bad_hf_key: T.errHfKey, github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
 }
 function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
 function appIcon(app, cls = "ic") {
@@ -1106,6 +1108,8 @@ function openGenKeySheet() {
   openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#5b6cff,#d946ef);font-size:40px">🔑</div>
       <h3>${T.genKeyTitle}</h3><p class="lead">${T.genKeyLead}</p></div>
     <input class="field" id="fal-key" type="password" autocomplete="off" placeholder="${T.genKeyPh}">
+    <div class="small">${T.hfKey}${state.gen.hf ? " · " + T.keySet : ""}</div>
+    <input class="field" id="hf-key" type="password" autocomplete="off" placeholder="${T.hfPh}">
     <div class="small">${T.geminiKey}${state.gen.gemini ? " · " + T.keySet : ""}</div>
     <input class="field" id="gemini-key" type="password" autocomplete="off" placeholder="${T.geminiPh}">
     <div class="small">${T.photoModel}</div><input class="field" id="fal-photo" autocomplete="off" value="${esc(m.photo || "")}">
@@ -1113,7 +1117,7 @@ function openGenKeySheet() {
     <button class="btn" id="fal-save">${T.save}</button>`);
   $("fal-save").onclick = async () => {
     try {
-      const res = await api("/api/gen/key", { key: $("fal-key").value, gemini: $("gemini-key").value, photo: $("fal-photo").value, video: $("fal-video").value });
+      const res = await api("/api/gen/key", { key: $("fal-key").value, gemini: $("gemini-key").value, hf: $("hf-key").value, photo: $("fal-photo").value, video: $("fal-video").value });
       state.gen = res.gen; renderGen(); renderSettings(); closeSheet(); toast(T.saved); haptic("success");
     } catch (e) { toast(errorText(e)); haptic("error"); }
   };

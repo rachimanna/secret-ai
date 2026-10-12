@@ -12,10 +12,10 @@ import httpx
 import imageio_ffmpeg
 
 FAL_QUEUE = "https://queue.fal.run"
-# Photos: fal.ai. Videos: Google Veo 3.1 (Gemini API, the model behind Google Flow) with sound and speech;
-# a fal video model id can still be set instead.
-DEFAULT_MODELS = {"photo": "fal-ai/flux/schnell", "video": "veo-3.1-fast-generate-preview"}
-OLD_VIDEO_DEFAULTS = ("fal-ai/kling-video/v2.6/pro/text-to-video",)
+# Photos: fal.ai. Videos: Higgsfield (Seedance with native sound and speech). A Google Veo id ("veo-...") or a fal id
+# ("fal-ai/...") can be set instead.
+DEFAULT_MODELS = {"photo": "fal-ai/flux/schnell", "video": "bytedance/seedance-2.5/text-to-video"}
+OLD_VIDEO_DEFAULTS = ("fal-ai/kling-video/v2.6/pro/text-to-video", "veo-3.1-fast-generate-preview")
 TIMEOUTS = {"photo": 180, "video": 1800}
 POLL_SECONDS = 3
 
@@ -200,6 +200,15 @@ def is_veo(model):
     return model.startswith("veo")
 
 
+def is_fal(model):
+    return model.startswith("fal-ai/")
+
+
+def video_provider(model):
+    """'veo', 'fal' or 'higgsfield' (anything else, e.g. bytedance/seedance-2.5/text-to-video)."""
+    return "veo" if is_veo(model) else "fal" if is_fal(model) else "higgsfield"
+
+
 async def veo_generate(http, key, model, prompt, fmt):
     """One 8-second Veo clip with sound; returns the MP4 bytes."""
     headers = {"x-goog-api-key": key, "Content-Type": "application/json"}
@@ -252,3 +261,63 @@ def _google_error(response):
         return str(response.json().get("error", {}).get("message", ""))[:200]
     except (ValueError, AttributeError):
         return ""
+
+
+# ---------- Higgsfield: Seedance and other video models with native sound ----------
+
+HIGGSFIELD = "https://api.higgsfield.ai"
+
+
+async def hf_generate(http, key, model, prompt, fmt, seconds=SCENE_SECONDS, audio=True):
+    """One Higgsfield clip with sound; key is "KEY_ID:KEY_SECRET". Returns the MP4 bytes."""
+    headers = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
+    body = {"prompt": prompt, "duration": seconds, "aspect_ratio": "16:9" if fmt == "landscape" else "9:16",
+            "resolution": "720p", "generate_audio": audio}
+    try:
+        response = await http.post(f"{HIGGSFIELD}/{model}", headers=headers, json=body, timeout=60)
+    except httpx.HTTPError as exc:
+        raise MediaError("failed", type(exc).__name__) from None
+    detail = _hf_error(response)
+    if response.status_code in (401, 403):
+        raise MediaError("bad_video_key", detail)
+    if response.status_code in (402, 429) or "credit" in detail.lower() or "balance" in detail.lower():
+        raise MediaError("video_billing", detail)
+    if response.status_code == 404:
+        raise MediaError("model", model)
+    if response.status_code >= 400:
+        raise MediaError("failed", f"submit {response.status_code} {detail}")
+    job = response.json()
+    status_url = job.get("status_url") or (f"{HIGGSFIELD}/requests/{job['request_id']}/status" if job.get("request_id") else "")
+    if not status_url:
+        raise MediaError("failed", "no request id")
+    deadline = time.monotonic() + 900
+    while time.monotonic() < deadline:
+        await asyncio.sleep(POLL_SECONDS * 2)
+        try:
+            data = (await http.get(status_url, headers=headers, timeout=30)).json()
+        except (httpx.HTTPError, ValueError):
+            continue
+        status = str(data.get("status", "")).lower()
+        if status == "completed":
+            url = result_url(data)
+            if not url:
+                raise MediaError("failed", "no video url")
+            video = await http.get(url, timeout=180, follow_redirects=True)
+            if video.status_code >= 400:
+                raise MediaError("failed", f"download {video.status_code}")
+            return video.content
+        if status == "nsfw":
+            raise MediaError("blocked")
+        if status in ("failed", "canceled", "cancelled"):
+            raise MediaError("failed", status)
+    raise MediaError("timeout")
+
+
+def _hf_error(response):
+    try:
+        data = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("detail") or data.get("message") or data.get("error") or "")[:200]

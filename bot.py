@@ -37,7 +37,7 @@ from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, fal_generate, is_veo, montage, price, veo_generate)
+                   VIDEO_PRICES, MediaError, fal_generate, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -933,13 +933,12 @@ MEDIA_ERRORS = {
     "timeout": ("Генерация заняла слишком много времени. Попробуйте ещё раз.", "Generation took too long. Please try again."),
     "blocked": ("Запрос отклонён фильтром безопасности. Попробуйте описать иначе.", "The request was blocked by the safety filter. Try describing it differently."),
     "failed": ("Не получилось сгенерировать. Попробуйте ещё раз.", "Generation failed. Please try again."),
-    "no_video_key": ("Видео пока не настроено: владелец бота ещё не добавил ключ Google AI Studio.",
-                     "Video isn't set up yet: the bot owner hasn't added a Google AI Studio key."),
-    "bad_video_key": ("Ключ Google AI Studio не работает — владельцу бота нужно проверить его на aistudio.google.com.",
-                      "The Google AI Studio key doesn't work — the bot owner should check it at aistudio.google.com."),
-    "video_billing": ("У ключа Google закончилась квота или не включена оплата — владельцу бота нужно включить Billing "
-                      "в Google AI Studio.", "The Google key is out of quota or billing is off — the bot owner should enable "
-                      "billing in Google AI Studio."),
+    "no_video_key": ("Видео пока не настроено: владелец бота ещё не добавил ключ видео-сервиса (Higgsfield).",
+                     "Video isn't set up yet: the bot owner hasn't added the video service key (Higgsfield)."),
+    "bad_video_key": ("Ключ видео-сервиса не работает — владельцу бота нужно проверить его в настройках Mini App.",
+                      "The video service key doesn't work — the bot owner should check it in the Mini App settings."),
+    "video_billing": ("На балансе видео-сервиса закончились деньги — владельцу бота нужно пополнить его.",
+                      "The video service balance is empty — the bot owner should top it up."),
 }
 
 
@@ -954,9 +953,12 @@ def gen_settings(bot_data):
 
 
 def video_key(bot_data, model):
-    """Key for the video model: Google AI Studio for Veo, fal for anything else."""
-    if is_veo(model):
+    """Key for the video model: Higgsfield, Google AI Studio for Veo, or fal."""
+    provider = video_provider(model)
+    if provider == "veo":
         return bot_data["connections"].get_meta("gemini_key", secret=True) or bot_data.get("gemini_env_key") or ""
+    if provider == "higgsfield":
+        return bot_data["connections"].get_meta("hf_key", secret=True) or bot_data.get("hf_env_key") or ""
     return gen_settings(bot_data)[0]
 
 
@@ -969,6 +971,7 @@ def gen_state(bot_data, user_id):
     if owner:
         state["models"] = models
         state["gemini"] = bool(bot_data["connections"].get_meta("gemini_key", secret=True))
+        state["hf"] = bool(bot_data["connections"].get_meta("hf_key", secret=True))
     return state
 
 
@@ -982,7 +985,7 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
     if kind == "video":
         key = video_key(data, models["video"])
         if not key:
-            return "no_video_key" if is_veo(models["video"]) else "no_key"
+            return "no_key" if video_provider(models["video"]) == "fal" else "no_video_key"
     elif not key:
         return "no_key"
     cost = price(kind, seconds)
@@ -1065,7 +1068,7 @@ async def plan_veo(data, job, count):
               f"{language} is fine when nobody is on screen." if job["voice"]
               else "Nobody speaks: no dialogue, no voice-over; music and ambient sound only.")
     instructions = (
-        f"You write prompts for Google Veo 3.1. The video is {count} consecutive 8-second scene(s) of one story. Each "
+        f"You write prompts for a text-to-video model with native sound (Veo / Seedance). The video is {count} consecutive 8-second scene(s) of one story. Each "
         "prompt is in English and self-contained: subject (repeat the characters' exact look every time), action, setting, "
         "camera, lighting, style, sound. No on-screen text. " + speech +
         ' Return JSON: {"prompts": ["...", ...]} with exactly ' + str(count) + " prompts.")
@@ -1083,10 +1086,14 @@ async def plan_veo(data, job, count):
 
 
 async def make_veo_video(data, job):
-    """Veo scenes in parallel with their own sound and speech, joined into one MP4."""
+    """Veo or Higgsfield scenes in parallel with their own sound and speech, joined into one MP4."""
     count = max(1, job["seconds"] // SCENE_SECONDS)
     prompts = await plan_veo(data, job, count)
-    clips = await asyncio.gather(*[veo_generate(data["http"], job["key"], job["model"], prompt, job["fmt"]) for prompt in prompts])
+    if video_provider(job["model"]) == "veo":
+        calls = [veo_generate(data["http"], job["key"], job["model"], prompt, job["fmt"]) for prompt in prompts]
+    else:
+        calls = [hf_generate(data["http"], job["key"], job["model"], prompt, job["fmt"]) for prompt in prompts]
+    clips = await asyncio.gather(*calls)
     return await montage(list(clips), job["fmt"], keep_sound=True)
 
 
@@ -1130,7 +1137,7 @@ async def generation_job(app, job):
             url = await fal_generate(data["http"], job["key"], job["model"], "photo", prompt, job["fmt"])
             await send_media(bot, data["http"], user_id, "photo", url, caption)
         else:
-            video = await (make_veo_video(data, job) if is_veo(job["model"]) else make_video(data, job))
+            video = await (make_video(data, job) if video_provider(job["model"]) == "fal" else make_veo_video(data, job))
             await bot.send_video(user_id, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
                                  write_timeout=180, read_timeout=180)
     except Exception as exc:  # any failure: give the generation back and explain
@@ -1625,6 +1632,7 @@ def main():
         tts_model=os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip(),
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
+        hf_env_key=os.environ.get("HF_KEY", "").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={})
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
