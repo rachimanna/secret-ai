@@ -35,7 +35,8 @@ from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, Co
 import miniapp
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
-from integrations import Connections, GitHubError, Toolbox, apply_change, describe, prune_pending
+from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
+                          prune_pending)
 
 LOG = logging.getLogger("secret_ai")
 SYSTEM = (
@@ -584,6 +585,14 @@ async def show_proposals(update, context, toolbox, target):
         change = context.bot_data["pending"].get(pid)
         if not change:
             continue
+        if change.get("kind") == "delete_repos":
+            # Irreversible: the first button only asks again, the second one deletes.
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton(ui(update, f"🗑 Удалить ({len(change['repos'])})", f"🗑 Delete ({len(change['repos'])})"),
+                                     callback_data=f"del1:{pid}"),
+                InlineKeyboardButton(ui(update, "❌ Отмена", "❌ Cancel"), callback_data=f"cancel:{pid}")]])
+            await send(target, describe_deletion(change, lang(update)), keyboard)
+            continue
         summary, diff = describe(change, lang(update))
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton(ui(update, "✅ Применить", "✅ Apply"), callback_data=f"apply:{pid}"),
@@ -868,6 +877,42 @@ async def speak(update, context, source):
     await source.reply_voice(voice=audio.content, filename="secret-ai.ogg")
 
 
+async def confirm_deletion(update, context, query, pid, change):
+    """Second confirmation pressed: delete the repositories and report what happened."""
+    if change.get("applying"):
+        await query.answer()
+        return
+    change["applying"] = True
+    await query.answer(ui(update, "Удаляю…", "Deleting…"))
+    try:
+        await context.bot_data["github_apps"].fresh_token(context.bot_data["http"], update.effective_user.id)
+        deleted, failed = await delete_repos(context.bot_data["http"], context.bot_data["connections"], change)
+    except (GitHubError, httpx.HTTPError) as exc:
+        change["applying"] = False
+        detail = str(exc) if isinstance(exc, GitHubError) else type(exc).__name__
+        await send(query.message, ui(update, f"⚠️ Не удалось удалить: {detail}", f"⚠️ Couldn't delete: {detail}"))
+        return
+    context.bot_data["pending"].pop(pid, None)
+    try:
+        await query.edit_message_reply_markup(reply_markup=None)
+    except TelegramError:
+        pass
+    lines = [ui(update, f"🗑 Удалено: {len(deleted)}", f"🗑 Deleted: {len(deleted)}")] + [f"• {repo}" for repo in deleted]
+    if failed:
+        lines.append(ui(update, f"\n⚠️ Не удалось: {len(failed)}", f"\n⚠️ Failed: {len(failed)}"))
+        lines += [f"• {repo}: {reason}" for repo, reason in failed]
+        if any("403" in reason for _, reason in failed):
+            lines.append(ui(
+                update,
+                "\nУ подключения GitHub нет права удалять репозитории. Владелец бота: GitHub → Settings → Developer settings → "
+                "GitHub Apps → приложение бота → Permissions → Administration: Read and write, сохраните и примите новые права. "
+                "При входе по токену нужен токен с правом Administration — Read and write.",
+                "\nThe GitHub connection may not delete repositories. Bot owner: GitHub → Settings → Developer settings → "
+                "GitHub Apps → the bot's app → Permissions → Administration: Read and write, save and accept the new permissions. "
+                "With a token, it needs Administration — Read and write."))
+    await send(query.message, "\n".join(lines))
+
+
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if not await authorized(update, context):
@@ -890,17 +935,33 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(query.message, ui(update, "🧹 Память очищена. Начнём новый диалог!", "🧹 Memory cleared. Let's start a new conversation!"))
         return
 
-    if data.startswith(("apply:", "cancel:")):
+    if data.startswith(("apply:", "cancel:", "del1:", "del2:")):
         action, pid = data.split(":", 1)
         change = context.bot_data["pending"].get(pid)
         if not change or change["user_id"] != user_id:
             await query.answer(ui(update, "Изменение устарело — попросите ещё раз", "This change expired — please ask again"), show_alert=True)
             return
+        deletion = change.get("kind") == "delete_repos"
         if action == "cancel":
             context.bot_data["pending"].pop(pid, None)
             await query.answer(ui(update, "Отменено", "Cancelled"))
             await query.edit_message_reply_markup(reply_markup=None)
-            await send(query.message, ui(update, "❌ Изменения отменены, репозиторий не тронут.", "❌ Changes cancelled; the repository is untouched."))
+            if deletion:
+                await send(query.message, ui(update, "❌ Удаление отменено, репозитории не тронуты.", "❌ Deletion cancelled; nothing was deleted."))
+            else:
+                await send(query.message, ui(update, "❌ Изменения отменены, репозиторий не тронут.", "❌ Changes cancelled; the repository is untouched."))
+            return
+        if action == "del1" and deletion:
+            await query.answer()
+            await query.edit_message_reply_markup(reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton(ui(update, "⚠️ Да, удалить навсегда", "⚠️ Yes, delete forever"), callback_data=f"del2:{pid}"),
+                InlineKeyboardButton(ui(update, "❌ Отмена", "❌ Cancel"), callback_data=f"cancel:{pid}")]]))
+            return
+        if action == "del2" and deletion:
+            await confirm_deletion(update, context, query, pid, change)
+            return
+        if deletion or action != "apply":
+            await query.answer()
             return
         if change.get("applying"):
             await query.answer()
@@ -1024,7 +1085,9 @@ async def ensure_logo(app):
         try:
             pack = await app.bot.get_sticker_set(name)
         except BadRequest:
-            sticker = InputSticker(InputFile(LOGO_EMOJI_FILE.read_bytes(), filename="logo.webm"), ["✨"], format="video")
+            # attach=True: the file is uploaded as attach://… inside the sticker list (otherwise "sticker" is null).
+            upload = InputFile(LOGO_EMOJI_FILE.read_bytes(), filename="logo.webm", attach=True)
+            sticker = InputSticker(upload, ["✨"], format="video")
             await app.bot.create_new_sticker_set(owner, name, "Secret AI", [sticker], sticker_type="custom_emoji")
             pack = await app.bot.get_sticker_set(name)
         emoji_id = pack.stickers[0].custom_emoji_id
@@ -1039,7 +1102,8 @@ async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
     if not app.bot_data.get("logo_id"):
-        app.create_task(ensure_logo(app))
+        # The application is not running yet inside post_init, so start a plain task and keep a reference.
+        app.bot_data["logo_task"] = asyncio.create_task(ensure_logo(app))
     try:
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")

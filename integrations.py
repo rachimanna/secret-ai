@@ -271,6 +271,15 @@ GITHUB_TOOLS = [
                                  "required": ["find", "replace"]}}},
              "required": ["path", "action"]}}},
          "required": ["repo", "message", "files"], "additionalProperties": False}},
+    {"type": "function", "name": "github_delete_repos",
+     "description": (
+         "Prepare deletion of whole repositories (irreversible). Nothing is deleted until the user confirms twice "
+         "in Telegram. Call github_list_repos first and pass exact owner/name values; never include repositories "
+         "the user asked to keep."),
+     "parameters": {"type": "object", "properties": {
+         "repos": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 50,
+                   "description": "owner/name of each repository to delete"}},
+         "required": ["repos"], "additionalProperties": False}},
 ]
 
 
@@ -302,7 +311,9 @@ class Toolbox:
                 f"The user connected GitHub as @{self.github['meta'].get('login', '?')}; use the github_* tools for their repositories. "
                 "To change a repository, inspect and read the relevant files first, then call github_propose_changes once with all changes. "
                 "Changes are applied only after the user presses Confirm, so never say they are already done; "
-                "briefly summarize what will change and ask them to confirm below.")
+                "briefly summarize what will change and ask them to confirm below. "
+                "You can also delete whole repositories with github_delete_repos: list the repositories first, then "
+                "prepare the deletion; the user confirms twice in Telegram. Do not tell the user you cannot delete repositories.")
         if self.mcp:
             parts.append("Connected services (MCP): " + ", ".join(s["label"] for s in self.mcp) + ".")
         if self.app_names:
@@ -317,6 +328,7 @@ class Toolbox:
             "github_list_files": ("Смотрю файлы", "Looking at files"),
             "github_read_file": (f"Читаю {path}", f"Reading {path}"),
             "github_propose_changes": ("Готовлю изменения", "Preparing changes"),
+            "github_delete_repos": ("Готовлю удаление", "Preparing deletion"),
         }
         ru_text, en_text = labels.get(name, ("Работаю", "Working"))
         return ru_text if ru else en_text
@@ -331,6 +343,8 @@ class Toolbox:
                 repos = await gh.call("GET", "/user/repos", params={"sort": "updated", "per_page": 50})
                 return "\n".join(f"{r['full_name']} ({'private' if r['private'] else 'public'}, default branch {r['default_branch']})"
                                  for r in repos) or "No repositories."
+            if name == "github_delete_repos":
+                return await self._propose_delete(gh, args.get("repos") or [])
             repo = self._repo(args.get("repo"))
             if name == "github_list_files":
                 branch = args.get("branch") or await self._default_branch(gh, repo)
@@ -366,6 +380,30 @@ class Toolbox:
 
     async def _default_branch(self, gh, repo):
         return (await gh.call("GET", f"/repos/{repo}"))["default_branch"]
+
+    async def _propose_delete(self, gh, names):
+        repos, problems = [], []
+        for name in names:
+            try:
+                repo = self._repo(name)
+            except GitHubError as exc:
+                problems.append(f"{name}: {exc}")
+                continue
+            info = await gh.call("GET", f"/repos/{repo}", allow_404=True)
+            if info is None:
+                problems.append(f"{repo}: not found or no access")
+            elif info.get("permissions", {}).get("admin") is False:
+                problems.append(f"{repo}: the user is not an admin of this repository, GitHub won't allow deleting it")
+            elif info["full_name"] not in repos:
+                repos.append(info["full_name"])
+        if not repos:
+            raise GitHubError("nothing to delete. " + "; ".join(problems))
+        pid = uuid.uuid4().hex[:12]
+        self.pending[pid] = {"kind": "delete_repos", "user_id": self.user_id, "repos": repos, "created": time.time()}
+        self.proposals.append(pid)
+        skipped = (" Skipped: " + "; ".join(problems) + ".") if problems else ""
+        return (f"Prepared deletion of {len(repos)} repositories, NOT deleted yet: {', '.join(repos)}.{skipped} "
+                "The user now sees a Delete button and must confirm twice.")
 
     async def _propose(self, gh, repo, args):
         default = await self._default_branch(gh, repo)
@@ -474,6 +512,31 @@ async def apply_change(http, store, change):
         pull = existing[0] if existing else await gh.call(
             "POST", f"/repos/{repo}/pulls", json={"title": title, "head": branch, "base": change["default"], "body": change["message"]})
     return commit["html_url"], pull["html_url"] if pull else None
+
+
+def describe_deletion(change, language="ru"):
+    names = "\n".join(f"• {repo}" for repo in change["repos"])
+    if language == "ru":
+        return (f"🗑 Удаление репозиториев: {len(change['repos'])}\n{names}\n\n"
+                "⚠️ Это необратимо: код, issues, pull request'ы и история пропадут навсегда. Пока ничего не удалено.")
+    return (f"🗑 Deleting repositories: {len(change['repos'])}\n{names}\n\n"
+            "⚠️ This is irreversible: code, issues, pull requests and history are gone for good. Nothing is deleted yet.")
+
+
+async def delete_repos(http, store, change):
+    """Delete confirmed repositories one by one; return (deleted, [(repo, reason)])."""
+    github = store.get(change["user_id"], "github")
+    if not github:
+        raise GitHubError("GitHub is not connected anymore")
+    gh = GitHub(http, github[0]["token"])
+    deleted, failed = [], []
+    for repo in change["repos"]:
+        try:
+            await gh.call("DELETE", f"/repos/{repo}")
+            deleted.append(repo)
+        except GitHubError as exc:
+            failed.append((repo, str(exc)))
+    return deleted, failed
 
 
 def check_mcp(label, url):

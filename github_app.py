@@ -42,7 +42,7 @@ class GitHubApps:
             "public": True,
             "request_oauth_on_install": False,
             "hook_attributes": {"url": public_url + "/health", "active": False},
-            "default_permissions": {"contents": "write", "pull_requests": "write", "metadata": "read"},
+            "default_permissions": {"contents": "write", "pull_requests": "write", "administration": "write", "metadata": "read"},
             "default_events": [],
         }
         action = "https://github.com/settings/apps/new?state=" + quote(state)
@@ -72,7 +72,7 @@ class GitHubApps:
         query = {"client_id": creds["client_id"], "state": state, "redirect_uri": public_url + "/oauth/github/callback",
                  "allow_signup": "true"}
         if not creds["slug"]:
-            query["scope"] = "repo"  # classic OAuth App; a GitHub App takes its permissions from the app itself
+            query["scope"] = "repo delete_repo"  # classic OAuth App; a GitHub App takes its permissions from the app itself
         return "https://github.com/login/oauth/authorize?" + urlencode(query)
 
     def install_url(self):
