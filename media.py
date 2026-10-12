@@ -12,11 +12,14 @@ import httpx
 import imageio_ffmpeg
 
 FAL_QUEUE = "https://queue.fal.run"
-# Photos: fal.ai. Videos: Higgsfield (Seedance with native sound and speech). A Google Veo id ("veo-...") or a fal id
-# ("fal-ai/...") can be set instead.
-DEFAULT_MODELS = {"photo": "fal-ai/flux/schnell", "video": "bytedance/seedance-2.5/text-to-video"}
-OLD_VIDEO_DEFAULTS = ("fal-ai/kling-video/v2.6/pro/text-to-video", "veo-3.1-fast-generate-preview")
-TIMEOUTS = {"photo": 180, "video": 1800}
+# Photos and videos: fal.ai, one key. Video scenes come from Kling without sound; MMAudio then adds real sound effects
+# (steps, nature, city) and the bot lays a Russian voice-over on top. A Higgsfield id ("bytedance/...") or a Google Veo id
+# ("veo-...") can be set instead; they need their own keys.
+DEFAULT_MODELS = {"photo": "fal-ai/flux/schnell", "video": "fal-ai/kling-video/v2.6/pro/text-to-video"}
+OLD_VIDEO_DEFAULTS = ("veo-3.1-fast-generate-preview", "bytedance/seedance-2.5/text-to-video")
+SOUND_MODEL = "fal-ai/mmaudio-v2"  # video-to-audio: sound effects that match the picture, about $0.001 per second
+FAL_SCENE_SECONDS = 10  # Kling makes 5- or 10-second clips
+TIMEOUTS = {"photo": 180, "video": 1800, "sound": 300}
 POLL_SECONDS = 3
 
 # format id -> (fal image_size, video aspect_ratio)
@@ -57,7 +60,7 @@ def build_input(kind, prompt, fmt, seconds=5, model=""):
     image_size, aspect = FORMATS.get(fmt, FORMATS["square"])
     if kind == "photo":
         return {"prompt": prompt, "image_size": image_size, "num_images": 1, "enable_safety_checker": True}
-    data = {"prompt": prompt, "aspect_ratio": aspect, "duration": "10" if seconds >= 10 else "5"}
+    data = {"prompt": prompt, "aspect_ratio": aspect, "duration": "10" if seconds >= 8 else "5"}
     if any(name in model for name in NATIVE_AUDIO):
         data["generate_audio"] = False
     return data
@@ -80,8 +83,18 @@ def result_url(data):
 
 async def fal_generate(http, key, model, kind, prompt, fmt, seconds=5):
     """Run one generation and return the URL of the result."""
+    return await fal_run(http, key, model, build_input(kind, prompt, fmt, seconds, model), TIMEOUTS[kind])
+
+
+async def fal_sound(http, key, video_url, prompt, seconds):
+    """Add sound effects to a silent clip with MMAudio; returns the URL of the clip with sound."""
+    payload = {"video_url": video_url, "prompt": prompt, "duration": seconds, "num_steps": 25, "cfg_strength": 4.5}
+    return await fal_run(http, key, SOUND_MODEL, payload, TIMEOUTS["sound"])
+
+
+async def fal_run(http, key, model, payload, timeout):
+    """Submit to fal's queue, wait and return the URL of the result."""
     headers = {"Authorization": f"Key {key}", "Content-Type": "application/json"}
-    payload = build_input(kind, prompt, fmt, seconds, model)
     try:
         response = await http.post(f"{FAL_QUEUE}/{model}", headers=headers, json=payload, timeout=30)
         if response.status_code == 422 and "generate_audio" in payload:
@@ -100,7 +113,7 @@ async def fal_generate(http, key, model, kind, prompt, fmt, seconds=5):
     status_url, response_url = job.get("status_url"), job.get("response_url")
     if not status_url or not response_url:
         raise MediaError("failed", "no request id")
-    deadline = time.monotonic() + TIMEOUTS[kind]
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         await asyncio.sleep(POLL_SECONDS)
         try:
@@ -156,7 +169,7 @@ async def _has_audio(path):
     return b"Audio:" in err
 
 
-async def montage(clips, fmt, voice=None, keep_sound=False):
+async def montage(clips, fmt, voice=None, keep_sound=False, sound_volume=0.22):
     """Join video clips (bytes) into one MP4 with the same frame and lay an optional voice-over (bytes) on top.
 
     The clips' own sound is dropped unless keep_sound: video models put foreign-language speech there. Returns MP4 bytes.
@@ -185,7 +198,7 @@ async def montage(clips, fmt, voice=None, keep_sound=False):
         narration, final = folder / "voice.mp3", folder / "final.mp4"
         narration.write_bytes(voice)
         await _ffmpeg("-i", str(joined), "-i", str(narration), "-filter_complex",
-                      "[0:a]volume=0.22[bg];[1:a]apad[vo];[bg][vo]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
+                      f"[0:a]volume={sound_volume}[bg];[1:a]apad[vo];[bg][vo]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[a]",
                       "-map", "0:v", "-map", "[a]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart",
                       str(final))
         return final.read_bytes()

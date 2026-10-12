@@ -36,8 +36,8 @@ import miniapp
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, fal_generate, hf_generate, montage, price, veo_generate, video_provider)
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+                   VIDEO_PRICES, MediaError, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -1019,27 +1019,29 @@ async def plan_scenes(data, job):
     """Split the idea into scenes: an English visual prompt and a voice-over line in the user's language for each."""
     seconds, ru = job["seconds"], job["language"] == "ru"
     count = max(1, seconds // SCENE_SECONDS)
-    per_scene = min(seconds, SCENE_SECONDS)
+    per_scene = FAL_SCENE_SECONDS
     words = max(6, int(per_scene * 1.8))
     instructions = (
         f"You plan a {seconds}-second AI video made of {count} consecutive scene(s), {per_scene} seconds each. "
         "For every scene write 'visual': a self-contained English prompt for a text-to-video model (repeat the main "
         "characters' look, setting and style in every scene so they stay consistent; camera movement; no on-screen text; "
-        "nobody speaks). " +
+        "nobody speaks). Write 'sound': a short English description of the sound effects heard in that scene "
+        "(footsteps, wind, birds, rain, water, traffic, crowd murmur, doors...), no speech and no music. " +
         (f"Also write 'voice': a natural voice-over line in {'Russian' if ru else 'the language of the request'} for that "
          f"scene, at most {words} words, together telling the story. " if job["voice"] else "Set 'voice' to an empty string. ") +
-        'Return JSON: {"scenes": [{"visual": "...", "voice": "..."}]}.')
+        'Return JSON: {"scenes": [{"visual": "...", "sound": "...", "voice": "..."}]}.')
     try:
         response = await data["client"].responses.create(
             model=data["model"], instructions=instructions, input=job["prompt"], store=False, max_output_tokens=4000,
             text={"format": {"type": "json_object"}})
         scenes = json.loads(response.output_text)["scenes"][:count]
-        scenes = [{"visual": str(s["visual"]).strip(), "voice": str(s.get("voice") or "").strip()} for s in scenes if s.get("visual")]
+        scenes = [{"visual": str(s["visual"]).strip(), "sound": str(s.get("sound") or "").strip(),
+                   "voice": str(s.get("voice") or "").strip()} for s in scenes if s.get("visual")]
     except Exception as exc:  # planning is a nicety: fall back to the raw idea
         LOG.warning("Scene planning failed: %s", type(exc).__name__)
         scenes = []
     if len(scenes) < count:
-        scenes += [{"visual": f"{job['prompt']} (part {i + 1} of {count})", "voice": ""} for i in range(len(scenes), count)]
+        scenes += [{"visual": f"{job['prompt']} (part {i + 1} of {count})", "sound": "", "voice": ""} for i in range(len(scenes), count)]
     return scenes
 
 
@@ -1100,11 +1102,12 @@ async def make_veo_video(data, job):
 async def make_video(data, job):
     """Generate the scenes in parallel, voice them and edit them into one MP4. Returns the video bytes."""
     scenes = await plan_scenes(data, job)
-    clip_seconds = min(job["seconds"], SCENE_SECONDS)
     quiet = " No dialogue, nobody talks, no lip movement."
     urls = await asyncio.gather(*[
-        fal_generate(data["http"], job["key"], job["model"], "video", scene["visual"].rstrip(". ") + "." + quiet, job["fmt"], clip_seconds)
+        fal_generate(data["http"], job["key"], job["model"], "video", scene["visual"].rstrip(". ") + "." + quiet, job["fmt"],
+                     FAL_SCENE_SECONDS)
         for scene in scenes])
+    urls = await asyncio.gather(*[add_sound(data, job, url, scene) for url, scene in zip(urls, scenes)])
     clips = []
     for url in urls:
         response = await data["http"].get(url, timeout=180)
@@ -1119,7 +1122,17 @@ async def make_video(data, job):
             voice = speech.content
         except Exception as exc:  # a video without voice is still a result
             LOG.warning("Voice-over failed: %s", type(exc).__name__)
-    return await montage(clips, job["fmt"], voice)
+    return await montage(clips, job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0)
+
+
+async def add_sound(data, job, url, scene):
+    """Sound effects for a silent clip (MMAudio); on failure the clip stays silent."""
+    prompt = scene["sound"] or "natural ambient sound effects matching the scene"
+    try:
+        return await fal_sound(data["http"], job["key"], url, prompt + ". No speech, no music.", FAL_SCENE_SECONDS)
+    except Exception as exc:  # a video without effects is still a result
+        LOG.warning("Sound effects failed: %s", type(exc).__name__)
+        return url
 
 
 async def generation_job(app, job):
