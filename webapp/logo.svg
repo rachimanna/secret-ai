@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" class="sai-logo" role="img" aria-label="Secret AI">
+  <defs>
+    <linearGradient id="sai-body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset=".72" stop-color="#eef0ff"/>
+      <stop offset="1" stop-color="#cfd4ff"/>
+    </linearGradient>
+    <radialGradient id="sai-sheen" cx=".32" cy=".2" r=".55">
+      <stop offset="0" stop-color="#fff" stop-opacity=".95"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sai-lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b2f6b"/>
+      <stop offset=".55" stop-color="#14152e"/>
+      <stop offset="1" stop-color="#3b2a8c"/>
+    </linearGradient>
+    <clipPath id="sai-lenses">
+      <path d="M27 50h29.5c3 0 5 2.4 4.4 5.3l-1.6 7.9C58 69.6 53 74 46.7 74h-6.2C34 74 29 69.5 27.9 63.3L26.6 55.6C26 52.6 24 50 27 50Z"/>
+      <path d="M101 50H71.5c-3 0-5 2.4-4.4 5.3l1.6 7.9C70 69.6 75 74 81.3 74h6.2C94 74 99 69.5 100.1 63.3l1.3-7.7c.6-3 2.6-5.6-.4-5.6Z"/>
+    </clipPath>
+  </defs>
+  <style>
+    .sai-logo .sai-float { animation: sai-float 3.6s ease-in-out infinite; transform-origin: 64px 64px; }
+    .sai-logo .sai-shadow { animation: sai-shadow 3.6s ease-in-out infinite; transform-origin: 64px 121px; }
+    .sai-logo .sai-glasses { animation: sai-peek 7s cubic-bezier(.5,0,.3,1) infinite; }
+    .sai-logo .sai-glint { animation: sai-glint 3.5s ease-in-out infinite; }
+    .sai-logo .sai-wink { animation: sai-wink 7s infinite; transform-origin: 84px 57px; }
+    @keyframes sai-float { 50% { transform: translateY(-5px) rotate(-1.5deg); } }
+    @keyframes sai-shadow { 50% { transform: scaleX(.82); opacity: .45; } }
+    @keyframes sai-peek { 0%, 70%, 100% { transform: translateY(0); } 76%, 88% { transform: translateY(16px); } }
+    @keyframes sai-glint { 0%, 55% { transform: translateX(-60px); } 85%, 100% { transform: translateX(110px); } }
+    @keyframes sai-wink { 0%, 79%, 85%, 100% { transform: scaleY(1); } 82% { transform: scaleY(.12); } }
+    @media (prefers-reduced-motion: reduce) { .sai-logo * { animation: none !important; } }
+  </style>
+  <ellipse class="sai-shadow" cx="64" cy="121" rx="30" ry="4" fill="#000" opacity=".28"/>
+  <g class="sai-float">
+    <path fill="url(#sai-body)" d="M64 9c28.7 0 47 21.6 47 50v41c0 9.4-10 13.8-16.6 7.3-4.3-4.3-10.4-4.3-14.7 0-4.4 4.4-11 4.4-15.4 0-4.4-4.4-11-4.4-15.4 0-4.3 4.3-10.4 4.3-14.7 0C27 113.8 17 109.4 17 100V59C17 30.6 35.3 9 64 9Z"/>
+    <path fill="url(#sai-sheen)" d="M64 9c28.7 0 47 21.6 47 50v41c0 9.4-10 13.8-16.6 7.3-4.3-4.3-10.4-4.3-14.7 0-4.4 4.4-11 4.4-15.4 0-4.4-4.4-11-4.4-15.4 0-4.3 4.3-10.4 4.3-14.7 0C27 113.8 17 109.4 17 100V59C17 30.6 35.3 9 64 9Z"/>
+    <ellipse cx="44" cy="57" rx="5" ry="6.5" fill="#1b1c3a"/>
+    <ellipse class="sai-wink" cx="84" cy="57" rx="5" ry="6.5" fill="#1b1c3a"/>
+    <circle cx="35" cy="84" r="6" fill="#ff8fb6" opacity=".35"/>
+    <circle cx="93" cy="84" r="6" fill="#ff8fb6" opacity=".35"/>
+    <path d="M55 86.5c5.4 5.4 12.6 5.4 18 0" fill="none" stroke="#1b1c3a" stroke-width="3.6" stroke-linecap="round"/>
+    <g class="sai-glasses">
+      <rect x="20" y="47.5" width="88" height="6" rx="3" fill="#14152e"/>
+      <g fill="url(#sai-lens)">
+        <path d="M27 50h29.5c3 0 5 2.4 4.4 5.3l-1.6 7.9C58 69.6 53 74 46.7 74h-6.2C34 74 29 69.5 27.9 63.3L26.6 55.6C26 52.6 24 50 27 50Z"/>
+        <path d="M101 50H71.5c-3 0-5 2.4-4.4 5.3l1.6 7.9C70 69.6 75 74 81.3 74h6.2C94 74 99 69.5 100.1 63.3l1.3-7.7c.6-3 2.6-5.6-.4-5.6Z"/>
+      </g>
+      <g clip-path="url(#sai-lenses)">
+        <path d="M30 52h18" stroke="#7d86ff" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+        <path d="M74 52h18" stroke="#7d86ff" stroke-width="2" stroke-linecap="round" opacity=".55"/>
+        <g class="sai-glint"><path d="M14 46h9l-14 32H0Z M27 46h4l-14 32h-4Z" fill="#fff" opacity=".7"/></g>
+      </g>
+    </g>
+  </g>
+</svg>

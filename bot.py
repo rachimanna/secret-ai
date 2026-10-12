@@ -26,12 +26,14 @@ from openai import (
     RateLimitError,
 )
 from telegram import (BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, MessageEntity, Update,
-                      WebAppInfo)
+                      User, WebAppInfo)
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (Application, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
+                          filters)
 
 import miniapp
+from apps import Pipedream, PipedreamError
 from integrations import Connections, GitHubError, Toolbox, apply_change, describe, prune_pending
 
 LOG = logging.getLogger("secret_ai")
@@ -98,6 +100,8 @@ class Memory:
         self.db.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL)")
         self.db.execute("CREATE INDEX IF NOT EXISTS by_user ON messages(user_id, id)")
         self.db.execute("CREATE TABLE IF NOT EXISTS settings (user_id INTEGER PRIMARY KEY, persona TEXT NOT NULL)")
+        if "model" not in [row[1] for row in self.db.execute("PRAGMA table_info(settings)")]:
+            self.db.execute("ALTER TABLE settings ADD COLUMN model TEXT")
         self.db.commit()
 
     def history(self, user_id):
@@ -139,6 +143,18 @@ class Memory:
     def set_persona(self, user_id, persona):
         with self.db:
             self.db.execute("INSERT INTO settings(user_id, persona) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET persona=excluded.persona", (user_id, persona))
+
+    def model(self, user_id):
+        row = self.db.execute("SELECT model FROM settings WHERE user_id=?", (user_id,)).fetchone()
+        return row[0] if row else None
+
+    def set_model(self, user_id, model):
+        with self.db:
+            self.db.execute("INSERT INTO settings(user_id, persona, model) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET model=excluded.model",
+                            (user_id, DEFAULT_PERSONA, model))
+
+    def count(self, user_id):
+        return self.db.execute("SELECT COUNT(*) FROM messages WHERE user_id=?", (user_id,)).fetchone()[0]
 
     def close(self):
         self.db.close()
@@ -605,7 +621,7 @@ HELP_RU = (
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
     "/myid — ваш Telegram ID\n"
-    "/app — подключить GitHub и другие сервисы\n"
+    "/app — Mini App: приложения в одно касание, режимы, модель\n"
     "/emojiid — узнать ID анимированного эмодзи\n"
     "/help — эта справка\n\n"
     "Я помню последние 30 сообщений нашего диалога."
@@ -618,7 +634,7 @@ HELP_EN = (
     "/reset — clear memory\n"
     "/export — download the conversation\n"
     "/myid — your Telegram ID\n"
-    "/app — connect GitHub and other services\n"
+    "/app — Mini App: one-tap apps, modes, model\n"
     "/emojiid — get a custom emoji ID\n"
     "/help — this help\n\n"
     "I remember our last 30 messages."
@@ -682,10 +698,10 @@ async def open_app(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(update.effective_message, ui(update, "Mini App не настроен: задайте PUBLIC_URL (на Render он определяется сам).",
                                                 "The Mini App is not configured: set PUBLIC_URL (Render sets it automatically)."))
         return
-    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(ui(update, "🧩 Открыть Secret AI", "🧩 Open Secret AI"), web_app=WebAppInfo(url))]])
+    keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(ui(update, "✨ Открыть Secret AI", "✨ Open Secret AI"), web_app=WebAppInfo(url))]])
     await send(update.effective_message, ui(
-        update, "Подключите GitHub и другие сервисы, а потом просто пишите, например: «измени в моём репо README и удали old.py».",
-        "Connect GitHub and other services, then just write, e.g. “update README in my repo and delete old.py”."), keyboard)
+        update, "Подключайте приложения одной кнопкой — Gmail, Notion, Slack, GitHub и тысячи других — и просто пишите, что сделать.",
+        "Connect apps with one tap — Gmail, Notion, Slack, GitHub and thousands more — then just tell me what to do."), keyboard)
 
 
 async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -761,19 +777,38 @@ async def read_question(update, context):
     return question, question, question
 
 
+def user_model(bot_data, user_id):
+    chosen = bot_data["memory"].model(user_id)
+    return chosen if chosen in bot_data["models"] else bot_data["model"]
+
+
+async def app_tools(bot_data, user_id, taken):
+    """MCP tools of apps the user connected in one tap; a Pipedream outage must not break the answer."""
+    pipedream = bot_data["pipedream"]
+    if not pipedream.enabled:
+        return [], []
+    try:
+        return await asyncio.to_thread(pipedream.mcp_tools, user_id, taken)
+    except (PipedreamError, httpx.HTTPError, KeyError, ValueError) as exc:
+        LOG.warning("Connected apps unavailable: %s", type(exc).__name__)
+        return [], []
+
+
 async def respond(update, context, target, content, saved_question):
     user_id = update.effective_user.id
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
     prune_pending(context.bot_data["pending"])
-    toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update))
+    taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
+    toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
+                      apps=await app_tools(context.bot_data, user_id, taken))
     instructions = SYSTEM + (" " + persona[3] if persona[3] else "") + " Telegram language: " + (update.effective_user.language_code or "ru")
     if toolbox.instructions():
         instructions += " " + toolbox.instructions()
     live = await open_reply(target, lang(update), context.bot_data)
     try:
         answer, incomplete = await generate(
-            context, live, toolbox, model=context.bot_data["model"], instructions=instructions,
+            context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
             input=memory.history(user_id) + [{"role": "user", "content": content}],
             store=False, max_output_tokens=16000 if toolbox.definitions() else 6000)
     except BaseException:
@@ -917,6 +952,14 @@ async def on_error(update, context):
     LOG.error("Handler error: %s", type(error).__name__)
     if not isinstance(update, Update) or not update.effective_message or not update.effective_user:
         return
+    try:
+        await send(update.effective_message, ui(update, *error_text(error)))
+    except TelegramError:
+        LOG.warning("Error notification could not be delivered")
+
+
+def error_text(error):
+    """(Russian, English) explanation of a failed answer."""
     ru, en = "Не удалось обработать сообщение. Попробуйте ещё раз чуть позже.", "Couldn't process your message. Please try again later."
     if isinstance(error, RateLimitError):
         ru, en = "Достигнут лимит OpenAI или закончился баланс API. Попробуйте позже или сообщите владельцу бота.", "OpenAI rate or billing limit reached. Try later or contact the bot owner."
@@ -930,10 +973,7 @@ async def on_error(update, context):
         ru, en = "Файл обрабатывался слишком долго. Попробуйте запись покороче.", "Processing the file took too long. Try a shorter recording."
     elif isinstance(error, ValueError):
         ru, en = "Не удалось обработать файл. Голосовое — до 10 минут и 19 МБ, фото — до 19 МБ.", "Couldn't process this file. Voice limit: 10 minutes and 19 MB; photo limit: 19 MB."
-    try:
-        await send(update.effective_message, ui(update, ru, en))
-    except TelegramError:
-        LOG.warning("Error notification could not be delivered")
+    return ru, en
 
 
 COMMANDS = {
@@ -959,17 +999,82 @@ async def post_init(app):
 async def shutdown(app):
     await app.bot_data["client"].close()
     await app.bot_data["http"].aclose()
+    app.bot_data["pipedream"].http.close()
     app.bot_data["memory"].close()
     app.bot_data["connections"].close()
 
 
-def notifier(app):
-    """Send a message from the HTTP thread (e.g. after GitHub sign-in)."""
-    def notify(user_id, text):
-        loop = app.bot_data.get("loop")
-        if loop:
-            asyncio.run_coroutine_threadsafe(app.bot.send_message(user_id, text), loop)
-    return notify
+class MiniAppUpdate:
+    """Just enough of an Update for respond(): a request started from the Mini App."""
+
+    def __init__(self, user, message):
+        self.effective_user, self.effective_message, self.effective_chat = user, message, message.chat
+
+
+async def run_prompt(app, tg_user, text):
+    """Answer a scenario picked in the Mini App as if the user had sent it."""
+    user = User(id=tg_user["id"], first_name=tg_user.get("first_name") or "", is_bot=False,
+                language_code=tg_user.get("language_code"))
+    context = CallbackContext(app, chat_id=user.id, user_id=user.id)
+    try:
+        message = await app.bot.send_message(user.id, "💬 " + text)
+    except TelegramError:
+        LOG.warning("Could not start a Mini App request")
+        return
+    update = MiniAppUpdate(user, message)
+    try:
+        async with user_lock(context, user.id):
+            await respond(update, context, message, text, text)
+    except Exception as exc:  # the same user-facing explanations as for regular messages
+        LOG.error("Mini App request error: %s", type(exc).__name__)
+        try:
+            await send(message, ui(update, *error_text(exc)))
+        except TelegramError:
+            pass
+
+
+class Bridge:
+    """Runs bot-side work for the Mini App HTTP thread on the bot's event loop (SQLite and Telegram live there)."""
+
+    def __init__(self, app):
+        self.app = app
+
+    def _run(self, coro, wait=True):
+        loop = self.app.bot_data.get("loop")
+        if not loop:
+            coro.close()
+            raise RuntimeError("bot is not running yet")
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=15) if wait else None
+
+    def notify(self, user_id, text):
+        self._run(self.app.bot.send_message(user_id, text), wait=False)
+
+    def ask(self, tg_user, text):
+        self._run(run_prompt(self.app, tg_user, text), wait=False)
+
+    def settings(self, user_id):
+        async def read():
+            data, memory = self.app.bot_data, self.app.bot_data["memory"]
+            return {"persona": memory.persona(user_id), "model": user_model(data, user_id),
+                    "models": data["models"], "messages": memory.count(user_id),
+                    "personas": [{"id": pid, "emoji": p[0], "ru": p[1], "en": p[2]} for pid, p in PERSONAS.items()]}
+        return self._run(read())
+
+    def update(self, user_id, persona=None, model=None):
+        async def write():
+            memory = self.app.bot_data["memory"]
+            if persona in PERSONAS:
+                memory.set_persona(user_id, persona)
+            if model in self.app.bot_data["models"]:
+                memory.set_model(user_id, model)
+        self._run(write())
+
+    def reset(self, user_id):
+        async def clear():
+            async with self.app.bot_data["locks"][user_id]:
+                self.app.bot_data["memory"].reset(user_id)
+        self._run(clear())
 
 
 def main():
@@ -991,12 +1096,18 @@ def main():
         raise SystemExit("PUBLIC_URL must start with https:// (Telegram Mini Apps require HTTPS).")
     # Service tokens are encrypted with ENCRYPTION_KEY; without it the key is derived from the bot token.
     connections = Connections(database, os.environ.get("ENCRYPTION_KEY", "").strip() or token)
+    model = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
+    # Models offered in the Mini App picker; the first one stays the default for users who never chose.
+    models = [model] + [m for m in dict.fromkeys(x.strip() for x in os.environ.get("OPENAI_MODELS", "").split(",")) if m and m != model]
+    pipedream = Pipedream(os.environ.get("PIPEDREAM_CLIENT_ID", "").strip(), os.environ.get("PIPEDREAM_CLIENT_SECRET", "").strip(),
+                          os.environ.get("PIPEDREAM_PROJECT_ID", "").strip(), os.environ.get("PIPEDREAM_ENVIRONMENT", "production").strip(),
+                          os.environ.get("PIPEDREAM_MCP_URL", "").strip())
     app = Application.builder().token(token).concurrent_updates(True).post_init(post_init).post_shutdown(shutdown).build()
     app.bot_data.update(
         connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key, timeout=120, max_retries=2),
         memory=Memory(database), allowed=allowed,
-        model=os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna",
+        model=model, models=models, pipedream=pipedream,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
         logo=os.environ.get("BRAND_EMOJI", "🕶").strip() or "🕶",
@@ -1021,7 +1132,7 @@ def main():
     handler = miniapp.make_handler({
         "token": token, "allowed": allowed, "store": connections, "public_url": public_url,
         "oauth_id": os.environ.get("GITHUB_CLIENT_ID", "").strip(), "oauth_secret": os.environ.get("GITHUB_CLIENT_SECRET", "").strip(),
-        "notify": notifier(app)})
+        "bridge": Bridge(app), "pipedream": pipedream})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()

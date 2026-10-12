@@ -239,11 +239,13 @@ GITHUB_TOOLS = [
 class Toolbox:
     """Tools available to the model for one user and one reply."""
 
-    def __init__(self, http, store, pending, user_id, language="ru"):
+    def __init__(self, http, store, pending, user_id, language="ru", apps=((), ())):
         self.http, self.store, self.pending, self.user_id, self.language = http, store, pending, user_id, language
         github = store.get(user_id, "github")
         self.github = github[0] if github else None
         self.mcp = store.get(user_id, "mcp")
+        # Apps connected in one tap (Pipedream Connect): ready MCP tool definitions and their display names.
+        self.app_tools, self.app_names = list(apps[0]), list(apps[1])
         self.proposals = []
 
     def definitions(self):
@@ -253,7 +255,7 @@ class Toolbox:
             if server["token"]:
                 tool["headers"] = {"Authorization": f"Bearer {server['token']}"}
             tools.append(tool)
-        return tools
+        return tools + self.app_tools
 
     def instructions(self):
         parts = []
@@ -265,6 +267,8 @@ class Toolbox:
                 "briefly summarize what will change and ask them to confirm below.")
         if self.mcp:
             parts.append("Connected services (MCP): " + ", ".join(s["label"] for s in self.mcp) + ".")
+        if self.app_names:
+            parts.append("Connected apps (use their MCP tools when the request involves them): " + ", ".join(self.app_names) + ".")
         return " ".join(parts)
 
     def status(self, name, args):

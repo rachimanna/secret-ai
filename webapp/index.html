@@ -2,209 +2,953 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
 <title>Secret AI</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
-    --bg: var(--tg-theme-bg-color, #0e0b16);
-    --card: var(--tg-theme-secondary-bg-color, #1a1526);
-    --text: var(--tg-theme-text-color, #f2f0f7);
-    --hint: var(--tg-theme-hint-color, #9a93ab);
-    --accent: #8b5cf6;
-    --accent-2: #c084fc;
-    --ok: #34d399;
-    --danger: #f87171;
-    --line: color-mix(in srgb, var(--hint) 22%, transparent);
+    --hero-1: #4b55ff; --hero-2: #3b6cf0; --hero-3: #2b8be6;
+    --bg: #111114; --bg-2: #1c1c21;
+    --card: rgba(44, 44, 52, .62); --card-solid: #26262c;
+    --line: rgba(255, 255, 255, .09);
+    --text: #f5f5f7; --hint: rgba(235, 235, 245, .58); --hint-2: rgba(235, 235, 245, .32);
+    --accent: #4f8cff; --violet: #8b5cf6; --pink: #d946ef; --ok: #34c759; --danger: #ff453a; --warn: #ffd60a;
+    --glass: linear-gradient(180deg, rgba(255,255,255,.16), rgba(255,255,255,.06));
+    --glass-line: rgba(255, 255, 255, .2);
+    --glass-shadow: inset 0 1px 0 rgba(255,255,255,.32), inset 0 -1px 0 rgba(255,255,255,.06), 0 10px 30px rgba(0,0,0,.28);
+    --spring: cubic-bezier(.34, 1.56, .64, 1);
+    --ease: cubic-bezier(.22, 1, .36, 1);
+    --safe-top: max(env(safe-area-inset-top), var(--tg-content-safe-area-inset-top, 0px));
+    --safe-bottom: max(env(safe-area-inset-bottom), var(--tg-safe-area-inset-bottom, 0px));
   }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; }
-  main { max-width: 560px; margin: 0 auto; padding: 20px 16px 40px; }
-  header { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
-  .logo { width: 52px; height: 52px; border-radius: 16px; display: grid; place-items: center; font-size: 26px;
-          background: linear-gradient(135deg, var(--accent), var(--accent-2)); animation: breathe 3s ease-in-out infinite; }
-  @keyframes breathe { 50% { transform: scale(1.06); box-shadow: 0 0 24px color-mix(in srgb, var(--accent) 55%, transparent); } }
-  h1 { font-size: 22px; margin: 0; }
-  .sub { color: var(--hint); font-size: 14px; }
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--hint); margin: 26px 4px 10px; font-weight: 600; }
-  .card { background: var(--card); border-radius: 18px; padding: 16px; margin-bottom: 12px; }
-  .row { display: flex; align-items: center; gap: 12px; }
-  .icon { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: none; background: #24292f; }
-  .icon svg { width: 24px; height: 24px; fill: #fff; }
-  .grow { flex: 1; min-width: 0; }
-  .name { font-weight: 600; }
-  .status { font-size: 13px; color: var(--hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .status.on { color: var(--ok); }
-  .pill { font-size: 12px; padding: 3px 9px; border-radius: 99px; background: color-mix(in srgb, var(--ok) 18%, transparent); color: var(--ok); }
-  button { font: inherit; border: 0; border-radius: 12px; padding: 11px 16px; cursor: pointer; font-weight: 600; color: #fff;
-           background: linear-gradient(135deg, var(--accent), #7c3aed); }
-  button.ghost { background: transparent; color: var(--danger); padding: 8px 10px; }
-  button.wide { width: 100%; margin-top: 12px; }
-  button:disabled { opacity: .55; }
-  input { width: 100%; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
-          border-radius: 12px; padding: 11px 12px; margin-top: 10px; outline: none; }
-  input:focus { border-color: var(--accent); }
-  details summary { cursor: pointer; color: var(--accent-2); margin-top: 12px; font-size: 14px; list-style: none; }
-  details summary::-webkit-details-marker { display: none; }
-  .hint { color: var(--hint); font-size: 13px; margin-top: 8px; }
-  .hint a { color: var(--accent-2); }
-  .item { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
-  .item:first-child { border-top: 0; padding-top: 0; }
-  .examples li { margin: 6px 0; color: var(--text); }
-  .examples { padding-left: 18px; margin: 0; }
-  .toast { position: fixed; left: 16px; right: 16px; bottom: 20px; max-width: 528px; margin: 0 auto; padding: 12px 14px; border-radius: 14px;
-           background: #2a2238; color: #fff; opacity: 0; transform: translateY(10px); transition: .25s; pointer-events: none; }
-  .toast.show { opacity: 1; transform: none; }
-  .skeleton { color: var(--hint); text-align: center; padding: 40px 0; }
+  :root[data-theme="light"] {
+    --bg: #f2f2f7; --bg-2: #ffffff;
+    --card: rgba(255, 255, 255, .72); --card-solid: #ffffff;
+    --line: rgba(60, 60, 67, .12);
+    --text: #111114; --hint: rgba(60, 60, 67, .62); --hint-2: rgba(60, 60, 67, .3);
+    --glass: linear-gradient(180deg, rgba(255,255,255,.75), rgba(255,255,255,.45));
+    --glass-line: rgba(255, 255, 255, .8);
+    --glass-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 10px 30px rgba(30,30,60,.14);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); }
+  body { font: 17px/1.35 -apple-system, "SF Pro Text", system-ui, "Segoe UI", Roboto, sans-serif; letter-spacing: -.01em;
+         -webkit-font-smoothing: antialiased; overflow-x: hidden; min-height: 100vh; }
+  button { font: inherit; color: inherit; border: 0; background: none; padding: 0; cursor: pointer; }
+  input { font: inherit; color: var(--text); }
+  img { display: block; }
+  svg.i { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* ---------- background ---------- */
+  .backdrop { position: fixed; inset: 0 0 auto; height: 780px; z-index: 0; pointer-events: none; transition: opacity .5s var(--ease);
+    background:
+      radial-gradient(60% 40% at 15% 8%, rgba(139,92,246,.55), transparent 70%),
+      radial-gradient(55% 45% at 90% 20%, rgba(43,139,230,.6), transparent 70%),
+      linear-gradient(180deg, var(--hero-1) 0%, var(--hero-2) 34%, var(--hero-3) 52%, var(--bg) 82%); }
+  .backdrop::after { content: ""; position: absolute; inset: 0; background: radial-gradient(40% 25% at 50% 42%, rgba(255,255,255,.18), transparent 70%);
+    animation: drift 12s ease-in-out infinite alternate; }
+  @keyframes drift { to { transform: translate3d(0, 40px, 0) scale(1.15); } }
+  body[data-tab="apps"] .backdrop, body[data-tab="settings"] .backdrop { opacity: 0; }
+
+  /* ---------- layout ---------- */
+  main { position: relative; z-index: 1; max-width: 560px; margin: 0 auto; padding: calc(var(--safe-top) + 12px) 16px calc(var(--safe-bottom) + 120px); }
+  .view { display: none; }
+  .view.active { display: block; animation: view-in .55s var(--ease) both; }
+  @keyframes view-in { from { opacity: 0; transform: translateY(14px) scale(.985); filter: blur(6px); } }
+  .stagger > * { animation: rise .6s var(--ease) both; animation-delay: calc(var(--i, 0) * 55ms + 60ms); }
+  @keyframes rise { from { opacity: 0; transform: translateY(18px); } }
+
+  /* ---------- glass ---------- */
+  .glass { background: var(--glass); border: 1px solid var(--glass-line); box-shadow: var(--glass-shadow);
+           backdrop-filter: blur(24px) saturate(190%); -webkit-backdrop-filter: blur(24px) saturate(190%); }
+  .press { transition: transform .35s var(--spring), background-color .2s, opacity .2s; }
+  .press:active { transform: scale(.96); }
+
+  /* ---------- hero ---------- */
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; position: relative; z-index: 6; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 18px; border-radius: 22px; font-weight: 600; color: #fff; white-space: nowrap; }
+  .pill .chev { width: 16px; height: 16px; transition: transform .4s var(--spring); }
+  .pill[aria-expanded="true"] .chev { transform: rotate(180deg); }
+  .pill.cta { background: linear-gradient(135deg, rgba(168,85,247,.9), rgba(124,58,237,.85)); border-color: rgba(233,213,255,.55);
+              box-shadow: inset 0 1px 0 rgba(255,255,255,.45), 0 8px 26px rgba(139,92,246,.45); }
+  .topbar .pill.glass:not(.cta) { background: linear-gradient(180deg, rgba(255,255,255,.24), rgba(255,255,255,.1)); border-color: rgba(255,255,255,.35);
+                                  box-shadow: inset 0 1px 0 rgba(255,255,255,.4), 0 8px 24px rgba(20,20,90,.25); }
+  .pill .model-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+  .hero { text-align: center; padding: 26px 0 28px; color: #fff; }
+  .hero .logo { width: 150px; height: 150px; margin: 0 auto; position: relative; filter: drop-shadow(0 14px 30px rgba(20,20,80,.45)); }
+  .hero .logo::before { content: ""; position: absolute; inset: 14%; border-radius: 50%; background: radial-gradient(circle, rgba(255,255,255,.45), transparent 65%);
+                        animation: halo 3.6s ease-in-out infinite; z-index: -1; }
+  @keyframes halo { 50% { transform: scale(1.25); opacity: .55; } }
+  .hero h1 { font-size: 34px; line-height: 1.1; margin: 14px 0 6px; font-weight: 800; letter-spacing: -.025em; }
+  .hero p { margin: 0 auto; max-width: 330px; color: rgba(255,255,255,.78); font-size: 16px; }
+
+  /* ---------- model menu ---------- */
+  .menu { position: absolute; top: 52px; left: 0; width: min(330px, calc(100vw - 32px)); max-height: 60vh; overflow: auto; border-radius: 28px; padding: 8px;
+          transform-origin: 30px 0; transform: scale(.6) translateY(-10px); opacity: 0; pointer-events: none; filter: blur(8px);
+          transition: transform .5s var(--spring), opacity .25s, filter .3s; background: rgba(38,38,50,.96); }
+  :root[data-theme="light"] .menu { background: rgba(255,255,255,.92); }
+  .menu.open { transform: none; opacity: 1; pointer-events: auto; filter: none; }
+  .menu button { display: flex; width: 100%; text-align: left; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 20px; }
+  .menu button:active, .menu button.on { background: rgba(255,255,255,.1); }
+  .menu .t { font-weight: 600; font-size: 17px; }
+  .menu .d { color: var(--hint); font-size: 14px; }
+  .menu .check { margin-left: auto; color: var(--accent); opacity: 0; }
+  .menu button.on .check { opacity: 1; }
+
+  /* ---------- sections and lists ---------- */
+  .section { margin-top: 30px; }
+  .section > h2 { font-size: 26px; font-weight: 800; letter-spacing: -.02em; margin: 0 4px 2px; }
+  .section > .sub { color: var(--hint); margin: 0 4px 14px; font-size: 16px; }
+  .section > h2 + .list { margin-top: 12px; }
+  .list { background: var(--card); border-radius: 28px; overflow: hidden; border: 1px solid var(--line);
+          backdrop-filter: blur(30px) saturate(170%); -webkit-backdrop-filter: blur(30px) saturate(170%); }
+  .row { display: flex; align-items: center; gap: 14px; width: 100%; text-align: left; padding: 13px 16px; position: relative; min-height: 64px;
+         transition: background-color .25s; }
+  .row:active { background: rgba(255,255,255,.06); }
+  .row + .row::before { content: ""; position: absolute; top: 0; left: 72px; right: 16px; height: 1px; background: var(--line); }
+  .row.compact + .row.compact::before { left: 56px; }
+  .row .ic { width: 44px; height: 44px; border-radius: 13px; display: grid; place-items: center; flex: none; font-size: 30px; line-height: 1; overflow: hidden; }
+  .row .ic.tile { background: rgba(255,255,255,.94); box-shadow: 0 2px 8px rgba(0,0,0,.18); }
+  .row .ic.tile img { width: 30px; height: 30px; object-fit: contain; }
+  .row .ic.letter { background: linear-gradient(135deg, var(--violet), var(--accent)); color: #fff; font-size: 20px; font-weight: 700; }
+  .row .ic.sym { width: 32px; height: 32px; font-size: 22px; color: var(--text); }
+  .row .body { flex: 1; min-width: 0; }
+  .row .t { font-size: 17px; font-weight: 500; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .row .d { color: var(--hint); font-size: 15px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .row .d.ok { color: var(--ok); }
+  .row .val { color: var(--hint); font-size: 16px; white-space: nowrap; max-width: 45%; overflow: hidden; text-overflow: ellipsis; }
+  .row .chev { color: var(--hint-2); width: 18px; height: 18px; }
+  .row.more { color: var(--accent); font-weight: 500; min-height: 56px; }
+  .row.more .ic { width: 32px; height: 32px; color: var(--accent); }
+  .row.danger { color: var(--danger); }
+  .badge { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 8px; letter-spacing: .02em; text-transform: uppercase; }
+  .badge.new { background: var(--accent); color: #fff; }
+  .badge.on { background: rgba(52,199,89,.18); color: var(--ok); }
+  .badge.app { background: rgba(79,140,255,.16); color: var(--accent); text-transform: none; font-weight: 600; letter-spacing: 0; }
+  .plus { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; flex: none; color: var(--text);
+          transition: transform .45s var(--spring), background-color .3s, color .3s; }
+  .plus svg { width: 26px; height: 26px; stroke-width: 1.8; }
+  .plus.on { background: rgba(52,199,89,.16); color: var(--ok); transform: rotate(360deg); }
+  .plus.busy svg { animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .save { color: var(--ok); font-size: 14px; font-weight: 600; margin-top: 2px; display: flex; align-items: center; gap: 4px; }
+
+  /* ---------- quick cards ---------- */
+  .quick .row { min-height: 74px; }
+  .spark { width: 34px; height: 34px; flex: none; filter: drop-shadow(0 3px 8px var(--glow)); animation: twinkle 3s ease-in-out infinite; animation-delay: var(--d, 0s); }
+  @keyframes twinkle { 50% { transform: scale(.86) rotate(12deg); } }
+
+  /* ---------- apps tab ---------- */
+  .page-title { font-size: 34px; font-weight: 800; letter-spacing: -.03em; margin: 8px 4px 2px; }
+  .page-sub { color: var(--hint); margin: 0 4px 16px; }
+  .search { position: sticky; top: calc(var(--safe-top) + 8px); z-index: 5; display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 16px;
+            border-radius: 24px; margin-bottom: 16px; }
+  .search input { flex: 1; background: none; border: 0; outline: none; height: 100%; font-size: 17px; }
+  .search input::placeholder { color: var(--hint); }
+  .search .i { color: var(--hint); }
+  .chips { display: flex; gap: 8px; overflow-x: auto; margin: 0 -16px 16px; padding: 0 16px; scrollbar-width: none; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chip { height: 36px; padding: 0 14px; border-radius: 18px; white-space: nowrap; font-size: 15px; font-weight: 600; color: var(--text); }
+  .chip.on { background: var(--text); color: var(--bg); border-color: transparent; }
+  .skeleton .ic, .skeleton .bar { background: linear-gradient(90deg, rgba(255,255,255,.05) 25%, rgba(255,255,255,.13) 50%, rgba(255,255,255,.05) 75%);
+            background-size: 200% 100%; animation: shimmer 1.3s infinite; }
+  :root[data-theme="light"] .skeleton .ic, :root[data-theme="light"] .skeleton .bar {
+            background-image: linear-gradient(90deg, rgba(0,0,0,.05) 25%, rgba(0,0,0,.1) 50%, rgba(0,0,0,.05) 75%); }
+  .skeleton .bar { height: 12px; border-radius: 6px; margin: 6px 0; }
+  @keyframes shimmer { to { background-position: -200% 0; } }
+  .empty { text-align: center; color: var(--hint); padding: 40px 20px; }
+  .notice { display: flex; gap: 12px; align-items: flex-start; padding: 14px 16px; border-radius: 22px; margin-bottom: 16px; font-size: 15px; color: var(--hint); }
+  .notice b { color: var(--text); }
+
+  /* ---------- tab bar ---------- */
+  .tabbar { position: fixed; z-index: 20; left: 50%; bottom: calc(var(--safe-bottom) + 14px); transform: translateX(-50%);
+            width: min(528px, calc(100vw - 28px)); height: 70px; border-radius: 35px; padding: 5px; display: grid; grid-template-columns: repeat(4, 1fr);
+            background: rgba(30,30,38,.8); backdrop-filter: blur(28px) saturate(190%); -webkit-backdrop-filter: blur(28px) saturate(190%); }
+  :root[data-theme="light"] .tabbar { background: rgba(255,255,255,.82); }
+  body::after { content: ""; position: fixed; z-index: 19; left: 0; right: 0; bottom: 0; height: calc(var(--safe-bottom) + 110px); pointer-events: none;
+                background: linear-gradient(to bottom, transparent, var(--bg) 78%); }
+  .tabbar .lens { position: absolute; top: 5px; bottom: 5px; left: 5px; width: calc((100% - 10px) / 4); border-radius: 30px;
+                  background: rgba(255,255,255,.12); box-shadow: inset 0 1px 0 rgba(255,255,255,.25), inset 0 0 0 1px rgba(255,255,255,.06);
+                  transform: translateX(calc(var(--tab, 0) * 100%)); transition: transform .6s var(--spring); }
+  :root[data-theme="light"] .tabbar .lens { background: rgba(0,0,0,.06); }
+  .tabbar .lens.squish { animation: squish .6s var(--spring); }
+  @keyframes squish { 30% { scale: 1.12 .9; } }
+  .tab { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 12px;
+         font-weight: 600; color: var(--text); transition: color .3s; }
+  .tab svg { width: 28px; height: 28px; transition: transform .5s var(--spring); }
+  .tab.on { color: var(--accent); }
+  .tab.on svg { transform: scale(1.1); }
+  .tab .ghost-ic { width: 30px; height: 30px; }
+
+  /* ---------- sheets ---------- */
+  .scrim { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,.45); opacity: 0; pointer-events: none; transition: opacity .35s; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .sheet { position: fixed; z-index: 31; left: 0; right: 0; bottom: 0; max-width: 560px; margin: 0 auto; max-height: 88vh; overflow: auto;
+           border-radius: 34px 34px 0 0; padding: 14px 20px calc(var(--safe-bottom) + 24px);
+           background: rgba(34,34,42,.82); transform: translateY(105%); transition: transform .55s var(--spring); }
+  :root[data-theme="light"] .sheet { background: rgba(248,248,252,.88); }
+  .sheet.open { transform: none; }
+  .sheet .grab { width: 40px; height: 5px; border-radius: 3px; background: var(--hint-2); margin: 0 auto 10px; }
+  .sheet .close { position: absolute; top: 16px; right: 16px; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; }
+  .sheet .close svg { width: 18px; height: 18px; }
+  .sheet .head { text-align: center; padding: 14px 8px 4px; }
+  .sheet .big { width: 92px; height: 92px; border-radius: 26px; margin: 4px auto 14px; display: grid; place-items: center; background: #fff;
+                box-shadow: 0 12px 34px rgba(0,0,0,.3); animation: pop .7s var(--spring) both; position: relative; }
+  .sheet .big img { width: 60px; height: 60px; object-fit: contain; }
+  .sheet .big.letter { background: linear-gradient(135deg, var(--violet), var(--accent)); color: #fff; font-size: 40px; font-weight: 800; }
+  @keyframes pop { from { transform: scale(.4); opacity: 0; } }
+  .sheet h3 { font-size: 26px; margin: 0 0 6px; font-weight: 800; letter-spacing: -.02em; }
+  .sheet .lead { color: var(--hint); margin: 0 0 20px; font-size: 16px; }
+  .sheet .list { margin-bottom: 14px; }
+  .btn { display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%; height: 56px; border-radius: 28px; font-weight: 700; font-size: 17px;
+         color: #fff; background: linear-gradient(135deg, #5b6cff, #8b5cf6); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 10px 30px rgba(91,108,255,.4);
+         transition: transform .35s var(--spring), filter .2s, background .4s; }
+  .btn:active { transform: scale(.97); }
+  .btn:disabled { filter: saturate(.4) brightness(.8); }
+  .btn.ok { background: linear-gradient(135deg, #30d158, #22a447); box-shadow: inset 0 1px 0 rgba(255,255,255,.35), 0 10px 30px rgba(48,209,88,.35); }
+  .btn.ghost { background: transparent; box-shadow: none; color: var(--danger); height: 48px; margin-top: 6px; }
+  .btn.secondary { background: rgba(255,255,255,.1); box-shadow: none; color: var(--text); margin-top: 10px; }
+  .btn .spinner { width: 20px; height: 20px; border-radius: 50%; border: 2.5px solid rgba(255,255,255,.35); border-top-color: #fff; animation: spin .8s linear infinite; }
+  .field { width: 100%; height: 52px; padding: 0 16px; border-radius: 18px; border: 1px solid var(--line); background: rgba(255,255,255,.06); outline: none;
+           margin-bottom: 10px; transition: border-color .2s, box-shadow .2s; }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 4px rgba(79,140,255,.18); }
+  .small { color: var(--hint); font-size: 14px; margin: 6px 4px 14px; }
+  .small a { color: var(--accent); text-decoration: none; }
+  .waiting { position: absolute; inset: -10px; border-radius: 34px; border: 2px solid var(--accent); opacity: 0; }
+  .big.wait .waiting { animation: ring 1.6s ease-out infinite; }
+  .big.wait .waiting + .waiting { animation-delay: .8s; }
+  @keyframes ring { from { opacity: .8; transform: scale(.9); } to { opacity: 0; transform: scale(1.35); } }
+  .done-check { position: absolute; right: -8px; bottom: -8px; width: 36px; height: 36px; border-radius: 50%; background: var(--ok); display: grid; place-items: center;
+                box-shadow: 0 0 0 4px var(--bg-2); animation: pop .6s var(--spring) both; }
+  .done-check svg { width: 20px; height: 20px; stroke: #fff; stroke-width: 3; fill: none; stroke-dasharray: 30; stroke-dashoffset: 30; animation: draw .5s .2s ease forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  /* ---------- toast ---------- */
+  .toast { position: fixed; z-index: 50; left: 50%; top: calc(var(--safe-top) + 12px); transform: translate(-50%, -140%); max-width: calc(100vw - 32px);
+           padding: 12px 18px; border-radius: 22px; font-weight: 600; font-size: 15px; display: flex; gap: 8px; align-items: center;
+           background: rgba(40,40,50,.7); color: #fff; transition: transform .55s var(--spring); }
+  :root[data-theme="light"] .toast { background: rgba(255,255,255,.8); color: var(--text); }
+  .toast.show { transform: translate(-50%, 0); }
+
+  .footer { text-align: center; color: var(--hint-2); font-size: 13px; margin-top: 28px; }
+  .footer .mini { width: 44px; height: 44px; margin: 0 auto 6px; opacity: .8; }
+
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
-<body>
-<main>
-  <header>
-    <div class="logo">🕶</div>
-    <div>
-      <h1>Secret AI</h1>
-      <div class="sub" data-t="subtitle">Подключите сервисы — и просто пишите боту, что сделать</div>
-    </div>
-  </header>
+<body data-tab="agent">
+<div class="backdrop"></div>
 
-  <div id="app" class="skeleton" data-t="loading">Загрузка…</div>
+<main>
+  <!-- ============ AGENT ============ -->
+  <section class="view active" id="view-agent">
+    <div class="topbar">
+      <button class="pill glass press" id="model-btn" aria-expanded="false" aria-haspopup="true">
+        <span class="model-name" id="model-name">…</span>
+        <svg class="i chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <button class="pill glass press cta" id="cta-apps">
+        <svg class="i" viewBox="0 0 24 24" style="width:20px;height:20px"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor" stroke="none"/></svg>
+        <span id="cta-text"></span>
+      </button>
+      <div class="menu glass" id="model-menu" role="menu"></div>
+    </div>
+    <div class="hero">
+      <div class="logo" id="hero-logo"></div>
+      <h1 id="hello"></h1>
+      <p data-t="heroSub"></p>
+    </div>
+    <div class="list quick stagger" id="quick"></div>
+
+    <div class="section">
+      <h2 data-t="connections"></h2>
+      <p class="sub" data-t="connectionsSub"></p>
+      <div class="list stagger" id="home-apps"></div>
+    </div>
+  </section>
+
+  <!-- ============ DISCOVER ============ -->
+  <section class="view" id="view-discover">
+    <div id="discover" class="stagger"></div>
+  </section>
+
+  <!-- ============ APPS ============ -->
+  <section class="view" id="view-apps">
+    <h1 class="page-title" data-t="apps"></h1>
+    <p class="page-sub" id="apps-sub"></p>
+    <label class="search glass">
+      <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      <input id="search" type="search" autocomplete="off" enterkeyhint="search">
+    </label>
+    <div class="chips" id="chips"></div>
+    <div id="apps-notice"></div>
+    <div class="section" id="my-apps-wrap" style="margin-top:0">
+      <div class="list" id="my-apps"></div>
+    </div>
+    <div class="list" id="catalog" style="margin-top:16px"></div>
+    <div id="catalog-end" style="height:1px"></div>
+  </section>
+
+  <!-- ============ SETTINGS ============ -->
+  <section class="view" id="view-settings">
+    <h1 class="page-title" data-t="settings"></h1>
+    <div id="settings" class="stagger"></div>
+    <div class="footer"><div class="mini" id="footer-logo"></div>Secret AI · Mini App</div>
+  </section>
 </main>
-<div id="toast" class="toast"></div>
+
+<nav class="tabbar glass" id="tabbar">
+  <div class="lens" id="lens"></div>
+  <button class="tab on" data-tab="agent"><span class="ghost-ic">
+    <svg viewBox="0 0 128 128"><path fill="currentColor" d="M64 9c28.7 0 47 21.6 47 50v41c0 9.4-10 13.8-16.6 7.3-4.3-4.3-10.4-4.3-14.7 0-4.4 4.4-11 4.4-15.4 0-4.4-4.4-11-4.4-15.4 0-4.3 4.3-10.4 4.3-14.7 0C27 113.8 17 109.4 17 100V59C17 30.6 35.3 9 64 9Z"/><path fill="var(--bg)" d="M24 50h80v6l-4 9c-2 6-7 9-13 9h-6c-6 0-10-4-12-9l-1-4h-8l-1 4c-2 5-6 9-12 9h-6c-6 0-11-3-13-9l-4-9z"/></svg>
+  </span><span data-t="tabAgent"></span></button>
+  <button class="tab" data-tab="discover"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span data-t="tabDiscover"></span></button>
+  <button class="tab" data-tab="apps"><svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg><span data-t="tabApps"></span></button>
+  <button class="tab" data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-t="tabSettings"></span></button>
+</nav>
+
+<div class="scrim" id="scrim"></div>
+<div class="sheet glass" id="sheet" role="dialog" aria-modal="true"></div>
+<div class="toast glass" id="toast"></div>
+
+<template id="logo-tpl">__LOGO__</template>
 
 <script>
 const tg = window.Telegram?.WebApp;
-tg?.ready(); tg?.expand();
 const lang = (tg?.initDataUnsafe?.user?.language_code || navigator.language || "ru").startsWith("ru") ? "ru" : "en";
 const T = {
   ru: {
-    subtitle: "Подключите сервисы — и просто пишите боту, что сделать", loading: "Загрузка…",
-    services: "Подключения", github: "GitHub", notConnected: "Не подключено", connectedAs: "Подключено: @",
-    connect: "Подключить через GitHub", disconnect: "Отключить", orToken: "Или вставить токен",
-    tokenPh: "github_pat_… или ghp_…", save: "Сохранить",
-    tokenHint: 'Создайте <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">fine-grained токен</a>: выберите репозитории и права Contents — Read and write (для PR ещё Pull requests).',
-    mcp: "Другие сервисы (MCP)", mcpHint: "Любой удалённый MCP-сервер: Zapier MCP, Composio, Stripe и другие — тысячи приложений. Вставьте URL сервера и ключ, если нужен.",
-    mcpName: "Название, например zapier", mcpUrl: "https://… URL MCP-сервера", mcpToken: "Ключ / токен (необязательно)", add: "Добавить",
-    mcpWarn: "Действия MCP-сервисов выполняются без отдельного подтверждения — подключайте только то, чему доверяете.",
-    howto: "Как пользоваться", ex1: "«Покажи мои репозитории»", ex2: "«В репо secret-ai поменяй в README заголовок на …»",
-    ex3: "«Удали файл old.py и обнови requirements.txt»", ex4: "«Сделай это в новой ветке и открой pull request»",
-    exNote: "Перед каждым изменением бот покажет diff и кнопки «Применить / Отмена».",
-    saved: "Сохранено ✅", removed: "Отключено", badToken: "Токен не подошёл — проверьте его и права", error: "Ошибка, попробуйте ещё раз",
-    badLabel: "Название: латиница, цифры и _", badUrl: "URL должен начинаться с https://", openTg: "Откройте эту страницу из бота в Telegram.",
-    oauthOpened: "Завершите вход в браузере и вернитесь в Telegram",
+    hello: n => n ? `Привет, ${n}!` : "Привет!", heroSub: "Ваш личный ИИ-агент. Подключите приложения — и просто пишите, что сделать.",
+    connections: "Подключения", connectionsSub: "Подключайте приложения, чтобы Secret AI работал с вашими данными и автоматизировал работу",
+    apps: "Приложения", appsSub: n => n ? `${n.toLocaleString("ru")}+ приложений — нажмите «Подключить», и всё` : "Нажмите «Подключить» — без ссылок и ключей",
+    search: "Поиск: Notion, Gmail, Slack…", more: "Больше приложений", connected: "Подключено", connect: "Подключить", connectApp: n => `Подключить ${n}`,
+    yours: "Мои подключения", none: "Ничего не нашлось", loadingMore: "Загружаю…",
+    tabAgent: "Агент", tabDiscover: "Открытия", tabApps: "Приложения", tabSettings: "Настройки",
+    ctaNone: "Приложения", ctaSome: n => `${n} подкл.`,
+    settings: "Настройки", secretAi: "Secret AI", mode: "Режим ответа", model: "Модель", profile: "Профиль", tgId: "Telegram ID",
+    memory: "Память диалога", msgs: n => `${n} сообщ.`, appGroup: "Подключения", gh: "GitHub", ghSub: "Правки в репозиториях с подтверждением",
+    mcp: "Свой MCP-сервер", mcpSub: "Для продвинутых: любой URL", clear: "Очистить память", clearAsk: "Удалить историю диалога? Это нельзя отменить.",
+    cleared: "Память очищена 🧹", copied: "Скопировано", saved: "Сохранено ✓", removed: "Отключено", sent: "Отправил в чат ✨",
+    waiting: "Ожидаю подтверждения…", waitingSub: "Войдите в аккаунт в открывшемся окне и вернитесь сюда.",
+    connectedTo: n => `${n} подключён`, connectedSub: "Теперь просто напишите боту, что сделать.", opening: "Открываю…",
+    disconnect: "Отключить", disconnectAsk: n => `Отключить ${n}?`, tryAsk: "Попробуйте попросить", ask: "Спросить",
+    notReady: "Каталог приложений ещё не включён владельцем бота", notReadySub: "Нужны ключи Pipedream Connect (см. README). GitHub работает и без них.",
+    ghToken: "Fine-grained токен GitHub", ghTokenHint: 'Создайте <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">токен</a> с правами Contents — Read and write (для PR ещё Pull requests).',
+    ghOauth: "Войти через GitHub", ghConnected: l => `Подключено: @${l}`, save: "Сохранить", cancel: "Отмена",
+    mcpName: "Название, например zapier", mcpUrl: "https://… URL MCP-сервера", mcpKey: "Ключ (необязательно)", add: "Добавить",
+    mcpWarn: "Действия MCP выполняются без отдельного подтверждения — подключайте только то, чему доверяете.",
+    errToken: "Токен не подошёл — проверьте права", errLabel: "Название: латиница, цифры и _", errUrl: "URL должен начинаться с https://",
+    errAuth: "Откройте Mini App из бота в Telegram", errApps: "Сервис подключений не ответил, попробуйте ещё раз", err: "Что-то пошло не так",
+    needsApp: n => `Нужно приложение ${n}`, needsAppSub: "Подключите его один раз — и сценарий заработает.",
+    saves: "экономит", runIt: "Запустить", version: "Версия",
+    chips: { all: "Популярное", productivity: "Продуктивность", dev: "Разработка", chat: "Общение", files: "Файлы", marketing: "Маркетинг", finance: "Финансы", ai: "ИИ" },
   },
   en: {
-    subtitle: "Connect services — then just tell the bot what to do", loading: "Loading…",
-    services: "Connections", github: "GitHub", notConnected: "Not connected", connectedAs: "Connected: @",
-    connect: "Connect with GitHub", disconnect: "Disconnect", orToken: "Or paste a token",
-    tokenPh: "github_pat_… or ghp_…", save: "Save",
-    tokenHint: 'Create a <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">fine-grained token</a> with repository Contents: Read and write (plus Pull requests for PRs).',
-    mcp: "Other services (MCP)", mcpHint: "Any remote MCP server: Zapier MCP, Composio, Stripe and more — thousands of apps. Paste the server URL and a key if needed.",
-    mcpName: "Name, e.g. zapier", mcpUrl: "https://… MCP server URL", mcpToken: "Key / token (optional)", add: "Add",
+    hello: n => n ? `Hi, ${n}!` : "Hi!", heroSub: "Your personal AI agent. Connect apps — then just tell it what to do.",
+    connections: "Connections", connectionsSub: "Connect apps so Secret AI can work with your data and automate your work",
+    apps: "Apps", appsSub: n => n ? `${n.toLocaleString("en")}+ apps — just tap Connect` : "Just tap Connect — no links or keys",
+    search: "Search: Notion, Gmail, Slack…", more: "More apps", connected: "Connected", connect: "Connect", connectApp: n => `Connect ${n}`,
+    yours: "My connections", none: "Nothing found", loadingMore: "Loading…",
+    tabAgent: "Agent", tabDiscover: "Discover", tabApps: "Apps", tabSettings: "Settings",
+    ctaNone: "Apps", ctaSome: n => `${n} connected`,
+    settings: "Settings", secretAi: "Secret AI", mode: "Answer mode", model: "Model", profile: "Profile", tgId: "Telegram ID",
+    memory: "Conversation memory", msgs: n => `${n} msgs`, appGroup: "Connections", gh: "GitHub", ghSub: "Repository edits with confirmation",
+    mcp: "Custom MCP server", mcpSub: "Advanced: any URL", clear: "Clear memory", clearAsk: "Delete the conversation history? This can't be undone.",
+    cleared: "Memory cleared 🧹", copied: "Copied", saved: "Saved ✓", removed: "Disconnected", sent: "Sent to the chat ✨",
+    waiting: "Waiting for confirmation…", waitingSub: "Sign in in the window that opened, then come back here.",
+    connectedTo: n => `${n} connected`, connectedSub: "Now just tell the bot what to do.", opening: "Opening…",
+    disconnect: "Disconnect", disconnectAsk: n => `Disconnect ${n}?`, tryAsk: "Try asking", ask: "Ask",
+    notReady: "The app catalog isn't enabled by the bot owner yet", notReadySub: "It needs Pipedream Connect keys (see README). GitHub works without them.",
+    ghToken: "GitHub fine-grained token", ghTokenHint: 'Create a <a href="#" data-link="https://github.com/settings/personal-access-tokens/new">token</a> with Contents: Read and write (plus Pull requests for PRs).',
+    ghOauth: "Sign in with GitHub", ghConnected: l => `Connected: @${l}`, save: "Save", cancel: "Cancel",
+    mcpName: "Name, e.g. zapier", mcpUrl: "https://… MCP server URL", mcpKey: "Key (optional)", add: "Add",
     mcpWarn: "MCP actions run without a separate confirmation — connect only services you trust.",
-    howto: "How to use", ex1: "“Show my repositories”", ex2: "“In secret-ai change the README title to …”",
-    ex3: "“Delete old.py and update requirements.txt”", ex4: "“Do it in a new branch and open a pull request”",
-    exNote: "Before any change the bot shows a diff with Apply / Cancel buttons.",
-    saved: "Saved ✅", removed: "Disconnected", badToken: "The token didn't work — check it and its permissions", error: "Something went wrong, try again",
-    badLabel: "Name: latin letters, digits and _", badUrl: "URL must start with https://", openTg: "Open this page from the bot in Telegram.",
-    oauthOpened: "Finish signing in in the browser, then return to Telegram",
+    errToken: "The token didn't work — check its permissions", errLabel: "Name: latin letters, digits and _", errUrl: "URL must start with https://",
+    errAuth: "Open the Mini App from the bot in Telegram", errApps: "The connections service didn't respond, try again", err: "Something went wrong",
+    needsApp: n => `Needs ${n}`, needsAppSub: "Connect it once and the scenario will work.",
+    saves: "saves", runIt: "Run", version: "Version",
+    chips: { all: "Popular", productivity: "Productivity", dev: "Developer", chat: "Chat", files: "Files", marketing: "Marketing", finance: "Finance", ai: "AI" },
   },
 }[lang];
-document.documentElement.lang = lang;
-document.querySelectorAll("[data-t]").forEach(el => el.textContent = T[el.dataset.t]);
+const CHIP_QUERY = { all: "", productivity: "calendar", dev: "git", chat: "chat", files: "drive", marketing: "marketing", finance: "pay", ai: "ai" };
 
-const GH_ICON = '<svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>';
+// Scenarios: text is sent to the chat as the user's request; app = slug that must be connected first.
+const SPARK = (c1, c2) => `<svg class="spark" viewBox="0 0 32 32" style="--glow:${c1}"><defs><linearGradient id="g${c1.slice(1)}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c1}"/><stop offset="1" stop-color="${c2}"/></linearGradient></defs><path fill="url(#g${c1.slice(1)})" d="M16 2c1.2 7.4 6.6 12.8 14 14-7.4 1.2-12.8 6.6-14 14-1.2-7.4-6.6-12.8-14-14C9.4 14.8 14.8 9.4 16 2Z"/></svg>`;
+const QUICK = lang === "ru" ? [
+  { spark: SPARK("#5ac8fa", "#a0e9ff"), t: "Утренний дайджест", save: "15 минут утром", text: "Сделай мой утренний дайджест: главное на сегодня, коротко и по делу." },
+  { spark: SPARK("#ffcc00", "#ff9f0a"), t: "Разобрать почту", save: "40 минут в неделю", app: "gmail", appName: "Gmail", text: "Разбери мою почту за последние сутки: что важное, на что ответить, что можно пропустить." },
+  { spark: SPARK("#bf5af2", "#7d7aff"), t: "План на неделю", save: "30 минут в день", app: "google_calendar", appName: "Google Calendar", text: "Посмотри мой календарь на эту неделю и составь удобный план с фокус-временем." },
+] : [
+  { spark: SPARK("#5ac8fa", "#a0e9ff"), t: "Morning digest", save: "15 minutes every morning", text: "Make my morning digest: what matters today, short and to the point." },
+  { spark: SPARK("#ffcc00", "#ff9f0a"), t: "Triage my inbox", save: "40 minutes a week", app: "gmail", appName: "Gmail", text: "Triage my email from the last day: what's important, what to reply to, what to skip." },
+  { spark: SPARK("#bf5af2", "#7d7aff"), t: "Plan my week", save: "30 minutes a day", app: "google_calendar", appName: "Google Calendar", text: "Look at my calendar for this week and make a good plan with focus time." },
+];
+const DISCOVER = lang === "ru" ? [
+  ["Лучшее", [
+    ["🔍", "Задай любой вопрос", "Помогу во всём разобраться", "Привет! Что ты умеешь и чем можешь помочь мне прямо сейчас?"],
+    ["🧠", "Объясни просто", "Сложная тема за 2 минуты", "Объясни простыми словами, как работают нейросети, с примером из жизни."],
+    ["🌐", "Переведи текст", "Сохраню стиль и тон", "Я пришлю текст — переведи его, сохранив стиль и тон.", null, true],
+  ]],
+  ["Работа", [
+    ["📊", "Исследовать рынок", "Конкуренты, тренды, цифры", "Проведи краткое исследование рынка ИИ-ассистентов: игроки, тренды, возможности."],
+    ["📝", "Создать Notion-документ", "План, заметки, база знаний", "Создай в Notion страницу «План на неделю» с задачами и чек-листом.", "notion", false, "Notion"],
+    ["📧", "Разбор почты", "Выделю важное", "Разбери мою почту за последние сутки и выдели важное.", "gmail", false, "Gmail"],
+    ["📅", "Напомни о встречах", "Сегодня и завтра", "Какие у меня встречи сегодня и завтра?", "google_calendar", false, "Google Calendar"],
+    ["💬", "Сводка из Slack", "Что пропустил в каналах", "Сделай сводку важного из моих Slack-каналов за сегодня.", "slack", false, "Slack"],
+  ]],
+  ["Код и GitHub", [
+    ["🐙", "Мои репозитории", "Список и последние изменения", "Покажи мои репозитории на GitHub."],
+    ["🛠", "Поправить README", "С diff и подтверждением", "В моём репозитории secret-ai улучши README: структура, установка, примеры."],
+    ["🔀", "Открыть pull request", "Изменения в новой ветке", "Сделай изменения в новой ветке и открой pull request."],
+    ["🐞", "Найти баг", "Разберу код и ошибку", "Я пришлю код и ошибку — найди причину и предложи исправление.", null, true],
+  ]],
+  ["На каждый день", [
+    ["✅", "Трекер привычек", "Формируйте привычки", "Помоги составить трекер привычек на 30 дней: 3 привычки и как не сорваться."],
+    ["🍳", "Что приготовить", "Из того, что есть", "Что можно быстро приготовить на ужин из простых продуктов? Дай 3 варианта."],
+    ["🎉", "Поздравление", "Тёплое и личное", "Напиши тёплое поздравление с днём рождения для близкого друга."],
+    ["✍️", "Пост для канала", "Цепляющий и живой", "Напиши пост для Telegram-канала о пользе ИИ-ассистентов, живо и без воды."],
+  ]],
+] : [
+  ["Best", [
+    ["🔍", "Ask anything", "I'll help you figure it out", "Hi! What can you do and how can you help me right now?"],
+    ["🧠", "Explain simply", "A hard topic in 2 minutes", "Explain in simple words how neural networks work, with a real-life example."],
+    ["🌐", "Translate text", "Keeping style and tone", "I'll send a text — translate it keeping the style and tone.", null, true],
+  ]],
+  ["Work", [
+    ["📊", "Market research", "Competitors, trends, numbers", "Do a short market research on AI assistants: players, trends, opportunities."],
+    ["📝", "Create a Notion doc", "Plans, notes, knowledge base", "Create a Notion page \"Weekly plan\" with tasks and a checklist.", "notion", false, "Notion"],
+    ["📧", "Email triage", "Highlight what matters", "Triage my email from the last day and highlight what matters.", "gmail", false, "Gmail"],
+    ["📅", "Meeting reminders", "Today and tomorrow", "What meetings do I have today and tomorrow?", "google_calendar", false, "Google Calendar"],
+    ["💬", "Slack digest", "What I missed", "Summarize what matters in my Slack channels today.", "slack", false, "Slack"],
+  ]],
+  ["Code & GitHub", [
+    ["🐙", "My repositories", "List and recent changes", "Show my GitHub repositories."],
+    ["🛠", "Improve a README", "With diff and confirmation", "In my secret-ai repository improve the README: structure, setup, examples."],
+    ["🔀", "Open a pull request", "Changes in a new branch", "Make the changes in a new branch and open a pull request."],
+    ["🐞", "Find a bug", "I'll analyze code and error", "I'll send code and an error — find the cause and suggest a fix.", null, true],
+  ]],
+  ["Every day", [
+    ["✅", "Habit tracker", "Build habits", "Help me make a 30-day habit tracker: 3 habits and how to stick to them."],
+    ["🍳", "What to cook", "From what you have", "What can I quickly cook for dinner from simple ingredients? Give 3 options."],
+    ["🎉", "Greeting", "Warm and personal", "Write a warm birthday greeting for a close friend."],
+    ["✍️", "Channel post", "Catchy and alive", "Write a Telegram channel post about the benefits of AI assistants, lively and concise."],
+  ]],
+];
+const FEATURED_HOME = ["github", "notion", "gmail", "google_calendar", "slack", "linear_app"];
 
-const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-function toast(text) {
-  const el = document.getElementById("toast");
-  el.textContent = text; el.classList.add("show");
-  clearTimeout(toast.t); toast.t = setTimeout(() => el.classList.remove("show"), 2600);
+/* ---------------- helpers ---------------- */
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const haptic = (kind = "light") => { try { kind === "success" || kind === "error" || kind === "warning" ? tg.HapticFeedback.notificationOccurred(kind) : kind === "select" ? tg.HapticFeedback.selectionChanged() : tg.HapticFeedback.impactOccurred(kind); } catch (e) {} };
+const ICON = {
+  chev: '<svg class="i chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>',
+  plus: '<svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>',
+  check: '<svg class="i" viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>',
+  spin: '<svg class="i" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9"/></svg>',
+  search: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
+  close: '<svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
+  bolt: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor"/></svg>',
+};
+const SYM = {
+  mode: '<svg class="i" viewBox="0 0 24 24"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/></svg>',
+  model: '<svg class="i" viewBox="0 0 24 24"><path d="m4 20 9-9M15 4v3M18.5 5.5l-2 2M20 9h-3M6 4l.8 1.8L9 6.5l-1.8.8L6.5 9l-.8-1.8L4 6.5l1.8-.8z"/></svg>',
+  user: '<svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
+  memory: '<svg class="i" viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg>',
+  gh: '<svg viewBox="0 0 16 16" width="22" height="22" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>',
+  mcp: '<svg class="i" viewBox="0 0 24 24"><path d="M9 7 4 12l5 5M15 7l5 5-5 5"/></svg>',
+  trash: '<svg class="i" viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>',
+};
+const GH_LOGO = "https://cdn.simpleicons.org/github";
+
+function toast(text, icon = "") {
+  const el = $("toast");
+  el.innerHTML = icon + esc(text);
+  el.classList.add("show");
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => el.classList.remove("show"), 2400);
 }
 async function api(path, body = {}) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg?.initData || "" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || "error"), { code: data.error, status: res.status });
+  if (!res.ok) throw Object.assign(new Error(data.error || "error"), { code: data.error });
   return data;
 }
 function errorText(e) {
-  return { github_token: T.badToken, mcp_label: T.badLabel, mcp_url: T.badUrl, auth: T.openTg }[e.code] || T.error;
+  return { github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
 }
-async function act(button, fn, okText) {
-  button.disabled = true;
-  try { render(await fn()); if (okText) toast(okText); tg?.HapticFeedback?.notificationOccurred("success"); }
-  catch (e) { toast(errorText(e)); tg?.HapticFeedback?.notificationOccurred("error"); }
-  finally { button.disabled = false; }
+function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
+function appIcon(app, cls = "ic") {
+  const img = app.img || (app.slug === "github" ? GH_LOGO : "");
+  if (!img) return `<div class="${cls} letter">${esc((app.name || "?")[0])}</div>`;
+  return `<div class="${cls} tile"><img src="${esc(img)}" alt="" loading="lazy" onerror="this.parentNode.className='${cls} letter';this.parentNode.textContent='${esc((app.name || "?")[0]).replace(/'/g, "")}'"></div>`;
+}
+function logoSvg(prefix) {
+  // Each inline copy needs its own gradient ids.
+  return $("logo-tpl").innerHTML.replace(/sai-(body|sheen|lens|lenses)/g, `${prefix}-$1`);
 }
 
-function render(state) {
+/* ---------------- state ---------------- */
+let state = null;
+const connectedSlugs = () => new Set([...(state?.apps?.connected || []).map(a => a.slug), ...(state?.github?.connected ? ["github"] : [])]);
+const connectedCount = () => (state?.apps?.connected || []).length + (state?.github?.connected ? 1 : 0) + (state?.mcp || []).length;
+
+async function load(fresh = false) {
+  try {
+    state = await api("/api/state", { fresh });
+    renderAll();
+  } catch (e) {
+    if (!state) toast(errorText(e));
+  }
+  return state;
+}
+
+function renderAll() {
+  renderHeader();
+  renderHomeApps();
+  renderMyApps();
+  renderSettings();
+  if (!catalog.loaded) loadCatalog(true); else renderCatalog();
+}
+
+/* ---------------- header and model menu ---------------- */
+function prettyModel(id) {
+  return String(id).replace(/^gpt-/i, "GPT-").replace(/^claude-/i, "Claude ").replace(/-(\w)/g, (_, c) => " " + c.toUpperCase()).replace(/ (\d)/g, " $1");
+}
+function renderHeader() {
+  const s = state.settings;
+  $("model-name").textContent = prettyModel(s.model);
+  $("hello").textContent = T.hello(state.user.first_name);
+  const n = connectedCount();
+  $("cta-text").textContent = n ? T.ctaSome(n) : T.ctaNone;
+  $("model-menu").innerHTML = s.models.map(m => `
+    <button role="menuitemradio" data-model="${esc(m)}" class="${m === s.model ? "on" : ""}">
+      <div><div class="t">${esc(prettyModel(m))}</div><div class="d">${esc(m)}</div></div>
+      <span class="check">${ICON.check}</span></button>`).join("");
+}
+function toggleMenu(open) {
+  const menu = $("model-menu"), btn = $("model-btn");
+  open = open ?? !menu.classList.contains("open");
+  menu.classList.toggle("open", open);
+  btn.setAttribute("aria-expanded", open);
+  haptic("light");
+}
+$("model-btn").addEventListener("click", e => { e.stopPropagation(); toggleMenu(); });
+document.addEventListener("click", e => {
+  if ($("model-menu").classList.contains("open") && !e.target.closest("#model-menu")) toggleMenu(false);
+});
+$("model-menu").addEventListener("click", async e => {
+  const b = e.target.closest("[data-model]");
+  if (!b) return;
+  if (state.settings.models.length < 2) { $("model-menu").classList.remove("open"); return; }
+  haptic("select");
+  try { state.settings = (await api("/api/settings", { model: b.dataset.model })).settings; renderHeader(); renderSettings(); toast(T.saved); }
+  catch (err) { toast(errorText(err)); }
+  $("model-menu").classList.remove("open"); $("model-btn").setAttribute("aria-expanded", false);
+});
+$("cta-apps").addEventListener("click", () => switchTab("apps"));
+
+/* ---------------- quick + discover ---------------- */
+function renderQuick() {
+  $("quick").innerHTML = QUICK.map((q, i) => `
+    <button class="row press" style="--i:${i}" data-q="${i}">
+      ${q.spark}
+      <div class="body"><div class="t">${esc(q.t)}</div><div class="save">${ICON.bolt} ${T.saves} ${esc(q.save)}</div></div>
+      ${ICON.chev}</button>`).join("");
+}
+function renderDiscover() {
+  $("discover").innerHTML = DISCOVER.map(([title, rows], s) => `
+    <div class="section" style="--i:${s}${s === 0 ? ";margin-top:8px" : ""}"><h2>${esc(title)}</h2><div class="list">
+      ${rows.map(([emoji, t, d, text, app, draft, appName], i) => `
+        <button class="row press" data-s="${s}" data-r="${i}">
+          <div class="ic">${emoji}</div>
+          <div class="body"><div class="t">${esc(t)}</div><div class="d">${app ? `<span class="badge app">${esc(appName)}</span> ` : ""}${esc(d)}</div></div>
+          ${ICON.chev}</button>`).join("")}
+    </div></div>`).join("");
+}
+function runScenario({ text, app, appName }) {
+  haptic("medium");
+  if (app && !connectedSlugs().has(app)) {
+    openAppSheet({ slug: app, name: appName, img: catalog.find(app)?.img || "" }, { needs: true, then: text });
+    return;
+  }
+  sendToChat(text);
+}
+async function sendToChat(text) {
+  try {
+    await api("/api/ask", { text });
+    haptic("success");
+    toast(T.sent);
+    setTimeout(() => tg?.close?.(), 700);
+  } catch (e) { toast(errorText(e)); haptic("error"); }
+}
+$("quick").addEventListener("click", e => { const b = e.target.closest("[data-q]"); if (b) runScenario(QUICK[+b.dataset.q]); });
+$("discover").addEventListener("click", e => {
+  const b = e.target.closest("[data-s]");
+  if (!b) return;
+  const [, , , text, app, , appName] = DISCOVER[+b.dataset.s][1][+b.dataset.r];
+  runScenario({ text, app, appName });
+});
+
+/* ---------------- app rows ---------------- */
+function appRow(app, i = 0) {
+  const on = app.slug === "github" ? state?.github?.connected : connectedSlugs().has(app.slug);
+  return `<button class="row press" style="--i:${i}" data-app="${esc(app.slug)}">
+    ${appIcon(app)}
+    <div class="body"><div class="t">${esc(app.name)}</div><div class="d">${esc(app.description || "")}</div></div>
+    <span class="plus ${on ? "on" : ""}" data-plus="${esc(app.slug)}">${on ? ICON.check : ICON.plus}</span></button>`;
+}
+function renderHomeApps() {
+  const mine = (state.apps.connected || []).map(a => ({ slug: a.slug, name: a.name, img: a.img, description: a.account || T.connected }));
+  if (state.github.connected) mine.unshift({ slug: "github", name: "GitHub", img: GH_LOGO, description: "@" + state.github.login });
+  const seen = new Set(mine.map(a => a.slug));
+  const pool = catalog.featured.length ? catalog.featured : [];
+  const picks = FEATURED_HOME.map(s => pool.find(a => a.slug === s)).filter(a => a && !seen.has(a.slug)).slice(0, Math.max(2, 5 - mine.length));
+  $("home-apps").innerHTML = [...mine, ...picks].map(appRow).join("") +
+    `<button class="row more press" id="more-apps"><span class="ic">${ICON.search}</span><span class="body">${T.more}</span></button>`;
+  $("more-apps").onclick = () => switchTab("apps");
+}
+function renderMyApps() {
+  const mine = (state.apps.connected || []);
+  const rows = [];
+  if (state.github.connected) rows.push({ slug: "github", name: "GitHub", img: GH_LOGO, description: "@" + state.github.login });
+  mine.forEach(a => rows.push({ slug: a.slug, name: a.name, img: a.img, description: (a.account || T.connected) + (a.healthy ? "" : " · ⚠️") }));
+  $("my-apps-wrap").style.display = rows.length ? "" : "none";
+  $("my-apps").innerHTML = rows.map(appRow).join("");
+  if (!state.apps.enabled) {
+    $("apps-notice").innerHTML = `<div class="notice glass"><span style="font-size:22px">🔌</span><div><b>${T.notReady}</b><br>${T.notReadySub}</div></div>`;
+  } else $("apps-notice").innerHTML = "";
+}
+document.addEventListener("click", e => {
+  const row = e.target.closest("[data-app]");
+  if (!row) return;
+  const slug = row.dataset.app;
+  const app = catalog.find(slug) || findConnected(slug) || { slug, name: slug };
+  openAppSheet(app);
+});
+function findConnected(slug) {
+  if (slug === "github") return { slug, name: "GitHub", img: GH_LOGO };
+  const a = (state?.apps?.connected || []).find(x => x.slug === slug);
+  return a && { slug, name: a.name, img: a.img, description: a.account };
+}
+
+/* ---------------- catalog ---------------- */
+const catalog = {
+  items: [], featured: [], next: null, total: null, q: "", loading: false, loaded: false, seq: 0,
+  find(slug) { return this.items.find(a => a.slug === slug) || this.featured.find(a => a.slug === slug); },
+};
+async function loadCatalog(reset) {
+  if (catalog.loading && !reset) return;
+  const seq = ++catalog.seq;
+  catalog.loading = true;
+  if (reset) { catalog.items = []; catalog.next = null; renderCatalog(true); }
+  try {
+    const data = await api("/api/catalog", { q: catalog.q, after: reset ? "" : catalog.next || "" });
+    if (seq !== catalog.seq) return;
+    catalog.items = reset ? data.apps : catalog.items.concat(data.apps);
+    catalog.next = data.next;
+    if (data.total) catalog.total = data.total;
+    if (!catalog.q && reset) { catalog.featured = data.apps; if (state) renderHomeApps(); }
+    catalog.loaded = true;
+  } catch (e) { if (seq === catalog.seq) toast(errorText(e)); }
+  finally { if (seq === catalog.seq) { catalog.loading = false; renderCatalog(); } }
+}
+function renderCatalog(skeleton = false) {
+  $("apps-sub").textContent = T.appsSub(catalog.total);
+  const el = $("catalog");
+  if (skeleton) {
+    el.innerHTML = Array.from({ length: 6 }, () => `<div class="row skeleton"><div class="ic"></div><div class="body"><div class="bar" style="width:40%"></div><div class="bar" style="width:75%"></div></div></div>`).join("");
+    el.classList.remove("stagger");
+    return;
+  }
+  const mine = connectedSlugs();
+  const items = catalog.items.filter(a => !mine.has(a.slug));
+  el.classList.add("stagger");
+  el.innerHTML = items.length ? items.map((a, i) => appRow(a, i % 40)).join("") : `<div class="empty">${T.none}</div>`;
+  if (catalog.next) el.insertAdjacentHTML("beforeend", `<div class="row skeleton"><div class="ic"></div><div class="body"><div class="bar" style="width:50%"></div></div></div>`);
+}
+new IntersectionObserver(entries => {
+  if (entries[0].isIntersecting && catalog.next && !catalog.loading && document.body.dataset.tab === "apps") loadCatalog(false);
+}, { rootMargin: "400px" }).observe($("catalog-end"));
+let searchTimer;
+$("search").placeholder = T.search;
+$("search").addEventListener("input", e => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { catalog.q = e.target.value.trim(); setChip(catalog.q ? null : "all"); loadCatalog(true); }, 280);
+});
+function setChip(key) { document.querySelectorAll(".chip").forEach(c => c.classList.toggle("on", c.dataset.chip === key)); }
+$("chips").innerHTML = Object.entries(T.chips).map(([k, v]) => `<button class="chip glass press ${k === "all" ? "on" : ""}" data-chip="${k}">${esc(v)}</button>`).join("");
+$("chips").addEventListener("click", e => {
+  const c = e.target.closest("[data-chip]");
+  if (!c) return;
+  haptic("select");
+  setChip(c.dataset.chip);
+  catalog.q = CHIP_QUERY[c.dataset.chip];
+  $("search").value = "";
+  loadCatalog(true);
+});
+
+/* ---------------- sheets ---------------- */
+let sheetClose = null;
+function openSheet(html, onClose) {
+  const sheet = $("sheet");
+  sheet.innerHTML = `<div class="grab"></div><button class="close glass press" aria-label="close">${ICON.close}</button>` + html;
+  sheet.querySelector(".close").onclick = closeSheet;
+  sheet.querySelectorAll("[data-link]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); openLink(a.dataset.link); }));
+  requestAnimationFrame(() => { sheet.classList.add("open"); $("scrim").classList.add("open"); });
+  sheetClose = onClose || null;
+  tg?.BackButton?.show();
+  haptic("medium");
+}
+function closeSheet() {
+  $("sheet").classList.remove("open");
+  $("scrim").classList.remove("open");
+  tg?.BackButton?.hide();
+  stopWaiting();
+  const fn = sheetClose; sheetClose = null; fn?.();
+}
+$("scrim").onclick = closeSheet;
+tg?.BackButton?.onClick(closeSheet);
+// Swipe the sheet down to close.
+(() => {
+  let y0 = null, dy = 0;
+  const s = $("sheet");
+  s.addEventListener("touchstart", e => { if (s.scrollTop <= 0) { y0 = e.touches[0].clientY; s.style.transition = "none"; } }, { passive: true });
+  s.addEventListener("touchmove", e => { if (y0 === null) return; dy = Math.max(0, e.touches[0].clientY - y0); s.style.transform = `translateY(${dy}px)`; }, { passive: true });
+  s.addEventListener("touchend", () => { if (y0 === null) return; s.style.transition = ""; s.style.transform = ""; if (dy > 110) closeSheet(); y0 = null; dy = 0; });
+})();
+
+let waitTimer = null;
+function stopWaiting() { clearInterval(waitTimer); waitTimer = null; }
+
+function openAppSheet(app, opts = {}) {
+  if (app.slug === "github") return openGitHubSheet();
+  const account = (state?.apps?.connected || []).find(a => a.slug === app.slug);
+  const icon = app.img ? `<div class="big" id="big"><img src="${esc(app.img)}" alt=""><span class="waiting"></span><span class="waiting"></span></div>`
+                       : `<div class="big letter" id="big">${esc((app.name || "?")[0])}<span class="waiting"></span><span class="waiting"></span></div>`;
+  const lead = opts.needs ? T.needsAppSub : esc(app.description || "");
+  if (account) {
+    openSheet(`<div class="head">${icon}<h3>${esc(app.name)}</h3><p class="lead"><span class="badge on">${T.connected}</span> ${esc(account.account || "")}</p></div>
+      <button class="btn" id="try">${T.tryAsk}</button>
+      <button class="btn ghost" id="off">${T.disconnect}</button>`);
+    $("big").insertAdjacentHTML("beforeend", `<span class="done-check"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>`);
+    $("try").onclick = () => { closeSheet(); sendToChat(lang === "ru" ? `Что ты можешь сделать с моим ${app.name}? Предложи 3 полезных действия.` : `What can you do with my ${app.name}? Suggest 3 useful actions.`); };
+    $("off").onclick = () => confirm(T.disconnectAsk(app.name), async () => {
+      try { state = await api("/api/apps/disconnect", { id: account.id }); renderAll(); closeSheet(); toast(T.removed); haptic("warning"); }
+      catch (e) { toast(errorText(e)); }
+    });
+    return;
+  }
+  openSheet(`<div class="head">${icon}<h3>${opts.needs ? esc(T.needsApp(app.name)) : esc(app.name)}</h3><p class="lead" id="lead">${lead}</p></div>
+    <button class="btn" id="go">${esc(T.connectApp(app.name))}</button>`);
+  $("go").onclick = () => startConnect(app, opts);
+}
+
+async function startConnect(app, opts) {
+  const btn = $("go");
+  if (!state.apps.enabled) { toast(T.notReady); haptic("warning"); return; }
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span>${T.opening}`;
+  try {
+    const { url } = await api("/api/apps/connect", { slug: app.slug });
+    openLink(url);
+    $("big")?.classList.add("wait");
+    $("lead").textContent = T.waitingSub;
+    btn.innerHTML = `<span class="spinner"></span>${T.waiting}`;
+    const before = new Set((state.apps.connected || []).map(a => a.id));
+    const started = Date.now();
+    stopWaiting();
+    waitTimer = setInterval(async () => {
+      if (Date.now() - started > 5 * 60 * 1000) { stopWaiting(); btn.disabled = false; btn.textContent = T.connectApp(app.name); return; }
+      if (document.hidden) return;
+      const s = await load(true);
+      const fresh = (s?.apps?.connected || []).find(a => a.slug === app.slug && !before.has(a.id));
+      if (fresh) { stopWaiting(); connectedAnimation(app, opts); }
+    }, 2500);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = T.connectApp(app.name);
+    toast(errorText(e)); haptic("error");
+  }
+}
+function connectedAnimation(app, opts) {
+  haptic("success");
+  const big = $("big");
+  if (!big) return;
+  big.classList.remove("wait");
+  big.insertAdjacentHTML("beforeend", `<span class="done-check"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>`);
+  document.querySelector("#sheet h3").textContent = T.connectedTo(app.name);
+  $("lead").textContent = T.connectedSub;
+  const btn = $("go");
+  btn.disabled = false;
+  btn.classList.add("ok");
+  btn.innerHTML = opts.then ? `${T.runIt} ✨` : `${ICON.check} ${T.connected}`;
+  btn.onclick = () => { closeSheet(); if (opts.then) sendToChat(opts.then); };
+  if (!opts.then) setTimeout(() => { if ($("go") === btn) closeSheet(); }, 1800);
+}
+
+function confirm(text, ok) {
+  if (tg?.showConfirm && tg.isVersionAtLeast?.("6.2")) tg.showConfirm(text, yes => yes && ok());
+  else if (window.confirm(text)) ok();
+}
+
+function openGitHubSheet() {
   const gh = state.github;
-  const app = document.getElementById("app");
-  app.className = "";
-  app.innerHTML = `
-    <h2>${T.services}</h2>
-    <div class="card">
-      <div class="row">
-        <div class="icon">${GH_ICON}</div>
-        <div class="grow"><div class="name">${T.github}</div>
-          <div class="status ${gh.connected ? "on" : ""}">${gh.connected ? T.connectedAs + esc(gh.login) : T.notConnected}</div></div>
-        ${gh.connected ? `<button class="ghost" id="gh-off">${T.disconnect}</button>` : ""}
-      </div>
-      ${gh.connected ? "" : `
-        ${gh.oauth ? `<button class="wide" id="gh-oauth">${T.connect}</button>` : ""}
-        <details ${gh.oauth ? "" : "open"}><summary>${T.orToken}</summary>
-          <input id="gh-token" type="password" autocomplete="off" placeholder="${T.tokenPh}">
-          <div class="hint">${T.tokenHint}</div>
-          <button class="wide" id="gh-save">${T.save}</button>
-        </details>`}
-    </div>
-
-    <h2>${T.mcp}</h2>
-    <div class="card">
-      ${state.mcp.length ? `<div>${state.mcp.map(s => `
-        <div class="item"><div class="grow"><div class="name">${esc(s.label)} <span class="pill">MCP</span></div>
-          <div class="status">${esc(s.url)}</div></div>
-          <button class="ghost" data-off="${esc(s.label)}">${T.disconnect}</button></div>`).join("")}</div>` : ""}
-      <div class="hint">${T.mcpHint}</div>
-      <input id="mcp-label" placeholder="${T.mcpName}" autocomplete="off">
-      <input id="mcp-url" placeholder="${T.mcpUrl}" inputmode="url" autocomplete="off">
-      <input id="mcp-token" type="password" placeholder="${T.mcpToken}" autocomplete="off">
-      <button class="wide" id="mcp-add">${T.add}</button>
-      <div class="hint">⚠️ ${T.mcpWarn}</div>
-    </div>
-
-    <h2>${T.howto}</h2>
-    <div class="card">
-      <ul class="examples"><li>${T.ex1}</li><li>${T.ex2}</li><li>${T.ex3}</li><li>${T.ex4}</li></ul>
-      <div class="hint">🛡 ${T.exNote}</div>
-    </div>`;
-
-  const $ = id => document.getElementById(id);
-  $("gh-off")?.addEventListener("click", e => act(e.target, () => api("/api/disconnect", { service: "github", label: "github" }), T.removed));
-  $("gh-save")?.addEventListener("click", e => act(e.target, () => api("/api/github/token", { token: $("gh-token").value }), T.saved));
-  $("gh-oauth")?.addEventListener("click", async e => {
+  const icon = `<div class="big" id="big"><img src="${GH_LOGO}" alt=""><span class="waiting"></span><span class="waiting"></span></div>`;
+  if (gh.connected) {
+    openSheet(`<div class="head">${icon}<h3>GitHub</h3><p class="lead">${esc(T.ghConnected(gh.login))}</p></div>
+      <button class="btn" id="try">${T.tryAsk}</button><button class="btn ghost" id="off">${T.disconnect}</button>`);
+    $("big").insertAdjacentHTML("beforeend", `<span class="done-check"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>`);
+    $("try").onclick = () => { closeSheet(); sendToChat(lang === "ru" ? "Покажи мои репозитории на GitHub." : "Show my GitHub repositories."); };
+    $("off").onclick = () => confirm(T.disconnectAsk("GitHub"), async () => {
+      try { state = await api("/api/disconnect", { service: "github", label: "github" }); renderAll(); closeSheet(); toast(T.removed); } catch (e) { toast(errorText(e)); }
+    });
+    return;
+  }
+  openSheet(`<div class="head">${icon}<h3>GitHub</h3><p class="lead" id="lead">${T.ghSub}</p></div>
+    ${gh.oauth ? `<button class="btn" id="go">${T.ghOauth}</button><div style="height:18px"></div>` : ""}
+    <input class="field" id="gh-token" type="password" autocomplete="off" placeholder="${T.ghToken}">
+    <div class="small">${T.ghTokenHint}</div>
+    <button class="btn ${gh.oauth ? "secondary" : ""}" id="gh-save">${T.save}</button>`);
+  if (gh.oauth) $("go").onclick = async () => {
     try {
       const { url } = await api("/api/github/oauth");
-      tg ? tg.openLink(url) : window.open(url, "_blank");
-      toast(T.oauthOpened);
-    } catch (err) { toast(errorText(err)); }
-  });
-  $("mcp-add").addEventListener("click", e => act(e.target, () => api("/api/mcp", {
-    label: $("mcp-label").value, url: $("mcp-url").value, token: $("mcp-token").value }), T.saved));
-  app.querySelectorAll("[data-off]").forEach(b => b.addEventListener("click", e =>
-    act(e.target, () => api("/api/disconnect", { service: "mcp", label: b.dataset.off }), T.removed)));
-  app.querySelectorAll("[data-link]").forEach(a => a.addEventListener("click", e => {
-    e.preventDefault(); tg ? tg.openLink(a.dataset.link) : window.open(a.dataset.link, "_blank");
-  }));
+      openLink(url);
+      $("big").classList.add("wait");
+      $("go").innerHTML = `<span class="spinner"></span>${T.waiting}`;
+      const started = Date.now();
+      stopWaiting();
+      waitTimer = setInterval(async () => {
+        if (document.hidden) return;
+        const s = await load();
+        if (s?.github?.connected) { stopWaiting(); connectedAnimation({ name: "GitHub" }, {}); }
+        else if (Date.now() - started > 5 * 60 * 1000) stopWaiting();
+      }, 2500);
+    } catch (e) { toast(errorText(e)); }
+  };
+  $("gh-save").onclick = async e => {
+    e.target.disabled = true;
+    try { state = await api("/api/github/token", { token: $("gh-token").value }); renderAll(); closeSheet(); toast(T.saved); haptic("success"); }
+    catch (err) { toast(errorText(err)); haptic("error"); }
+    finally { e.target.disabled = false; }
+  };
 }
 
-// Re-check after returning from the GitHub sign-in page.
-document.addEventListener("visibilitychange", () => { if (!document.hidden) load(); });
-async function load() {
-  try { render(await api("/api/state")); }
-  catch (e) { const app = document.getElementById("app"); if (app.classList.contains("skeleton")) app.textContent = errorText(e); }
+function openMcpSheet() {
+  const list = state.mcp.map(s => `<div class="row"><div class="ic sym">${SYM.mcp}</div><div class="body"><div class="t">${esc(s.label)}</div><div class="d">${esc(s.url)}</div></div>
+    <button class="plus press" data-mcp-off="${esc(s.label)}" style="color:var(--danger)">${SYM.trash}</button></div>`).join("");
+  openSheet(`<div class="head"><h3>${T.mcp}</h3><p class="lead">${T.mcpWarn}</p></div>
+    ${list ? `<div class="list">${list}</div>` : ""}
+    <input class="field" id="mcp-label" placeholder="${T.mcpName}" autocomplete="off">
+    <input class="field" id="mcp-url" placeholder="${T.mcpUrl}" inputmode="url" autocomplete="off">
+    <input class="field" id="mcp-token" type="password" placeholder="${T.mcpKey}" autocomplete="off">
+    <button class="btn" id="mcp-add">${T.add}</button>`);
+  $("mcp-add").onclick = async () => {
+    try { state = await api("/api/mcp", { label: $("mcp-label").value, url: $("mcp-url").value, token: $("mcp-token").value }); renderAll(); openMcpSheet(); toast(T.saved); haptic("success"); }
+    catch (e) { toast(errorText(e)); haptic("error"); }
+  };
+  $("sheet").querySelectorAll("[data-mcp-off]").forEach(b => b.onclick = async () => {
+    try { state = await api("/api/disconnect", { service: "mcp", label: b.dataset.mcpOff }); renderAll(); openMcpSheet(); toast(T.removed); } catch (e) { toast(errorText(e)); }
+  });
 }
-load();
+
+function openPersonaSheet() {
+  const s = state.settings;
+  openSheet(`<div class="head"><h3>${T.mode}</h3></div><div class="list">${s.personas.map(p => `
+    <button class="row compact press" data-persona="${p.id}"><div class="ic sym">${p.emoji}</div><div class="body"><div class="t">${esc(p[lang])}</div></div>
+    ${p.id === s.persona ? `<span class="plus on">${ICON.check}</span>` : ""}</button>`).join("")}</div>`);
+  $("sheet").querySelectorAll("[data-persona]").forEach(b => b.onclick = async () => {
+    haptic("select");
+    try { state.settings = (await api("/api/settings", { persona: b.dataset.persona })).settings; renderSettings(); closeSheet(); toast(T.saved); }
+    catch (e) { toast(errorText(e)); }
+  });
+}
+
+/* ---------------- settings ---------------- */
+function renderSettings() {
+  const s = state.settings;
+  const persona = s.personas.find(p => p.id === s.persona) || s.personas[0];
+  const group = (title, rows, i) => `<div class="section" style="--i:${i};margin-top:${i ? 26 : 8}px"><p class="sub" style="font-weight:600;margin-bottom:8px">${title}</p><div class="list">${rows.join("")}</div></div>`;
+  const row = (id, icon, title, value = "", extra = "") => `<button class="row compact press ${extra}" id="${id}"><div class="ic sym">${icon}</div>
+    <div class="body"><div class="t">${title}</div></div>${value ? `<span class="val">${value}</span>` : ""}${extra.includes("danger") ? "" : ICON.chev}</button>`;
+  $("settings").innerHTML = [
+    group(T.secretAi, [row("set-mode", SYM.mode, T.mode, `${persona.emoji} ${esc(persona[lang])}`), row("set-model", SYM.model, T.model, esc(prettyModel(s.model)))], 0),
+    group(T.appGroup, [
+      row("set-gh", SYM.gh, T.gh, state.github.connected ? "@" + esc(state.github.login) : ""),
+      row("set-apps", '<svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg>', T.apps, String((state.apps.connected || []).length)),
+      row("set-mcp", SYM.mcp, T.mcp, state.mcp.length ? String(state.mcp.length) : ""),
+    ], 1),
+    group(T.profile, [row("set-id", SYM.user, T.tgId, String(state.user.id)), row("set-mem", SYM.memory, T.memory, T.msgs(s.messages))], 2),
+    `<div class="section" style="--i:3;margin-top:26px"><div class="list">${row("set-clear", SYM.trash, T.clear, "", "danger")}</div></div>`,
+  ].join("");
+  $("set-mode").onclick = openPersonaSheet;
+  $("set-model").onclick = () => { switchTab("agent"); setTimeout(() => toggleMenu(true), 350); };
+  $("set-gh").onclick = openGitHubSheet;
+  $("set-apps").onclick = () => switchTab("apps");
+  $("set-mcp").onclick = openMcpSheet;
+  $("set-id").onclick = () => { navigator.clipboard?.writeText(String(state.user.id)); toast(T.copied); haptic("light"); };
+  $("set-mem").onclick = () => confirm(T.clearAsk, clearMemory);
+  $("set-clear").onclick = () => confirm(T.clearAsk, clearMemory);
+}
+async function clearMemory() {
+  try { state.settings = (await api("/api/reset")).settings; renderSettings(); toast(T.cleared); haptic("success"); }
+  catch (e) { toast(errorText(e)); }
+}
+
+/* ---------------- tabs ---------------- */
+const TABS = ["agent", "discover", "apps", "settings"];
+function switchTab(tab) {
+  if (document.body.dataset.tab === tab) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  haptic("select");
+  document.body.dataset.tab = tab;
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
+  const lens = $("lens");
+  lens.style.setProperty("--tab", TABS.indexOf(tab));
+  lens.classList.remove("squish"); void lens.offsetWidth; lens.classList.add("squish");
+  document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + tab));
+  $("model-menu").classList.remove("open");
+  window.scrollTo(0, 0);
+  paintHeader();
+  if (tab === "apps" && !catalog.loaded) loadCatalog(true);
+}
+document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
+
+/* ---------------- Telegram chrome ---------------- */
+function paintHeader() {
+  if (!tg?.setHeaderColor || !tg.isVersionAtLeast?.("6.1")) return;
+  const hero = ["agent", "discover"].includes(document.body.dataset.tab) && window.scrollY < 60;
+  const color = hero ? "#4b55ff" : getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  if (paintHeader.last !== color) { paintHeader.last = color; try { tg.setHeaderColor(color); } catch (e) {} }
+}
+window.addEventListener("scroll", paintHeader, { passive: true });
+
+function init() {
+  const dark = (tg?.colorScheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")) !== "light";
+  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  document.documentElement.lang = lang;
+  document.querySelectorAll("[data-t]").forEach(el => { const v = T[el.dataset.t]; if (typeof v === "string") el.textContent = v; });
+  $("hero-logo").innerHTML = logoSvg("hero");
+  $("footer-logo").innerHTML = logoSvg("foot");
+  $("hello").textContent = T.hello(tg?.initDataUnsafe?.user?.first_name);
+  renderQuick();
+  renderDiscover();
+  renderCatalog(true);
+  $("home-apps").innerHTML = Array.from({ length: 4 }, () => `<div class="row skeleton"><div class="ic"></div><div class="body"><div class="bar" style="width:35%"></div><div class="bar" style="width:70%"></div></div></div>`).join("");
+  $("model-name").textContent = "…";
+  $("cta-text").textContent = T.ctaNone;
+  if (tg) {
+    tg.ready();
+    tg.expand();
+    try { tg.isVersionAtLeast?.("7.7") && tg.disableVerticalSwipes(); } catch (e) {}
+    try { tg.isVersionAtLeast?.("6.1") && tg.setBackgroundColor(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()); } catch (e) {}
+    try { tg.isVersionAtLeast?.("7.10") && tg.setBottomBarColor?.(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()); } catch (e) {}
+    tg.onEvent?.("themeChanged", () => location.reload());
+  }
+  paintHeader();
+  load();
+  // Re-check connections after returning from a sign-in page.
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && state) load(true); });
+}
+init();
 </script>
 </body>
 </html>
