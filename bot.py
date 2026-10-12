@@ -1019,6 +1019,22 @@ async def plan_scenes(data, job):
     return scenes
 
 
+async def english_prompt(data, prompt):
+    """Image models understand English best: translate and enrich a prompt written in another language."""
+    if prompt.isascii():
+        return prompt
+    try:
+        response = await data["client"].responses.create(
+            model=data["model"], store=False, max_output_tokens=600, input=prompt,
+            instructions=("Rewrite this image request as one detailed English prompt for a text-to-image model: subject, "
+                          "style, lighting, composition. Keep every detail the user asked for; quote any text that must "
+                          "appear in the image as is. Output only the prompt."))
+        return (response.output_text or "").strip() or prompt
+    except Exception as exc:  # the original prompt still works, just less precisely
+        LOG.warning("Prompt translation failed: %s", type(exc).__name__)
+        return prompt
+
+
 async def make_video(data, job):
     """Generate the scenes in parallel, voice them and edit them into one MP4. Returns the video bytes."""
     scenes = await plan_scenes(data, job)
@@ -1055,7 +1071,8 @@ async def generation_job(app, job):
     try:
         caption = job["prompt"][:900]
         if kind == "photo":
-            url = await fal_generate(data["http"], job["key"], job["model"], "photo", job["prompt"], job["fmt"])
+            prompt = await english_prompt(data, job["prompt"])
+            url = await fal_generate(data["http"], job["key"], job["model"], "photo", prompt, job["fmt"])
             await send_media(bot, data["http"], user_id, "photo", url, caption)
         else:
             video = await make_video(data, job)
