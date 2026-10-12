@@ -1521,13 +1521,31 @@ async def secretary_answer(context, message):
     text = (response.output_text or "").strip()
     if not text or text.upper().startswith("SKIP"):
         return
-    await context.bot.send_message(chat_id, text[:3500], business_connection_id=conn_id)
+    await send_signed(context, chat_id, text[:3500], conn_id)
     activity.log(chat_id, f"AI secretary: {text}")
     if current.get("notify", True):
         try:
             await context.bot.send_message(conn["chat_id"], f"🤖 {name}: «{said[:200]}»\n↳ {text[:500]}")
         except TelegramError:
             pass
+
+
+async def send_signed(context, chat_id, text, conn_id):
+    """Send the secretary's answer with a signature: the animated logo and the bot's name, so nobody thinks it's the owner."""
+    data = context.bot_data
+    ru = any("а" <= c.lower() <= "я" for c in text)
+    name = context.bot.first_name or "Secret AI"
+    logo = data["logo"]
+    signature = f"{logo} {name} · {'ИИ-ассистент' if ru else 'AI assistant'}"
+    body = f"{text}\n\n"
+    start = utf16_len(body)
+    italic = MessageEntity(MessageEntity.ITALIC, start + utf16_len(logo) + 1, utf16_len(signature) - utf16_len(logo) - 1)
+
+    async def post(entities):
+        marks = [italic] + [MessageEntity(e.type, start, e.length, custom_emoji_id=e.custom_emoji_id) for e in entities or []]
+        return await context.bot.send_message(chat_id, body + signature, entities=marks, business_connection_id=conn_id)
+
+    return await with_logo(data, post)
 
 
 async def secretary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
