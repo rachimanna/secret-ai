@@ -1519,9 +1519,9 @@ async def secretary_answer(context, message):
         max_output_tokens=1500,
         input="Chat (oldest first):\n" + "\n".join(activity.lines.get(chat_id, [])) + f"\n\nAnswer {name}'s last message.")
     text = (response.output_text or "").strip()
-    if not text or text.upper().startswith("SKIP"):
+    if not text:
         return
-    await send_signed(context, chat_id, text[:3500], conn_id)
+    await send_signed(context, chat_id, text[:3500], conn_id, message.message_id)
     activity.log(chat_id, f"AI secretary: {text}")
     if current.get("notify", True):
         try:
@@ -1530,7 +1530,7 @@ async def secretary_answer(context, message):
             pass
 
 
-async def send_signed(context, chat_id, text, conn_id):
+async def send_signed(context, chat_id, text, conn_id, reply_id=None):
     """Send the secretary's answer with a signature: the animated logo and the bot's name, so nobody thinks it's the owner."""
     data = context.bot_data
     ru = any("а" <= c.lower() <= "я" for c in text)
@@ -1543,7 +1543,8 @@ async def send_signed(context, chat_id, text, conn_id):
 
     async def post(entities):
         marks = [italic] + [MessageEntity(e.type, start, e.length, custom_emoji_id=e.custom_emoji_id) for e in entities or []]
-        return await context.bot.send_message(chat_id, body + signature, entities=marks, business_connection_id=conn_id)
+        return await context.bot.send_message(chat_id, body + signature, entities=marks, business_connection_id=conn_id,
+                                              reply_parameters=reply_to(reply_id))
 
     return await with_logo(data, post)
 

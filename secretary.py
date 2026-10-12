@@ -6,7 +6,7 @@ how to answer ("reply to everyone: hi, I'm busy, I'll answer later, this is an A
 import time
 
 OWNER_ACTIVE = 10 * 60  # after the owner writes in a chat, the secretary stays quiet there for 10 minutes
-MIN_GAP = 20  # seconds between two replies in one chat (no reply storms)
+MIN_GAP = 0  # every message gets its own answer
 HISTORY = 14  # recent lines of a chat the secretary sees
 
 TOOL = {"type": "function", "name": "secretary_settings",
@@ -71,8 +71,8 @@ def instructions(owner_name, rules):
         f"behalf while they are away. {owner_name}'s instructions: «{rules}». Follow them exactly: say what they asked, in "
         "their tone; keep exact phrases they wrote. Answer in the language of the person writing, short and natural, like a "
         "message. Never promise anything for the owner beyond the instructions, never agree to payments, meetings or "
-        "favours, never share private information, never pretend to be the owner in person. If you already answered this "
-        "person recently and their new message doesn't need another answer (thanks, ok, emoji), reply exactly SKIP.")
+        "favours, never share private information, never pretend to be the owner in person. Answer every message, "
+        "even short ones; if the instructions give a fixed phrase, you may vary it slightly so it doesn't look like a loop.")
 
 
 class Activity:
