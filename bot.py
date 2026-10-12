@@ -65,7 +65,7 @@ DEFAULT_PERSONA = "assistant"
 # The thinking bubble starts with the logo: an animated custom emoji made from webapp/logo-emoji.webm
 # (the bot creates the emoji pack itself) or the one from BRAND_EMOJI_ID.
 LOGO_EMOJI_FILE = Path(__file__).with_name("webapp") / "logo-emoji.webm"
-LOGO_EMOJI_VERSION = "v1"
+LOGO_EMOJI_VERSION = "v2"
 THINKING = {
     "ru": ["Думаю", "Анализирую вопрос", "Ищу лучший ответ", "Формулирую", "Почти готово"],
     "en": ["Thinking", "Analyzing your question", "Looking for the best answer", "Writing", "Almost done"],
@@ -249,7 +249,8 @@ async def with_logo(config, send):
             raise
         # Bots may use custom emoji only when the owner has Telegram Premium or a Fragment username.
         config["logo_id"] = ""
-        LOG.warning("Custom emoji logo is not available for this bot; using the plain emoji")
+        # Telegram's error text holds no user data; it tells the owner why the logo is not shown.
+        LOG.warning("Custom emoji logo refused by Telegram (%s); using the plain emoji", exc.message)
         return await send(None)
 
 
@@ -1022,7 +1023,7 @@ async def ensure_logo(app):
             pack = await app.bot.get_sticker_set(name)
         emoji_id = pack.stickers[0].custom_emoji_id
     except (TelegramError, IndexError) as exc:
-        LOG.warning("Could not create the logo emoji: %s", type(exc).__name__)
+        LOG.warning("Could not create the logo emoji: %s %s", type(exc).__name__, getattr(exc, "message", ""))
         return
     store.set_meta("logo_emoji", {"version": LOGO_EMOJI_VERSION, "emoji": "✨", "id": emoji_id})
     data["logo"], data["logo_id"] = "✨", emoji_id

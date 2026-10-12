@@ -503,15 +503,23 @@ let state = null;
 const connectedSlugs = () => new Set([...(state?.apps?.connected || []).map(a => a.slug), ...(state?.github?.connected ? ["github"] : [])]);
 const connectedCount = () => (state?.apps?.connected || []).length + (state?.github?.connected ? 1 : 0) + (state?.mcp || []).length;
 
-async function load(fresh = false) {
-  try {
-    const next = await api("/api/state", { fresh });
-    // Re-render only when something changed, so lists don't jump on every refresh.
-    if (JSON.stringify(next) !== JSON.stringify(state)) { state = next; renderAll(); }
-  } catch (e) {
-    if (!state) toast(errorText(e));
-  }
-  return state;
+let loading = null;
+function load(fresh = false) {
+  // One request at a time: the GitHub/app polling and visibilitychange share it instead of piling up.
+  if (loading) return loading;
+  loading = (async () => {
+    try {
+      const next = await api("/api/state", { fresh });
+      // Re-render only when something changed, so lists don't jump on every refresh.
+      if (JSON.stringify(next) !== JSON.stringify(state)) { state = next; renderAll(); }
+    } catch (e) {
+      if (!state) toast(errorText(e));
+    } finally {
+      loading = null;
+    }
+    return state;
+  })();
+  return loading;
 }
 
 function settle() {
@@ -704,18 +712,21 @@ $("chips").addEventListener("click", e => {
 });
 
 /* ---------------- sheets ---------------- */
-let sheetClose = null;
+let sheetClose = null, sheetSeq = 0;
 function openSheet(html, onClose) {
+  const seq = ++sheetSeq;
   const sheet = $("sheet");
   sheet.innerHTML = `<div class="grab"></div><button class="close glass press" aria-label="close">${ICON.close}</button>` + html;
   sheet.querySelector(".close").onclick = closeSheet;
   sheet.querySelectorAll("[data-link]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); openLink(a.dataset.link); }));
-  requestAnimationFrame(() => { sheet.classList.add("open"); $("scrim").classList.add("open"); });
+  // Opened on the next frame for the slide-in; skipped if the sheet was closed (or replaced) meanwhile.
+  requestAnimationFrame(() => { if (seq !== sheetSeq) return; sheet.classList.add("open"); $("scrim").classList.add("open"); });
   sheetClose = onClose || null;
   tg?.BackButton?.show();
   haptic("medium");
 }
 function closeSheet() {
+  sheetSeq++;
   $("sheet").classList.remove("open");
   $("scrim").classList.remove("open");
   tg?.BackButton?.hide();
@@ -735,6 +746,20 @@ tg?.BackButton?.onClick(closeSheet);
 
 let waitTimer = null;
 function stopWaiting() { clearInterval(waitTimer); waitTimer = null; }
+// Poll /api/state until done(state) is true. A tick that finishes after the sheet was closed (or a newer
+// poll started) is ignored, so a late answer can never animate or close a sheet the user already left.
+function pollState(fresh, done, onDone, onTimeout) {
+  stopWaiting();
+  const started = Date.now();
+  const timer = setInterval(async () => {
+    if (Date.now() - started > 5 * 60 * 1000) { if (waitTimer === timer) { stopWaiting(); onTimeout(); } return; }
+    if (document.hidden) return;
+    const s = await load(fresh);
+    if (waitTimer !== timer) return;
+    if (done(s)) { stopWaiting(); onDone(); }
+  }, 2500);
+  waitTimer = timer;
+}
 
 function openAppSheet(app, opts = {}) {
   if (app.slug === "github") return openGitHubSheet();
@@ -771,24 +796,18 @@ async function startConnect(app, opts) {
     $("lead").textContent = T.waitingSub;
     btn.innerHTML = `<span class="spinner"></span>${T.waiting}`;
     const before = new Set((state.apps.connected || []).map(a => a.id));
-    const started = Date.now();
-    stopWaiting();
-    waitTimer = setInterval(async () => {
-      if (Date.now() - started > 5 * 60 * 1000) { stopWaiting(); btn.disabled = false; btn.textContent = T.connectApp(app.name); return; }
-      if (document.hidden) return;
-      const s = await load(true);
-      const fresh = (s?.apps?.connected || []).find(a => a.slug === app.slug && !before.has(a.id));
-      if (fresh) { stopWaiting(); connectedAnimation(app, opts); }
-    }, 2500);
+    pollState(true, s => (s?.apps?.connected || []).some(a => a.slug === app.slug && !before.has(a.id)),
+      () => connectedAnimation(app, opts),
+      () => { btn.disabled = false; btn.textContent = T.connectApp(app.name); });
   } catch (e) {
     btn.disabled = false; btn.textContent = T.connectApp(app.name);
     toast(errorText(e)); haptic("error");
   }
 }
 function connectedAnimation(app, opts) {
-  haptic("success");
   const big = $("big");
-  if (!big) return;
+  if (!big || !$("sheet").classList.contains("open")) return;
+  haptic("success");
   big.classList.remove("wait");
   big.insertAdjacentHTML("beforeend", `<span class="done-check"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>`);
   document.querySelector("#sheet h3").textContent = T.connectedTo(app.name);
@@ -798,7 +817,7 @@ function connectedAnimation(app, opts) {
   btn.classList.add("ok");
   btn.innerHTML = opts.then ? `${T.runIt} ✨` : `${ICON.check} ${T.connected}`;
   btn.onclick = () => { closeSheet(); if (opts.then) sendToChat(opts.then); };
-  if (!opts.then) setTimeout(() => { if ($("go") === btn) closeSheet(); }, 1800);
+  if (!opts.then) setTimeout(() => { if ($("go") === btn && $("sheet").classList.contains("open")) closeSheet(); }, 1800);
 }
 
 function confirm(text, ok) {
@@ -840,14 +859,9 @@ function openGitHubSheet() {
       $("big").classList.add("wait");
       $("lead").textContent = T.waitingSub;
       btn.innerHTML = `<span class="spinner"></span>${T.waiting}`;
-      const started = Date.now();
-      stopWaiting();
-      waitTimer = setInterval(async () => {
-        if (document.hidden) return;
-        const s = await load();
-        if (s?.github?.connected) { stopWaiting(); connectedAnimation({ name: "GitHub" }, {}); }
-        else if (Date.now() - started > 5 * 60 * 1000) { stopWaiting(); btn.disabled = false; btn.textContent = T.connectApp("GitHub"); }
-      }, 2500);
+      pollState(false, s => s?.github?.connected,
+        () => connectedAnimation({ name: "GitHub" }, {}),
+        () => { btn.disabled = false; btn.textContent = T.connectApp("GitHub"); });
     } catch (e) { btn.disabled = false; btn.textContent = T.connectApp("GitHub"); toast(errorText(e)); haptic("error"); }
   };
   $("gh-save").onclick = async e => {
@@ -938,17 +952,36 @@ function switchTab(tab) {
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
 /* ---------------- Telegram chrome ---------------- */
+// Telegram may answer setHeaderColor/setBackgroundColor with a "themeChanged" event. Never react to that
+// with a reload or another color call: that was an endless reload loop (the screen kept flashing).
+const painted = {};
+function tgColor(method, color, version) {
+  if (!tg?.[method] || !tg.isVersionAtLeast?.(version) || painted[method] === color) return;
+  painted[method] = color;
+  try { tg[method](color); } catch (e) {}
+}
+const bgColor = () => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
 function paintHeader() {
-  if (!tg?.setHeaderColor || !tg.isVersionAtLeast?.("6.1")) return;
   const hero = ["agent", "discover"].includes(document.body.dataset.tab) && window.scrollY < 60;
-  const color = hero ? "#4b55ff" : getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
-  if (paintHeader.last !== color) { paintHeader.last = color; try { tg.setHeaderColor(color); } catch (e) {} }
+  tgColor("setHeaderColor", hero ? "#4b55ff" : bgColor(), "6.1");
+}
+function applyTheme() {
+  const scheme = tg?.colorScheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
+  const theme = scheme === "light" ? "light" : "dark";
+  if (document.documentElement.dataset.theme === theme) return false;
+  document.documentElement.dataset.theme = theme;
+  return true;
+}
+function paintChrome() {
+  tgColor("setBackgroundColor", bgColor(), "6.1");
+  tgColor("setBottomBarColor", bgColor(), "7.10");
+  paintHeader();
 }
 window.addEventListener("scroll", paintHeader, { passive: true });
 
 function init() {
-  const dark = (tg?.colorScheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark")) !== "light";
-  document.documentElement.dataset.theme = dark ? "dark" : "light";
+  if ("scrollRestoration" in history) history.scrollRestoration = "manual";  // always open at the top
+  applyTheme();
   document.documentElement.lang = lang;
   document.querySelectorAll("[data-t]").forEach(el => { const v = T[el.dataset.t]; if (typeof v === "string") el.textContent = v; });
   $("hero-logo").innerHTML = logoSvg("hero");
@@ -964,11 +997,10 @@ function init() {
     tg.ready();
     tg.expand();
     try { tg.isVersionAtLeast?.("7.7") && tg.disableVerticalSwipes(); } catch (e) {}
-    try { tg.isVersionAtLeast?.("6.1") && tg.setBackgroundColor(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()); } catch (e) {}
-    try { tg.isVersionAtLeast?.("7.10") && tg.setBottomBarColor?.(getComputedStyle(document.documentElement).getPropertyValue("--bg").trim()); } catch (e) {}
-    tg.onEvent?.("themeChanged", () => location.reload());
+    // Only a real light/dark switch changes anything; echoes of our own color calls are ignored.
+    tg.onEvent?.("themeChanged", () => { if (applyTheme()) paintChrome(); });
   }
-  paintHeader();
+  paintChrome();
   load().then(settle);
   // Re-check connections after returning from a sign-in page.
   document.addEventListener("visibilitychange", () => { if (!document.hidden && state) load(true); });
