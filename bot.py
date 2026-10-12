@@ -348,7 +348,8 @@ async def with_logo(config, send, kind="message"):
 
 def thinking_frame(language, logo, started, dots=None, note=None):
     """While the model thinks: just the animated logo (plus what the bot is doing, e.g. reading a file)."""
-    return f"{logo} {note}…" if note else logo
+    # A message of a single emoji is shown huge; the dots keep the logo small, inside a normal bubble.
+    return f"{logo} {note}…" if note else f"{logo} …"
 
 
 async def typing_loop(target, action):
@@ -1017,8 +1018,8 @@ class GroupReply:
         pass
 
     async def start(self):
-        logo = self.config["logo"]
-        self.message = await with_logo(self.config, lambda entities: reply(self.target, logo, entities=entities))
+        frame = thinking_frame("ru", self.config["logo"], 0)
+        self.message = await with_logo(self.config, lambda entities: reply(self.target, frame, entities=entities))
         self.typing = asyncio.create_task(typing_loop(self.target, ChatAction.TYPING))
 
     async def update(self, text):
