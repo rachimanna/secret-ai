@@ -1008,7 +1008,7 @@ async def discover_models(app):
         LOG.warning("%s is not on the OpenAI key or RouteLLM; offering %s instead", GPT_PICK, data["model"])
         gpt = data["model"]
     gemini = None
-    if data.get("anymodel_chat"):
+    if data.get("anymodel_chat") and os.environ.get("GEMINI_CHAT", "").strip() == "1":  # off unless asked for
         try:
             gemini = pick_gemini([m.id for m in (await data["anymodel_chat"].models.list()).data])
         except Exception as exc:
@@ -1017,7 +1017,7 @@ async def discover_models(app):
             gemini = ANYMODEL_PREFIX + gemini
             LOG.info("Gemini on AnyModel: %s", gemini)
         else:
-            LOG.warning("Gemini 3.8 is not in the AnyModel catalog; Claude Opus stays the default")
+            LOG.warning("Gemini 3.8 is not in the AnyModel catalog")
     claude = OPUS if data.get("anymodel_chat") else None
     data["models"] = [m for m in (gemini, claude, gpt) if m]
     chosen = data.get("chat_override")
