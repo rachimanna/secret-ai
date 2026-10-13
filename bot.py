@@ -3203,6 +3203,7 @@ async def ensure_logo(app):
     data["logo"], data["logo_id"] = "✨", emoji_id
 
 
+FISH_VOICE = "d432528907754a3aaaa6f2d90b7b9cfa"  # the owner's Fish Audio voice; FISH_VOICE env overrides
 KEEP_AWAKE_EVERY = 600  # Render's free plan sleeps after 15 minutes without incoming HTTP requests
 
 
@@ -3482,7 +3483,7 @@ def main():
         anymodel_video=os.environ.get("ANYMODEL_VIDEO_MODEL", "").strip() or ANYMODEL_VIDEO,
         anymodel_voice=os.environ.get("ANYMODEL_VOICE", ANYMODEL_VOICE).strip(),
         fish_key=os.environ.get("FISH_API_KEY", "").strip(),
-        fish_voice=fish_voice_id(os.environ.get("FISH_VOICE", "")),
+        fish_voice=fish_voice_id(os.environ.get("FISH_VOICE", "") or FISH_VOICE),
         fish_model=os.environ.get("FISH_MODEL", "").strip(),
         chat_default=os.environ.get("CHAT_MODEL", "").strip() or OPUS,
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
