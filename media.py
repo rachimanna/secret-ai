@@ -437,12 +437,49 @@ async def anymodel_speech(http, key, voice_model, text, base=ANYMODEL_API):
         raise MediaError("failed", type(exc).__name__) from None
     if response.status_code >= 400 or response.headers.get("content-type", "").startswith("application/json"):
         raise _anymodel_failure(response, "speech")
+    return await voice_message(response.content)
+
+
+async def voice_message(audio):
+    """Any audio (MP3…) as an OGG Opus file that Telegram shows as a voice message."""
     with tempfile.TemporaryDirectory(prefix="secret-ai-tts-") as folder:
         folder = Path(folder)
-        (folder / "in.audio").write_bytes(response.content)
+        (folder / "in.audio").write_bytes(audio)
         await _ffmpeg("-i", str(folder / "in.audio"), "-vn", "-c:a", "libopus", "-b:a", "48k", "-ac", "1",
                       str(folder / "voice.ogg"), timeout=120)
         return (folder / "voice.ogg").read_bytes()
+
+
+# ---------- Fish Audio: thousands of character voices, picked by the voice's id from fish.audio ----------
+
+FISH_API = "https://api.fish.audio/v1/tts"
+FISH_MODELS = ("s2-pro", "s1")  # FISH_MODEL env picks one; the next is tried if the first is refused
+
+
+def fish_voice_id(text):
+    """The voice id from what the owner pasted: the id itself or a fish.audio link to the voice (…/m/<id>)."""
+    found = re.search(r"([0-9a-f]{32})", text or "")
+    return found[1] if found else (text or "").strip()
+
+
+async def fish_speech(http, key, voice, text, model=""):
+    """Speech in a Fish Audio voice as an OGG Opus voice message."""
+    for name in ([model] if model else list(FISH_MODELS)):
+        try:
+            response = await http.post(FISH_API, timeout=120, json={"text": text, "reference_id": voice, "format": "mp3"},
+                                       headers={"Authorization": f"Bearer {key}", "model": name})
+        except httpx.HTTPError as exc:
+            raise MediaError("failed", type(exc).__name__) from None
+        if response.status_code < 400 and not response.headers.get("content-type", "").startswith("application/json"):
+            return await voice_message(response.content)
+        detail = response.text[:200]
+        if response.status_code in (401, 403):
+            raise MediaError("bad_video_key", detail)
+        if response.status_code == 402:
+            raise MediaError("video_billing", detail)
+        if "model" not in detail.lower():  # only an unknown model is worth another try
+            break
+    raise MediaError("failed", f"fish {response.status_code} {detail}")
 
 
 def _json(response):
