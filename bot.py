@@ -553,16 +553,27 @@ class DraftReply:
         if self.config.get("rich_drafts", True):
             # Telegram's own see-through "thinking" block (Bot API 10.2 rich drafts), without our emoji.
             status = frame.split(" ", 1)[1] if frame.startswith(self.config["logo"] + " ") else frame
+            logo_id = self.config.get("logo_id") if "rich" not in self.config.get("logo_off", set()) else None
+            # Our animated logo in front of the status, as a custom emoji inside the thinking block.
+            text = ([{"type": "custom_emoji", "custom_emoji_id": logo_id, "alternative_text": self.config["logo"]}, " " + status]
+                    if logo_id else f"{self.config['logo']} {status}")
             try:
-                await self.bot.do_api_request("sendRichMessageDraft", api_kwargs={
-                    "chat_id": self.chat_id, "draft_id": self.draft_id,
-                    "rich_message": {"blocks": [{"type": "thinking", "text": status}], "skip_entity_detection": True}})
+                await self._push_thinking(text)
                 self.shown, self.pushed = frame, time.monotonic()
                 return
             except BadRequest as exc:
+                if logo_id and any(w in str(exc).lower() for w in ("emoji", "entit", "document", "premium")):
+                    self.config.setdefault("logo_off", set()).add("rich")  # the logo isn't allowed there: plain emoji
+                    LOG.warning("Custom emoji logo refused in the thinking block (%s); using the plain emoji", str(exc)[:120])
+                    return await self._show_frame()
                 self.config["rich_drafts"] = False  # this Telegram has no rich drafts: the plain text frame from now on
                 LOG.warning("Rich thinking drafts are unavailable (%s); using plain drafts", str(exc)[:120])
         await self._push(frame)
+
+    async def _push_thinking(self, text):
+        await self.bot.do_api_request("sendRichMessageDraft", api_kwargs={
+            "chat_id": self.chat_id, "draft_id": self.draft_id,
+            "rich_message": {"blocks": [{"type": "thinking", "text": text}], "skip_entity_detection": True}})
 
     async def start(self):
         await self._show_frame()
