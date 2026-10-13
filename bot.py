@@ -127,6 +127,7 @@ TYPING_INTERVAL = 4.5
 DRAFT_INTERVAL = 0.3
 # A draft disappears after 30 seconds without updates.
 DRAFT_KEEPALIVE = 10
+GROUP_FRAME_INTERVAL = 3  # groups allow ~20 edits a minute
 REVEAL_MIN_STEP = 24
 MAX_TOOL_ROUNDS = 12
 DIFF_INLINE_LIMIT = 2500
@@ -359,10 +360,33 @@ async def with_logo(config, send, kind="message"):
         return await send(None)
 
 
-def thinking_frame(language, logo, started, dots=None, note=None):
-    """While the model thinks: just the animated logo (plus what the bot is doing, e.g. reading a file)."""
-    # A message of a single emoji is shown huge; the dots keep the logo small, inside a normal bubble.
-    return f"{logo} {note}…" if note else f"{logo} …"
+SEARCH_NOTE = "Ищу в интернете"
+STEP_NAMES = {SEARCH_NOTE: ("поиск в интернете", "web search")}
+
+
+def thinking_frame(language, logo, started, dots=None, note=None, done=()):
+    """While the model thinks, like big AI bots: what it is doing now, then a timer and the finished steps.
+
+    🌟 Думаю                 🌟 Ищу в интернете
+    12с · поиск в интернете ✓   8с · поиск в интернете…
+    """
+    ru = language == "ru"
+    action = note or ("Думаю" if ru else "Thinking")
+    icon = logo  # always first: the animated custom-emoji logo sits at offset 0
+    if note == SEARCH_NOTE and not ru:
+        action = "Searching the web"
+    seconds = max(0, int(time.monotonic() - started)) if started else 0
+    steps = [STEP_NAMES.get(step, (step.lower(), step.lower()))[0 if ru else 1] + " ✓" for step in done]
+    if note:
+        steps.append(STEP_NAMES.get(note, (note.lower(), note.lower()))[0 if ru else 1] + "…")
+    return f"{icon} {action}\n" + " · ".join([f"{seconds}{'с' if ru else 's'}"] + steps)
+
+
+def track_step(reply, note):
+    """Remember a finished step (shown with ✓) when the bot moves on from it."""
+    if reply.note and reply.note != note and reply.note not in reply.done:
+        reply.done.append(reply.note)
+    reply.note = note
 
 
 async def typing_loop(target, action):
@@ -393,13 +417,13 @@ class LiveReply:
         self.last_edit = 0.0
         self.lock = asyncio.Lock()
         self.tasks = []
-        self.note = None
+        self.note, self.done = None, []
 
     def frame(self, tick):
-        return thinking_frame(self.language, self.config["logo"], self.started, tick % 3 + 1, self.note)
+        return thinking_frame(self.language, self.config["logo"], self.started, tick % 3 + 1, self.note, self.done)
 
     def status(self, note):
-        self.note = note
+        track_step(self, note)
 
     async def start(self):
         first = self.frame(0)
@@ -509,11 +533,11 @@ class DraftReply:
         self.started = time.monotonic()
         self.closed, self.wake = False, asyncio.Event()
         self.tasks = []
-        self.note = None
+        self.note, self.done = None, []
 
     def status(self, note):
-        """Show what the bot is doing (e.g. reading a file) under the thinking timer or the text."""
-        self.note = note
+        """Show what the bot is doing (e.g. searching the web) with the thinking timer or under the text."""
+        track_step(self, note)
 
     async def _push(self, text, entities=None):
         params = {"chat_id": self.chat_id, "draft_id": self.draft_id, "text": text}
@@ -535,7 +559,7 @@ class DraftReply:
 
     async def _tick(self):
         if not self.text.strip():
-            frame = thinking_frame(self.language, self.config["logo"], self.started, note=self.note)
+            frame = thinking_frame(self.language, self.config["logo"], self.started, note=self.note, done=self.done)
             # The frame rarely changes now: re-send it before Telegram drops a draft that saw no updates for 30 s.
             if frame != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE:
                 await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
@@ -647,9 +671,9 @@ class SilentReply:
 
 async def open_reply(target, language, config):
     """Start a live reply: native drafts when Telegram supports them, message edits otherwise."""
-    # Drafts are smoother, but if Telegram won't show the logo there, the edited message keeps the logo.
-    logo_in_drafts = not config.get("logo_id") or "draft" not in config.get("logo_off", set())
-    if config.get("drafts") and logo_in_drafts:
+    # Drafts (the see-through message that types itself) come first; if Telegram refuses the custom emoji logo
+    # there, the draft shows the plain emoji instead (with_logo handles that).
+    if config.get("drafts"):
         draft = DraftReply(target, language, config)
         try:
             await draft.start()
@@ -657,8 +681,10 @@ async def open_reply(target, language, config):
         except (RetryAfter, NetworkError):
             pass
         except TelegramError as exc:
-            config["drafts"] = False
-            LOG.warning("Native drafts are unavailable (%s); using message edits", type(exc).__name__)
+            # Only a Telegram that doesn't know drafts turns them off for good; any other hiccup costs one reply.
+            if "not found" in str(exc).lower() or "unknown method" in str(exc).lower():
+                config["drafts"] = False
+            LOG.warning("Native draft failed (%s: %s); using message edits for this reply", type(exc).__name__, str(exc)[:120])
     live = LiveReply(target, language, config)
     await live.start()
     return live
@@ -676,6 +702,10 @@ async def model_round(context, live, prefix, request):
                         text += event.delta
                         live.status(None)
                         await live.update(prefix + text)
+                    elif event.type == "response.web_search_call.in_progress":
+                        live.status(SEARCH_NOTE)
+                    elif event.type == "response.web_search_call.completed":
+                        live.status(None)
                 return await stream.get_final_response()
         except BadRequestError as exc:
             # Some models require a verified OpenAI organization for streaming.
@@ -757,8 +787,11 @@ WEB_TOOL = {"type": "function", "function": {
 async def web_lookup(data, query):
     """Search the web through the OpenAI model's built-in search; returns a short factual digest with sources."""
     try:
+        request = dict(model=data["model"], store=False, max_output_tokens=1500, tools=[{"type": "web_search"}], input=query)
+        if data.get("reasoning"):
+            request["reasoning"] = {"effort": "low"}  # a lookup, not a puzzle: answer fast
         response = await data["client"].responses.create(
-            model=data["model"], store=False, max_output_tokens=1500, tools=[{"type": "web_search"}], input=query,
+            **request,
             instructions=("Search the web and report the facts that answer the query: exact numbers with units and dates, "
                           "and the source links. Today is " + time.strftime("%Y-%m-%d") + ". No small talk."))
         return response.output_text or "Nothing found."
@@ -860,7 +893,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
             except ValueError:
                 args = {}
             if call["name"] == "web_search":
-                live.status("Ищу в интернете")
+                live.status(SEARCH_NOTE)
                 output = await web_lookup(context.bot_data, str(args.get("query") or ""))
             elif toolbox:
                 live.status(toolbox.status(call["name"], args))
@@ -1504,19 +1537,38 @@ async def send_files(update, context, target, files):
 
 
 class GroupReply:
-    """In groups: no long animation, just the logo until the answer is ready, then the answer in its place."""
+    """In groups: the same "Думаю · 5с" frame as in private chats (edited every few seconds: groups allow fewer
+    edits), then the answer in its place."""
 
     def __init__(self, target, config):
         self.target, self.config = target, config
         self.text, self.message, self.typing = "", None, None
+        self.started, self.note, self.done, self.shown = time.monotonic(), None, [], ""
 
     def status(self, note):
-        pass
+        track_step(self, note)
+
+    def frame(self):
+        return thinking_frame("ru", self.config["logo"], self.started, note=self.note, done=self.done)
 
     async def start(self):
-        frame = thinking_frame("ru", self.config["logo"], 0)
+        frame = self.shown = self.frame()
         self.message = await with_logo(self.config, lambda entities: reply(self.target, frame, entities=entities))
-        self.typing = asyncio.create_task(typing_loop(self.target, ChatAction.TYPING))
+        self.typing = asyncio.gather(typing_loop(self.target, ChatAction.TYPING), self._animate())
+
+    async def _animate(self):
+        while True:
+            await asyncio.sleep(GROUP_FRAME_INTERVAL)
+            frame = self.frame()
+            if frame == self.shown:
+                continue
+            try:
+                await with_logo(self.config, lambda entities: self.message.edit_text(frame, parse_mode=None, entities=entities))
+                self.shown = frame
+            except RetryAfter as exc:
+                await asyncio.sleep(seconds(exc.retry_after))
+            except TelegramError:
+                pass
 
     async def update(self, text):
         self.text = text
