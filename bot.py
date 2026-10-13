@@ -374,6 +374,14 @@ async def typing_loop(target, action):
         await asyncio.sleep(TYPING_INTERVAL)
 
 
+def code_progress(text, language="ru"):
+    """While code is being written: the prose before it plus "writing code… N lines" instead of the raw code."""
+    head = text[:text.find("```")].rstrip()
+    lines = sum(part.count("\n") for part in text.split("```")[1::2])
+    note = f"✍️ Пишу код… {lines} строк" if language == "ru" else f"✍️ Writing code… {lines} lines"
+    return f"{head}\n\n{note}".strip()
+
+
 class LiveReply:
     """Fallback reply: animates by editing a message while the model thinks, then streams the answer in place."""
 
@@ -431,7 +439,8 @@ class LiveReply:
     async def _render(self, final, reply_markup=None):
         async with self.lock:
             self.last_edit = time.monotonic()
-            parts = list(chunks(self.text.strip()))
+            shown = self.text if final or "```" not in self.text else code_progress(self.text, self.language)
+            parts = list(chunks(shown.strip()))
             if not parts:
                 return
             for index, part in enumerate(parts):
@@ -533,10 +542,10 @@ class DraftReply:
             return
         pending = self.text[self.offset:]
         if "```" in pending:
-            # Code goes out as files at the end: preview the tail in the draft, commit nothing.
-            tail = pending[-3500:]
-            if tail.strip() and (tail != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE):
-                await self._push(tail)
+            # Code goes out as files at the end: show progress in the draft instead of the raw code, commit nothing.
+            view = code_progress(pending, self.language)
+            if view.strip() and (view != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE):
+                await self._push(view)
             return
         # Commit full Telegram-sized parts as real messages and keep drafting the rest.
         while (cut := split_point(pending)) < len(pending):
@@ -745,7 +754,7 @@ def chat_messages(instructions, items):
     return messages
 
 
-async def abacus_answer(context, live, request):
+async def abacus_answer(context, live, request, prefix=""):
     """One streamed answer from a RouteLLM model (no tools there: apps, GitHub and search stay with GPT)."""
     client = context.bot_data["abacus"]
     stream = await client.chat.completions.create(
@@ -758,10 +767,10 @@ async def abacus_answer(context, live, request):
         delta = chunk.choices[0].delta.content or ""
         if delta:
             text += delta
-            await live.update(text)
+            await live.update(prefix + text)
         if chunk.choices[0].finish_reason == "length":
             status = "incomplete"
-    return text.strip(), status == "incomplete"
+    return (text if prefix else text.strip()), status == "incomplete"
 
 
 EXTRA_MODELS = ("gpt-6.1-sol",)  # offered when the OpenAI key (or, failing that, RouteLLM) has them
@@ -810,7 +819,8 @@ async def generate(context, live, toolbox=None, **request):
         if not context.bot_data.get("abacus"):
             raise AuthenticationError("ABACUS_API_KEY is not set", body=None,
                                       response=httpx.Response(401, request=httpx.Request("POST", ABACUS_URL)))
-        return await abacus_answer(context, live, request)
+        answer, incomplete = await abacus_answer(context, live, request)
+        return await continue_answer(context, live, request, answer, incomplete)
     tools = list(toolbox.definitions()) if toolbox else []
     if context.bot_data.get("web_search"):
         tools.append({"type": "web_search"})
@@ -846,6 +856,32 @@ async def generate(context, live, toolbox=None, **request):
             output = await toolbox.run(call.name, args)
             request["input"].append({"type": "function_call_output", "call_id": call.call_id, "output": output})
     live.status(None)
+    answer, incomplete = await continue_answer(context, live, request, answer, incomplete)
+    return answer, incomplete
+
+
+CONTINUE = ("Your previous message was cut off by the length limit. Continue exactly from where it stopped: no preface, no "
+            "repetition; if you were inside a code block, go on with the code and close the block.")
+CONTINUE_ROUNDS = 3
+
+
+async def continue_answer(context, live, request, answer, incomplete):
+    """A long answer (big code) hit the output limit: ask the model to go on and glue the parts together."""
+    base = [item for item in request["input"] if "role" in item]
+    for _ in range(CONTINUE_ROUNDS):
+        if not incomplete or not answer.strip():
+            break
+        follow = {key: value for key, value in request.items() if key not in ("tools", "include", "input")}
+        follow["input"] = base + [{"role": "assistant", "content": answer}, {"role": "user", "content": CONTINUE}]
+        if is_abacus(follow["model"]):
+            more, incomplete = await abacus_answer(context, live, follow, prefix=answer)
+        else:
+            response = await model_round(context, live, answer, follow)
+            more, incomplete = response.output_text or "", response.status == "incomplete"
+        if not more.strip():
+            break
+        answer += more
+        await live.update(answer)
     return answer, incomplete
 
 
@@ -1312,7 +1348,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         answer, incomplete = await generate(
             context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
             input=fit_history(memory.history(user_id)) + [{"role": "user", "content": content}],
-            store=False, max_output_tokens=16000)
+            store=False, max_output_tokens=32000)
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
@@ -1508,7 +1544,7 @@ async def group_respond(update, context, message, content):
     try:
         # No personal tools in groups: someone else's apps, repos and money must not be reachable from a shared chat.
         answer, _ = await generate(context, live, None, model=group_model(data, message.chat_id), instructions=group_instructions(update),
-                                   input=[{"role": "user", "content": content}], store=False, max_output_tokens=16000)
+                                   input=[{"role": "user", "content": content}], store=False, max_output_tokens=32000)
     except BaseException:
         await live.abort(None)
         raise
