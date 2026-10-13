@@ -12,6 +12,7 @@ import logging
 import re
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from urllib.parse import quote
 
@@ -318,98 +319,116 @@ async def kling_generate(http, key, model, prompt, fmt, seconds=KLING_SECONDS, b
 
 ANYMODEL_PREFIX = "anymodel:"
 ANYMODEL_API = "https://anymodel.org/v1"  # ANYMODEL_BASE env overrides
-ANYMODEL_VIDEO = "grok-imagine-video"  # ANYMODEL_VIDEO_MODEL env overrides
-ANYMODEL_SECONDS = 10
+ANYMODEL_VIDEO = "xai/grok-imagine-video"  # ANYMODEL_VIDEO_MODEL env overrides
+ANYMODEL_SECONDS = 10  # 1-15 s per clip; billed per second, so always sent explicitly
+ANYMODEL_RESOLUTION = "720p"  # sent explicitly too: an omitted one is billed at the dearest rate
+ANYMODEL_VOICE = "Miyuki|Миюки|Lucky Star"  # ANYMODEL_VOICE env: an exact voice model id, names to look up (a|b), or off
 DONE = ("done", "completed", "succeeded", "success", "succeed", "finished")
 FAILED = ("failed", "error", "expired", "cancelled", "canceled", "rejected")
 
 
+def _anymodel_failure(response, what):
+    detail = _gateway_error(response)
+    status = response.status_code
+    if status in (401, 403):  # 403: the account behind the key isn't active
+        return MediaError("bad_video_key", detail)
+    if status == 402:
+        return MediaError("video_billing", detail)
+    if status == 429:
+        return MediaError("busy", detail)
+    if status in (404, 406):
+        return MediaError("model", detail)
+    blocked = any(w in detail.lower() for w in ("moderation", "safety", "policy", "nsfw"))
+    return MediaError("blocked" if blocked else "failed", f"{what} {status} {detail}")
+
+
 async def anymodel_generate(http, key, model, prompt, fmt, seconds=ANYMODEL_SECONDS, base=ANYMODEL_API):
-    """One clip with its own sound. Speaks xAI's video API (POST /videos/generations, GET /videos/{id}) and falls back to
-    OpenAI's (POST /videos, GET /videos/{id}/content). Returns the MP4 bytes."""
+    """One clip with its own sound (AnyModel's xAI-shaped video API): create the job, poll it with the connection
+    ticket, download it through the gateway. Returns the MP4 bytes."""
     name = model[len(ANYMODEL_PREFIX):] if model.startswith(ANYMODEL_PREFIX) else model
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    aspect = {"square": "1:1", "portrait": "9:16"}.get(fmt, "16:9")
-    size = {"square": "720x720", "portrait": "720x1280"}.get(fmt, "1280x720")
+    headers = {"Authorization": f"Bearer {key}"}
+    body = {"model": name, "prompt": prompt[:4000], "duration": max(1, min(15, int(seconds))),
+            "resolution": ANYMODEL_RESOLUTION, "aspect_ratio": {"square": "1:1", "portrait": "9:16"}.get(fmt, "16:9")}
 
     async def call(method, path, **kwargs):
         try:
-            return await http.request(method, base + path, headers=headers, timeout=kwargs.pop("timeout", 60),
-                                      follow_redirects=True, **kwargs)
+            return await http.request(method, base + path, headers=headers | kwargs.pop("extra", {}),
+                                      timeout=kwargs.pop("timeout", 60), follow_redirects=True, **kwargs)
         except httpx.HTTPError as exc:
             raise MediaError("failed", type(exc).__name__) from None
 
-    attempts = (("/videos/generations", {"model": name, "prompt": prompt[:4000], "duration": seconds, "aspect_ratio": aspect,
-                                         "resolution": "720p"}),
-                ("/videos", {"model": name, "prompt": prompt[:4000], "seconds": str(seconds), "size": size}))
-    response = None
-    for path, body in attempts:
-        response = await call("POST", path, json=body)
-        if response.status_code not in (404, 405):
-            break
-    detail = _gateway_error(response)
-    if response.status_code in (401, 403):
-        raise MediaError("bad_video_key", detail)
-    if response.status_code == 402 or any(w in detail.lower() for w in ("balance", "insufficient", "credit", "funds", "баланс")):
-        raise MediaError("video_billing", detail)
-    if response.status_code == 429:
-        raise MediaError("busy", detail)
-    if response.status_code in (404, 405):
-        raise MediaError("model", "no video endpoint")
+    response = await call("POST", "/videos/generations", json=body, extra={"Idempotency-Key": str(uuid.uuid4())})
     if response.status_code >= 400:
-        blocked = any(w in detail.lower() for w in ("moderation", "safety", "policy", "nsfw"))
-        raise MediaError("blocked" if blocked else "model" if "model" in detail.lower() else "failed",
-                         f"submit {response.status_code} {detail}")
+        raise _anymodel_failure(response, "submit")
     job = _json(response)
-    ready = _video_url(job)
-    if ready:
-        return await _download(http, ready, headers)
-    inner = job.get("data") if isinstance(job.get("data"), dict) else {}
-    task = job.get("request_id") or job.get("id") or job.get("task_id") or inner.get("id") or inner.get("task_id")
+    task = job.get("request_id") or job.get("id")
     if not task:
         raise MediaError("failed", "no request id")
+    ticket = {"x-9router-connection-id": response.headers["x-9router-connection-id"]} \
+        if response.headers.get("x-9router-connection-id") else {}
     deadline = time.monotonic() + 1200
     while time.monotonic() < deadline:
         await asyncio.sleep(POLL_SECONDS * 2)
         try:
-            response = await call("GET", f"/videos/{task}")
-            if response.status_code == 404:
-                response = await call("GET", f"/videos/generations/{task}")
+            response = await call("GET", f"/videos/{task}", extra=ticket)
         except MediaError:
             continue
-        if response.status_code >= 500 or response.status_code == 404:
+        if response.status_code >= 500 or response.status_code == 429:
             continue
+        if response.status_code >= 400:
+            raise _anymodel_failure(response, "poll")
         data = _json(response)
         inner = data.get("data") if isinstance(data.get("data"), dict) else {}
         status = str(data.get("status") or inner.get("status") or "").lower()
-        url = _video_url(data)
-        if url:
-            return await _download(http, url, headers)
-        if status in DONE:  # OpenAI style: the file comes from /content
-            content = await call("GET", f"/videos/{task}/content", timeout=180)
-            if content.status_code < 400 and content.content[:12].find(b"ftyp") != -1:
+        if status in DONE or (_video_url(data) and status not in FAILED):
+            # Through the gateway: works where the provider's own link needs cookies.
+            content = await call("GET", f"/videos/{task}/content", extra=ticket, timeout=180)
+            if content.status_code < 400 and b"ftyp" in content.content[:16]:
                 return content.content
-            raise MediaError("failed", "done without a video")
+            url = _video_url(data)
+            if url:
+                return await _download(http, url, None)
+            raise MediaError("failed", f"download {content.status_code}")
         if status in FAILED:
-            message = _gateway_error(response) or status
+            message = _gateway_error(response) or str(data.get("error") or status)
             blocked = any(w in message.lower() for w in ("moderation", "safety", "policy", "nsfw"))
             raise MediaError("blocked" if blocked else "failed", message[:200])
     raise MediaError("timeout")
 
 
-async def anymodel_speech(http, key, voice, text, model="", base=ANYMODEL_API):
-    """Speech in one of AnyModel's voices (OpenAI-style POST /audio/speech) as an OGG Opus voice message."""
-    body = {"voice": voice, "input": text, "response_format": "mp3"}
-    if model:
-        body["model"] = model
+async def anymodel_voice_id(http, key, wanted, base=ANYMODEL_API):
+    """The speech model id for a voice: an id as is ("fish-farm/…", "edge-tts/ru-RU-…"), or the first voice whose id or
+    name holds one of the names in "a|b|c" (the TTS catalog first, then the Russian edge-tts voices). "" if none."""
+    wanted = (wanted or "").strip()
+    if not wanted or wanted.lower() in ("off", "none", "no"):
+        return ""
+    if "/" in wanted and "|" not in wanted:
+        return wanted
+    names = [n.strip().casefold() for n in wanted.split("|") if n.strip()]
+    for path in ("/models/tts", "/audio/voices?provider=edge-tts&lang=ru"):
+        try:
+            response = await http.get(base + path, headers={"Authorization": f"Bearer {key}"}, timeout=30)
+            entries = response.json().get("data") or [] if response.status_code < 400 else []
+        except (httpx.HTTPError, ValueError, AttributeError):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            text = " ".join(str(entry.get(k) or "") for k in ("id", "name", "model", "title", "description")).casefold()
+            if any(name in text for name in names):
+                return str(entry.get("model") or entry.get("id"))
+    return ""
+
+
+async def anymodel_speech(http, key, voice_model, text, base=ANYMODEL_API):
+    """Speech in an AnyModel voice (the voice is the model id) as an OGG Opus voice message."""
     try:
-        response = await http.post(base + "/audio/speech", json=body, timeout=120,
+        response = await http.post(base + "/audio/speech", json={"model": voice_model, "input": text}, timeout=120,
                                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     except httpx.HTTPError as exc:
         raise MediaError("failed", type(exc).__name__) from None
     if response.status_code >= 400 or response.headers.get("content-type", "").startswith("application/json"):
-        raise MediaError("bad_video_key" if response.status_code in (401, 403) else "failed",
-                         f"speech {response.status_code} {_gateway_error(response)}")
+        raise _anymodel_failure(response, "speech")
     with tempfile.TemporaryDirectory(prefix="secret-ai-tts-") as folder:
         folder = Path(folder)
         (folder / "in.audio").write_bytes(response.content)
@@ -451,8 +470,7 @@ def _gateway_error(response):
 
 
 async def _download(http, url, headers):
-    video = await http.get(url, timeout=180, follow_redirects=True,
-                           headers=headers if url.startswith(ANYMODEL_API.split("/v1")[0]) else None)
+    video = await http.get(url, timeout=180, follow_redirects=True, headers=headers)
     if video.status_code >= 400:
         raise MediaError("failed", f"download {video.status_code}")
     return video.content
