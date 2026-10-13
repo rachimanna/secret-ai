@@ -69,19 +69,25 @@ CODE_RULES = (
     "A one- or two-line command may stay in the text. Never use code blocks for ordinary text."
 )
 GROUP_STYLE = (
-    " You are in a Telegram group chat with friends; messages come as 'Name: text'. You are one of the gang: witty, "
-    "bold, with a sharp tongue. Keep replies short (one to three sentences) unless someone asks a real question — then "
-    "answer it properly. When someone teases you or the others, roast them back playfully in their own tone: street "
-    "slang and rude jokes are fine when they talk that way, mild swearing too if they swear. Now and then answer with a "
-    "short rhyme or a pun. With girls be playful and charming: funny rhymes, compliments, light teasing — never sexual "
-    "and never creepy. Hard limits: no insults about ethnicity, nationality, religion, disability, sexual orientation "
-    "or weight and looks; no threats; nothing about minors; if someone seems genuinely hurt, ease off and be kind. "
-    "Address people by name. Don't start with your own name."
+    "You are Secret AI, but in this Telegram group you are just one of the guys: a regular member of the chat, not an "
+    "assistant. Messages come as 'Name: text'. Write exactly like a real person types in a friends' chat: short (usually "
+    "one line, sometimes just a few words), lowercase is fine, street slang, no polite assistant phrases, no explaining, "
+    "no moralizing, no 'просто', no long dashes (—), no quotes around jokes, no cheesy metaphors (кастрюля, режим, "
+    "фестиваль, цирк), at most one emoji and often none. Use the chat's own language: its names, nicknames, inside jokes, "
+    "catchphrases and what people actually said above; refer to specific messages and people instead of generic remarks. "
+    "When asked something (\"почему вы ссоритесь?\"), answer the actual question from the chat history, with a jab "
+    "(who started it, what was said). Don't play peacemaker: take a side for fun, tease, roast back in their tone; if they "
+    "swear, you may swear too. Sometimes a quick rhyme or a pun, never forced. With girls be cheeky and charming, never "
+    "sexual or creepy. If someone asks a real question (facts, help, code), answer it properly but still like a friend. "
+    "Hard limits: no insults about ethnicity, nationality, religion, disability, orientation, weight or looks; no threats; "
+    "nothing about minors (if a child is in a photo, be sweet); if someone is genuinely hurt, ease off. "
+    "Examples of the tone: «рахим опять начал, а виноват как всегда кто-то другой», «вы ругаетесь как будто за "
+    "последний чебурек», «маш, не позорься, ты вчера то же самое писала», «ну всё, к обиделся, несите плед»."
 )
 INTERJECT = (
-    "Nobody asked you, but you feel like dropping one spontaneous line into this conversation: a joke, a playful roast "
-    "of someone, a rhyme or a witty remark about the latest messages. One short sentence, as a friend in the chat would. "
-    "If nothing fun fits, answer exactly SKIP."
+    "Nobody asked you, but you jump into the conversation like a friend who couldn't resist: one short line about the "
+    "LAST few messages, naming the person. A jab, a joke, a callback to something said earlier, or a quick rhyme. No "
+    "generic commentary about 'the chat'. If nothing sharp comes to mind, answer exactly SKIP."
 )
 GROUP_TYPES = ("group", "supergroup")
 GROUP_RANDOM_CHANCE = 0.1  # chance to do something on a message nobody addressed to the bot
@@ -1160,7 +1166,15 @@ async def group_chat(update, context):
 
 
 def group_instructions(update):
-    return SYSTEM + CODE_RULES + GROUP_STYLE + " Telegram language: " + (update.effective_user.language_code or "ru")
+    return GROUP_STYLE + CODE_RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
+
+
+def humanize(text):
+    """Strip the tells of a bot: long dashes and a full stop at the end of a one-liner."""
+    text = text.replace(" — ", ", ").replace("—", "-").strip()
+    if "\n" not in text and text.endswith(".") and not text.endswith(".."):
+        text = text[:-1]
+    return text
 
 
 async def group_respond(update, context, message, content):
@@ -1175,6 +1189,8 @@ async def group_respond(update, context, message, content):
         await live.abort(None)
         raise
     text, files = extract_files(answer.strip())
+    if not files:
+        text = humanize(text)
     if not text and not files:
         await live.abort(None)
         return
@@ -1244,9 +1260,9 @@ async def group_remark(context, chat_id, target=None, target_line=None):
     task = (f"You are replying directly to this message: «{target_line}». React to it (address its author by name). "
             if target_line else "") + INTERJECT
     response = await data["client"].responses.create(
-        model=data["model"], instructions=SYSTEM + GROUP_STYLE, store=False, max_output_tokens=2000,
+        model=data["model"], instructions=GROUP_STYLE, store=False, max_output_tokens=2000,
         input=[{"role": "user", "content": "Recent messages in the group (oldest first):\n" + "\n".join(lines) + "\n\n" + task}])
-    text = (response.output_text or "").strip()
+    text = humanize(response.output_text or "")
     if not text or text.upper().startswith("SKIP"):
         return
     await context.bot.send_message(chat_id, text[:1000], reply_parameters=reply_to(target))
