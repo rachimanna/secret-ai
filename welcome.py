@@ -14,7 +14,7 @@ import imageio_ffmpeg
 from media import MediaError, fal_run
 
 ASSETS = Path(__file__).with_name("assets")
-VERSION = "v1"
+VERSION = "v2"
 TEXT = {
     "ru": "Привет! Я Secret AI, твой личный ИИ. Пиши что хочешь: вопросы, тексты, код, сайты, картинки и видео. "
           "Можно голосом, отвечу голосом. Погнали!",
@@ -41,15 +41,16 @@ async def _ffmpeg(*args, timeout=180):
 
 
 async def mascot_note(voice_mp3):
-    """The mascot bobbing while it speaks: the pre-rendered loop (assets/welcome-loop.mp4) with the voice laid over it.
+    """The mascot on little legs writing the welcome on a board (assets/welcome-board.mp4, 18 s) with the voice over it.
 
-    No re-encoding of the picture, so it takes a fraction of a second even on a tiny server.
+    The picture is pre-rendered (tools/render_welcome.py) and copied as is, so this takes a fraction of a second even
+    on a tiny server; the video ends with the voice.
     """
     with tempfile.TemporaryDirectory(prefix="secret-ai-welcome-") as folder:
         folder = Path(folder)
         (folder / "voice.mp3").write_bytes(voice_mp3)
         out = folder / "note.mp4"
-        await _ffmpeg("-stream_loop", "-1", "-i", str(ASSETS / "welcome-loop.mp4"), "-i", str(folder / "voice.mp3"),
+        await _ffmpeg("-i", str(ASSETS / "welcome-board.mp4"), "-i", str(folder / "voice.mp3"),
                       "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "96k", "-shortest",
                       "-movflags", "+faststart", str(out), timeout=120)
         return out.read_bytes()
