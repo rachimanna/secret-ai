@@ -95,7 +95,11 @@ GROUP_RANDOM_CHANCE = 0.1  # scales fun.LEVELS (each group's own setting); 0.1 k
 GROUP_RANDOM_PAUSE = 180  # seconds between such surprises in one chat
 USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
-HISTORY_LIMIT = 30
+HISTORY_LIMIT = 300
+# What the model sees of the history: older long answers are shortened and the whole history fits a budget,
+# so 300 messages stay affordable and inside the model's context.
+HISTORY_CHARS = 90_000
+HISTORY_ITEM_CHARS = 2_500
 
 # id: (emoji, Russian name, English name, extra instructions)
 PERSONAS = {
@@ -819,7 +823,7 @@ HELP_RU = (
     "/secretary — ИИ-секретарь: отвечает людям в твоей личке, пока ты занят (Telegram Business)\n"
     "/emojiid — узнать ID анимированного эмодзи\n"
     "/help — эта справка\n\n"
-    "Я помню последние 30 сообщений нашего диалога."
+    "Я помню последние 300 сообщений нашего диалога."
 )
 HELP_EN = (
     "I'm Secret AI ✨ Send text, a voice message, audio, a video note or a photo (also as a file) with a question.\n\n"
@@ -836,7 +840,7 @@ HELP_EN = (
     "/secretary — AI secretary: answers people in your chats while you're busy (Telegram Business)\n"
     "/emojiid — get a custom emoji ID\n"
     "/help — this help\n\n"
-    "I remember our last 30 messages."
+    "I remember our last 300 messages."
 )
 
 
@@ -1155,6 +1159,23 @@ async def app_tools(bot_data, user_id, taken):
     return tools, names
 
 
+def fit_history(history):
+    """The newest messages in full, older long ones shortened, all within HISTORY_CHARS (oldest dropped first)."""
+    kept, total = [], 0
+    for index, item in enumerate(reversed(history)):
+        text = item["content"]
+        if index >= 6 and len(text) > HISTORY_ITEM_CHARS:
+            text = text[:HISTORY_ITEM_CHARS] + " …"
+        if total + len(text) > HISTORY_CHARS:
+            break
+        kept.append({"role": item["role"], "content": text})
+        total += len(text)
+    kept.reverse()
+    while kept and kept[0]["role"] != "user":  # start with a question, not an orphaned answer
+        kept.pop(0)
+    return kept
+
+
 async def respond(update, context, target, content, saved_question, voice=False):
     """Answer in the chat; voice=True (the user sent a voice message) also sends the answer as a voice message."""
     user_id = update.effective_user.id
@@ -1197,7 +1218,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
     try:
         answer, incomplete = await generate(
             context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
-            input=memory.history(user_id) + [{"role": "user", "content": content}],
+            input=fit_history(memory.history(user_id)) + [{"role": "user", "content": content}],
             store=False, max_output_tokens=16000)
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
