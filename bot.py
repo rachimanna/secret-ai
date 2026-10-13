@@ -744,6 +744,29 @@ def chat_provider(model):
     return next((prefix for prefix in CHAT_PROVIDERS if model.startswith(prefix)), None)
 
 
+WEB_TOOL = {"type": "function", "function": {
+    "name": "web_search",
+    "description": ("Search the internet for fresh or exact facts: exchange rates (euro, dollar), prices, news, weather, "
+                    "sports scores, schedules, anything that changes or that you are not sure about. Use it on your own "
+                    "whenever the answer depends on current data; never say you can't browse."),
+    "parameters": {"type": "object", "properties": {
+        "query": {"type": "string", "description": "what to find, with the date or place if it matters"}},
+        "required": ["query"]}}}
+
+
+async def web_lookup(data, query):
+    """Search the web through the OpenAI model's built-in search; returns a short factual digest with sources."""
+    try:
+        response = await data["client"].responses.create(
+            model=data["model"], store=False, max_output_tokens=1500, tools=[{"type": "web_search"}], input=query,
+            instructions=("Search the web and report the facts that answer the query: exact numbers with units and dates, "
+                          "and the source links. Today is " + time.strftime("%Y-%m-%d") + ". No small talk."))
+        return response.output_text or "Nothing found."
+    except Exception as exc:  # the model answers without fresh data rather than failing
+        LOG.warning("Web search for a gateway model failed: %s", type(exc).__name__)
+        return "Web search is unavailable right now; answer from what you know and say the data may be outdated."
+
+
 def chat_tools(toolbox):
     """The toolbox's function tools in chat-completions form (built-in ones like web search stay with OpenAI)."""
     if not toolbox:
@@ -799,6 +822,8 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
                                   response=httpx.Response(401, request=httpx.Request("POST", ABACUS_URL)))
     messages = chat_messages(request.get("instructions"), request["input"])
     tools = chat_tools(toolbox) if provider == ANYMODEL_PREFIX else []
+    if provider == ANYMODEL_PREFIX and context.bot_data.get("web_search") and context.bot_data.get("client"):
+        tools.append(WEB_TOOL)
     text, incomplete = "", False
     for _ in range(MAX_TOOL_ROUNDS):
         options = {"model": model[len(provider):], "stream": True, "messages": messages,
@@ -823,7 +848,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
             finish = choice.finish_reason or finish
         text += said
         incomplete = finish == "length"
-        if not calls or not toolbox:
+        if not calls:
             break
         ordered = [dict(calls[i], id=calls[i]["id"] or f"call_{i}") for i in sorted(calls)]
         messages.append({"role": "assistant", "content": said or None, "tool_calls": [
@@ -834,8 +859,14 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
                 args = json.loads(call["arguments"] or "{}")
             except ValueError:
                 args = {}
-            live.status(toolbox.status(call["name"], args))
-            output = await toolbox.run(call["name"], args)
+            if call["name"] == "web_search":
+                live.status("Ищу в интернете")
+                output = await web_lookup(context.bot_data, str(args.get("query") or ""))
+            elif toolbox:
+                live.status(toolbox.status(call["name"], args))
+                output = await toolbox.run(call["name"], args)
+            else:
+                output = "This tool is not available here."
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(output)})
         if said.strip():
             text += "\n\n"

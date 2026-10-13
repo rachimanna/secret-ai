@@ -745,7 +745,7 @@ function renderHeader() {
   $("cta-text").textContent = n ? T.ctaSome(n) : T.ctaNone;
   $("model-menu").innerHTML = s.models.map(m => `
     <button role="menuitemradio" data-model="${esc(m)}" class="${m === s.model ? "on" : ""}">
-      <div><div class="t">${esc(prettyModel(m))}</div><div class="d">${esc(m)}</div></div>
+      <div><div class="t">${esc(prettyModel(m))}</div></div>
       <span class="check">${ICON.check}</span></button>`).join("");
 }
 function toggleMenu(open) {
