@@ -5,6 +5,9 @@ The bot owner pastes the fal key in the Mini App; it is stored encrypted.
 """
 import asyncio
 import base64
+import hashlib
+import hmac
+import json
 import tempfile
 import time
 from pathlib import Path
@@ -225,8 +228,91 @@ def is_fal(model):
 
 
 def video_provider(model):
-    """'free', 'veo', 'fal' or 'higgsfield' (anything else, e.g. bytedance/seedance-2.5/text-to-video)."""
-    return "free" if model == "free" else "veo" if is_veo(model) else "fal" if is_fal(model) else "higgsfield"
+    """'free', 'veo', 'fal', 'kling' (kling:<model_name>) or 'higgsfield' (anything else, e.g. bytedance/seedance-2.5/text-to-video)."""
+    return ("free" if model == "free" else "veo" if is_veo(model) else "fal" if is_fal(model)
+            else "kling" if model.startswith(KLING_PREFIX) else "higgsfield")
+
+
+# ---------- Kling's own API: Access Key + Secret Key from the Kling developer console ----------
+
+KLING_PREFIX = "kling:"
+KLING_DIRECT = KLING_PREFIX + "kling-v2-6"  # the video model when KLING_ACCESS_KEY/KLING_SECRET_KEY are set
+KLING_API = "https://api-singapore.klingai.com"  # KLING_API_BASE env overrides
+KLING_SECONDS = 10  # Kling makes 5- or 10-second clips
+
+
+def kling_token(key, now=None):
+    """Short-lived HS256 JWT from "ACCESS_KEY:SECRET_KEY", as Kling's API expects."""
+    access, _, secret = key.partition(":")
+    now = int(now or time.time())
+
+    def part(value):
+        raw = value if isinstance(value, bytes) else json.dumps(value, separators=(",", ":")).encode()
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    signing = part({"alg": "HS256", "typ": "JWT"}) + "." + part({"iss": access, "exp": now + 1800, "nbf": now - 5})
+    return signing + "." + part(hmac.new(secret.encode(), signing.encode(), hashlib.sha256).digest())
+
+
+async def kling_generate(http, key, model, prompt, fmt, seconds=KLING_SECONDS, base=KLING_API):
+    """One Kling clip with its own sound effects (no speech); returns the MP4 bytes."""
+    name = model[len(KLING_PREFIX):] if model.startswith(KLING_PREFIX) else model
+    body = {"model_name": name, "prompt": prompt[:2500], "mode": "pro", "duration": str(seconds),
+            "aspect_ratio": {"square": "1:1", "portrait": "9:16"}.get(fmt, "16:9"), "sound": "on"}
+
+    async def call(method, path, **kwargs):
+        headers = {"Authorization": f"Bearer {kling_token(key)}", "Content-Type": "application/json"}
+        try:
+            return await http.request(method, base + path, headers=headers, timeout=60, **kwargs)
+        except httpx.HTTPError as exc:
+            raise MediaError("failed", type(exc).__name__) from None
+
+    response = await call("POST", "/v1/videos/text2video", json=body)
+    if response.status_code == 400 and "sound" in _kling_error(response)[1].lower():
+        body.pop("sound")  # older models have no sound
+        response = await call("POST", "/v1/videos/text2video", json=body)
+    code, detail = _kling_error(response)
+    if response.status_code == 401 or 1000 <= code < 1100:
+        raise MediaError("bad_video_key", detail)
+    if code in (1101, 1102) or "balance" in detail.lower() or "resource pack" in detail.lower():
+        raise MediaError("video_billing", detail)
+    if response.status_code == 429 or code in (1302, 1303):
+        raise MediaError("busy", detail)
+    if code == 1301:
+        raise MediaError("blocked", detail)
+    if response.status_code >= 400 or code:
+        raise MediaError("failed", f"submit {response.status_code} {code} {detail}")
+    task = (response.json().get("data") or {}).get("task_id")
+    if not task:
+        raise MediaError("failed", "no task id")
+    deadline = time.monotonic() + 1200
+    while time.monotonic() < deadline:
+        await asyncio.sleep(POLL_SECONDS * 3)
+        try:
+            data = (await call("GET", f"/v1/videos/text2video/{task}")).json().get("data") or {}
+        except (MediaError, ValueError):
+            continue
+        status = data.get("task_status")
+        if status == "succeed":
+            videos = (data.get("task_result") or {}).get("videos") or []
+            if not videos or not videos[0].get("url"):
+                raise MediaError("failed", "no video url")
+            video = await http.get(videos[0]["url"], timeout=180, follow_redirects=True)
+            if video.status_code >= 400:
+                raise MediaError("failed", f"download {video.status_code}")
+            return video.content
+        if status == "failed":
+            message = str(data.get("task_status_msg", ""))
+            raise MediaError("blocked" if "risk" in message.lower() or "content" in message.lower() else "failed", message[:200])
+    raise MediaError("timeout")
+
+
+def _kling_error(response):
+    try:
+        data = response.json()
+        return int(data.get("code") or 0), str(data.get("message", ""))[:200]
+    except (ValueError, AttributeError, TypeError):
+        return 0, ""
 
 
 async def veo_generate(http, key, model, prompt, fmt):

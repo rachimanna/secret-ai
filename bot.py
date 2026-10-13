@@ -41,7 +41,7 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
@@ -2095,6 +2095,7 @@ MEDIA_ERRORS = {
                       "The video service key doesn't work — the bot owner should check it in the Mini App settings."),
     "video_billing": ("На балансе видео-сервиса закончились деньги — владельцу бота нужно пополнить его.",
                       "The video service balance is empty — the bot owner should top it up."),
+    "busy": ("Видео-сервис сейчас перегружен. Попробуйте через пару минут.", "The video service is busy. Try again in a couple of minutes."),
 }
 
 
@@ -2107,7 +2108,8 @@ def gen_settings(bot_data):
         models["video"] = ""  # an old default saved from the form: use the current one (free)
     if models.get("photo") in OLD_PHOTO_DEFAULTS:
         models["photo"] = ""
-    defaults = dict(DEFAULT_MODELS, video=os.environ.get("VIDEO_MODEL", "").strip() or (KLING if key else "free"))
+    defaults = dict(DEFAULT_MODELS, video=os.environ.get("VIDEO_MODEL", "").strip()
+                    or (KLING_DIRECT if bot_data.get("kling_env_key") else KLING if key else "free"))
     return key, {kind: models.get(kind) or default for kind, default in defaults.items()}
 
 
@@ -2118,6 +2120,8 @@ def video_key(bot_data, model):
         return "free"
     if provider == "veo":
         return bot_data["connections"].get_meta("gemini_key", secret=True) or bot_data.get("gemini_env_key") or ""
+    if provider == "kling":
+        return bot_data.get("kling_env_key") or ""
     if provider == "higgsfield":
         return bot_data["connections"].get_meta("hf_key", secret=True) or bot_data.get("hf_env_key") or ""
     return gen_settings(bot_data)[0]
@@ -2265,6 +2269,32 @@ async def make_veo_video(data, job):
     return await montage(list(clips), job["fmt"], keep_sound=True)
 
 
+async def voice_over(data, job, scenes):
+    """The Russian (or the user's language) narrator for the scenes, MP3 bytes; None when off or failed."""
+    narration = " ".join(scene["voice"] for scene in scenes if scene["voice"])
+    if not (job["voice"] and narration and data.get("tts_model")):
+        return None
+    try:
+        speech = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"],
+                                                          input=narration[:4000], response_format="mp3")
+        return speech.content
+    except Exception as exc:  # a video without voice is still a result
+        LOG.warning("Voice-over failed: %s", type(exc).__name__)
+        return None
+
+
+async def make_kling_video(data, job):
+    """Kling scenes (its own API) in parallel with their sound effects, plus the voice-over, in one MP4."""
+    scenes = await plan_scenes(data, job)
+    quiet = " No dialogue, nobody talks, no lip movement."
+    clips = await asyncio.gather(*[
+        kling_generate(data["http"], job["key"], job["model"], scene["visual"].rstrip(". ") + "." + quiet, job["fmt"],
+                       KLING_SECONDS, data.get("kling_api") or KLING_API)
+        for scene in scenes])
+    voice = await voice_over(data, job, scenes)
+    return await montage(list(clips), job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0)
+
+
 async def make_free_video(data, job):
     """Free video: a picture per scene (Cloudflare/Pollinations), each brought to life, plus the Russian voice-over."""
     scenes = await plan_scenes(data, job)
@@ -2274,15 +2304,7 @@ async def make_free_video(data, job):
         image = await free_image(data["http"], scene["visual"] + ", cinematic still, highly detailed", job["fmt"],
                                  data.get("cloudflare"))
         clips.append(await living_picture(image, seconds, job["fmt"], index))
-    narration = " ".join(scene["voice"] for scene in scenes if scene["voice"])
-    voice = None
-    if job["voice"] and narration and data.get("tts_model"):
-        try:
-            speech = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"],
-                                                              input=narration[:4000], response_format="mp3")
-            voice = speech.content
-        except Exception as exc:  # a video without voice is still a result
-            LOG.warning("Voice-over failed: %s", type(exc).__name__)
+    voice = await voice_over(data, job, scenes)
     return await join_with_voice(clips, seconds * len(clips), voice)
 
 
@@ -2300,15 +2322,7 @@ async def make_video(data, job):
         response = await data["http"].get(url, timeout=180)
         response.raise_for_status()
         clips.append(response.content)
-    narration = " ".join(scene["voice"] for scene in scenes if scene["voice"])
-    voice = None
-    if job["voice"] and narration and data.get("tts_model"):
-        try:
-            speech = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"],
-                                                              input=narration[:4000], response_format="mp3")
-            voice = speech.content
-        except Exception as exc:  # a video without voice is still a result
-            LOG.warning("Voice-over failed: %s", type(exc).__name__)
+    voice = await voice_over(data, job, scenes)
     return await montage(clips, job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0)
 
 
@@ -2382,7 +2396,7 @@ async def generation_job(app, job):
         else:
             provider = video_provider(job["model"])
             video = await (make_free_video(data, job) if provider == "free" else make_video(data, job) if provider == "fal"
-                           else make_veo_video(data, job))
+                           else make_kling_video(data, job) if provider == "kling" else make_veo_video(data, job))
             await bot.send_video(user_id, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
                                  write_timeout=180, read_timeout=180)
     except Exception as exc:  # any failure: give the generation back and explain
@@ -2983,6 +2997,9 @@ def main():
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
+        kling_env_key=(f"{os.environ['KLING_ACCESS_KEY'].strip()}:{os.environ['KLING_SECRET_KEY'].strip()}"
+                       if os.environ.get("KLING_ACCESS_KEY", "").strip() and os.environ.get("KLING_SECRET_KEY", "").strip() else ""),
+        kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
         abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
         if os.environ.get("ABACUS_API_KEY", "").strip() else None,
