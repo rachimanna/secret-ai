@@ -322,7 +322,7 @@ ANYMODEL_API = "https://anymodel.org/v1"  # ANYMODEL_BASE env overrides
 ANYMODEL_VIDEO = "xai/grok-imagine-video"  # ANYMODEL_VIDEO_MODEL env overrides
 ANYMODEL_SECONDS = 10  # 1-15 s per clip; billed per second, so always sent explicitly
 ANYMODEL_RESOLUTION = "720p"  # sent explicitly too: an omitted one is billed at the dearest rate
-ANYMODEL_VOICE = "Miyuki|Миюки|Lucky Star"  # ANYMODEL_VOICE env: an exact voice model id, names to look up (a|b), or off
+ANYMODEL_VOICE = "edge-tts/ru-RU-DmitryNeural"  # ANYMODEL_VOICE env: an exact voice model id, names to look up (a|b), or off
 DONE = ("done", "completed", "succeeded", "success", "succeed", "finished")
 FAILED = ("failed", "error", "expired", "cancelled", "canceled", "rejected")
 
