@@ -289,6 +289,12 @@
                    box-shadow: 0 2px 6px rgba(0,0,0,.3); transition: transform .4s var(--spring); }
   .switch.on { background: #34c759; }
   .switch.on::after { transform: translateX(20px); }
+  .thumbs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 0 0 12px; }
+  .thumbs .t { position: relative; aspect-ratio: 1; border-radius: 14px; overflow: hidden; background: rgba(255,255,255,.06);
+               border: 1px dashed var(--line); display: grid; place-items: center; color: var(--hint); }
+  .thumbs .t img { width: 100%; height: 100%; object-fit: cover; }
+  .thumbs .t .x { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; background: rgba(0,0,0,.6);
+                  color: #fff; font-size: 14px; line-height: 22px; text-align: center; }
   .phrases { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
   .phrases span { padding: 6px 12px; border-radius: 14px; background: rgba(143,128,255,.12); color: #cfc8ff; font-size: 13.5px; }
   .recent-item { padding: 12px 14px; }
@@ -436,7 +442,11 @@ const T = {
     gen: "Генерация", genSub: "Фото и видео по описанию — результат придёт в чат", myGen: "Мои генерации",
     freeToday: (n, max) => `${n} из ${max} фото бесплатно сегодня`, credits: n => `${n} кредитов`, unlimited: "Без ограничений · вы владелец",
     topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны",
-    photoSub: "Бесплатно, картинка по описанию (Flux)", videoSub: "Бесплатно: оживлённые кадры и русская озвучка · 8 с – 1 мин",
+    photoSub: "Картинка по описанию — Nano Banana",
+    makeEdit: "Изменить фото", editSub: "Убрать людей, совместить фото, сменить фон",
+    editLead: "Добавь до 4 фото и напиши, что сделать. Лица и детали останутся как есть.",
+    editPh: "Например: убери людей сзади и поставь девушку со 2-го фото рядом со мной", addPhotos: "Добавить фото",
+    editGo: "Изменить", editNeed: "Добавь хотя бы одно фото и напиши, что сделать", videoSub: "Бесплатно: оживлённые кадры и русская озвучка · 8 с – 1 мин",
     length: "Длительность", sec: " с", min: " мин", withVoice: "Озвучка на русском", noVoice: "Без озвучки", scenes: n => `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "сцены" : "сцен"}`,
     describe: "Опишите, что создать…", describeStyle: s => `Что изобразить в стиле «${s}»?`, create: "Создать ✨",
     fmtSquare: "Квадрат", fmtPortrait: "Вертикаль", fmtLandscape: "Горизонталь",
@@ -493,7 +503,11 @@ const T = {
     gen: "Create", genSub: "Photos and videos from a description — the result arrives in the chat", myGen: "My generations",
     freeToday: (n, max) => `${n} of ${max} free photos today`, credits: n => `${n} credits`, unlimited: "Unlimited · you're the owner",
     topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates",
-    photoSub: "A picture from a description in seconds", videoSub: "People on screen speak your language · 8 s – 1 min",
+    photoSub: "A picture from a description — Nano Banana",
+    makeEdit: "Edit photos", editSub: "Remove people, put photos together, change the background",
+    editLead: "Add up to 4 photos and say what to do. Faces and details stay as they are.",
+    editPh: "E.g.: remove the people behind me and put the girl from the 2nd photo next to me", addPhotos: "Add photos",
+    editGo: "Edit", editNeed: "Add at least one photo and say what to do", videoSub: "People on screen speak your language · 8 s – 1 min",
     length: "Length", sec: " s", min: " min", withVoice: "With voice-over", noVoice: "No voice-over", scenes: n => `${n} scenes`,
     describe: "Describe what to create…", describeStyle: s => `What to show in the “${s}” style?`, create: "Create ✨",
     fmtSquare: "Square", fmtPortrait: "Portrait", fmtLandscape: "Landscape",
@@ -1221,6 +1235,7 @@ function renderGen() {
   $("gen").innerHTML = setup + wallet + `
     <div class="list">
       <button class="row press" data-gen="photo"><div class="ic sym">${GEN_ICON.photo}</div><div class="body"><div class="t">${T.makePhoto}</div><div class="d">${T.photoSub}</div></div>${ICON.chev}</button>
+      <button class="row press" data-edit="1"><div class="ic sym">${EDIT_ICON}</div><div class="body"><div class="t">${T.makeEdit}</div><div class="d">${T.editSub}</div></div>${ICON.chev}</button>
       <button class="row press" data-gen="video"><div class="ic sym">${GEN_ICON.video}</div><div class="body"><div class="t">${T.makeVideo}</div><div class="d">${T.videoSub}</div></div>${ICON.chev}</button>
     </div>
     <div class="section"><h2>${T.templates}</h2><div class="tpl-grid" style="margin-top:12px">
@@ -1230,10 +1245,62 @@ function renderGen() {
   $("gen-buy")?.addEventListener("click", openBuySheet);
   $("gen-setup")?.addEventListener("click", openGenKeySheet);
   $("gen").querySelectorAll("[data-gen]").forEach(b => b.onclick = () => openGenSheet(b.dataset.gen));
+  $("gen").querySelector("[data-edit]").onclick = openEditSheet;
   $("gen").querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => {
     const [kind, , title, , style] = GEN_TEMPLATES[+b.dataset.tpl];
     openGenSheet(kind, { title, style });
   });
+}
+
+const EDIT_ICON = '<svg class="i" viewBox="0 0 24 24"><path d="m4 20 10-10M14 10l2-2M18 3l.6 1.6L20 5.2l-1.4.6L18 7.5l-.6-1.7L16 5.2l1.4-.6z"/><rect x="3" y="12" width="9" height="9" rx="2"/></svg>';
+function shrinkPhoto(file) {
+  // Big phone photos are scaled down in the browser (max 1536 px) so the upload stays small.
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 1536 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      resolve(c.toDataURL("image/jpeg", 0.88));
+    };
+    img.onerror = reject;
+    img.src = URL.createObjectURL(file);
+  });
+}
+function openEditSheet() {
+  const photos = [];
+  openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#6d5dfc,#f472b6)">${EDIT_ICON.replace('class="i"', 'class="i" style="width:40px;height:40px;stroke:#fff"')}</div>
+      <h3>${T.makeEdit}</h3><p class="lead">${T.editLead}</p></div>
+    <div class="thumbs" id="edit-thumbs"></div>
+    <input type="file" id="edit-file" accept="image/*" multiple style="display:none">
+    <textarea class="field" id="edit-prompt" placeholder="${T.editPh}"></textarea>
+    <div class="small" id="edit-cost"></div>
+    <button class="btn" id="edit-go">${T.editGo}</button>`);
+  const draw = () => {
+    $("edit-thumbs").innerHTML = photos.map((p, i) => `<div class="t"><img src="${p}" alt=""><span class="x" data-del="${i}">×</span></div>`).join("")
+      + (photos.length < 4 ? `<button class="t press" id="edit-add">${ICON.plus}</button>` : "");
+    $("edit-add")?.addEventListener("click", () => $("edit-file").click());
+    $("edit-thumbs").querySelectorAll("[data-del]").forEach(x => x.onclick = () => { photos.splice(+x.dataset.del, 1); draw(); });
+  };
+  $("edit-file").onchange = async e => {
+    for (const f of [...e.target.files].slice(0, 4 - photos.length)) {
+      try { photos.push(await shrinkPhoto(f)); } catch (err) {}
+    }
+    e.target.value = ""; draw();
+  };
+  $("edit-cost").textContent = genCost("photo");
+  $("edit-go").onclick = async () => {
+    const prompt = $("edit-prompt").value.trim();
+    if (!photos.length || !prompt) { toast(T.editNeed); haptic("warning"); return; }
+    const b = $("edit-go"); b.disabled = true; b.innerHTML = '<span class="spinner"></span>';
+    try {
+      state.gen = (await api("/api/edit", { images: photos, prompt })).gen;
+      renderGen(); closeSheet(); haptic("success"); toast(T.sent); setTimeout(() => tg?.close?.(), 900);
+    } catch (err) { b.disabled = false; b.textContent = T.editGo; toast(errorText(err)); haptic("error"); }
+  };
+  draw();
 }
 function openGenSheet(kind, tpl = null) {
   const ready = kind === "video" ? state.gen.video_ready : state.gen.ready;

@@ -19,7 +19,7 @@ FAL_QUEUE = "https://queue.fal.run"
 # ("veo-...") can be set instead; they need their own keys.
 # "free": photos from Cloudflare Workers AI (if CF_ACCOUNT_ID/CF_API_TOKEN are set) or Pollinations (no key), and videos
 # made of those pictures brought to life (slow zoom and pan) with a voice-over. Paid models stay available by id.
-DEFAULT_MODELS = {"photo": "free", "video": "free"}
+DEFAULT_MODELS = {"photo": "openai-image", "video": "free"}  # photos: GPT Image on the OpenAI key (free Flux as fallback)
 OLD_VIDEO_DEFAULTS = ("veo-3.1-fast-generate-preview", "bytedance/seedance-2.5/text-to-video",
                       "fal-ai/kling-video/v2.6/pro/text-to-video")
 OLD_PHOTO_DEFAULTS = ("fal-ai/flux/schnell",)
@@ -422,3 +422,68 @@ async def join_with_voice(clips, seconds, voice=None):
                       "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
                       "-af", "apad", "-t", f"{seconds:.2f}", "-movflags", "+faststart", str(out), timeout=300)
         return out.read_bytes()
+
+
+# ---------- OpenAI GPT Image: pictures and photo editing (several photos at once, faces kept) ----------
+
+OPENAI_IMAGE = "openai-image"
+OPENAI_SIZES = {"square": "1024x1024", "portrait": "1024x1536", "landscape": "1536x1024"}
+KEEP_FACES = ("Use the provided photos as the source. Keep every person's face, identity, skin tone, hair, body shape and "
+              "clothes exactly as in the photos unless the request says otherwise; match lighting, perspective and scale so "
+              "the result looks like one real, natural photograph. Change only what is asked.")
+
+
+async def openai_image(client, model, prompt, fmt, images=None):
+    """A picture from GPT Image: generated from the prompt, or an edit/combination of the given photos (bytes)."""
+    if images:
+        files = [(f"photo{index}.jpg", data, "image/jpeg") for index, data in enumerate(images)]
+        request = {"model": model, "image": files, "prompt": f"{prompt}\n\n{KEEP_FACES}", "size": "auto", "quality": "high"}
+        try:
+            response = await client.images.edit(**request, input_fidelity="high")
+        except Exception as exc:  # older image models don't know input_fidelity
+            if "input_fidelity" not in str(exc):
+                raise
+            response = await client.images.edit(**request)
+    else:
+        response = await client.images.generate(model=model, prompt=prompt, size=OPENAI_SIZES.get(fmt, "1024x1024"),
+                                                quality="medium")
+    image = response.data[0].b64_json if response.data else None
+    if not image:
+        raise MediaError("failed", "no image")
+    return base64.b64decode(image)
+
+
+# ---------- Nano Banana (Google) through Abacus.AI RouteLLM: chat completions with image output ----------
+
+ASPECTS = {"square": "1:1", "portrait": "9:16", "landscape": "16:9"}
+
+
+async def abacus_image(client, http, model, prompt, fmt, images=None):
+    """A picture from an image model on RouteLLM (e.g. Nano Banana Pro); input photos are sent as data URIs."""
+    content = [{"type": "text", "text": f"{prompt}\n\n{KEEP_FACES}" if images else prompt}]
+    for data in images or []:
+        content.append({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(data).decode()}})
+    response = await client.chat.completions.create(
+        model=model, messages=[{"role": "user", "content": content}],
+        extra_body={"modalities": ["image", "text"], "image_config": {"num_images": 1, "aspect_ratio": ASPECTS.get(fmt, "1:1")}})
+    message = response.choices[0].message if response.choices else None
+    if message is None:
+        raise MediaError("failed", "no answer")
+    urls = []
+    extra = getattr(message, "model_extra", None) or {}
+    for item in extra.get("images") or []:
+        url = (item.get("image_url") or {}).get("url") if isinstance(item, dict) else None
+        if url:
+            urls.append(url)
+    if isinstance(message.content, list):  # some models put the picture into the content parts
+        urls += [part.get("image_url", {}).get("url") for part in message.content
+                 if isinstance(part, dict) and part.get("type") == "image_url"]
+    url = next((u for u in urls if u), None)
+    if not url:
+        raise MediaError("blocked" if message.content else "failed", str(message.content or "no image")[:200])
+    if url.startswith("data:"):
+        return base64.b64decode(url.split(",", 1)[1])
+    picture = await http.get(url, timeout=120, follow_redirects=True)
+    if picture.status_code >= 400:
+        raise MediaError("failed", f"download {picture.status_code}")
+    return picture.content

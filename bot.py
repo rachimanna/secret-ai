@@ -42,7 +42,7 @@ from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
+                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -790,27 +790,39 @@ async def discover_models(app):
             abacus_ids = {m.id for m in (await data["abacus"].models.list()).data}
         except Exception as exc:
             LOG.warning("RouteLLM model list unavailable: %s", type(exc).__name__)
+    images = sorted(i for i in openai_ids if i.startswith("gpt-image") and "mini" not in i)
+    if not data.get("image_model"):
+        data["image_model"] = images[-1] if images else "gpt-image-1"
     for name in EXTRA_MODELS:
         model = name if name in openai_ids else ABACUS_PREFIX + name if name in abacus_ids else None
         if model and model not in data["models"]:
             data["models"].append(model)
 
 
+NANO = re.compile(r"nano[-_ ]?banana", re.I)
+
+
+def pick_nano(ids):
+    """The best Nano Banana the account has: a Pro one first, otherwise the newest."""
+    nano = sorted(i for i in ids if NANO.search(i))
+    pro = [i for i in nano if "pro" in i.lower()]
+    return (pro or nano or ["nano_banana_pro"])[-1]
+
+
 async def resolve_abacus_model(app):
-    """Find the account's Sonnet 5.5 id in RouteLLM's model list and offer it in the model picker."""
+    """Find the account's Sonnet 5.5 (model picker) and Nano Banana (pictures) in RouteLLM's model list."""
     data = app.bot_data
     if not data.get("abacus"):
         return
-    wanted = data.get("abacus_model") or ""
     try:
-        ids = [m.id for m in (await data["abacus"].models.list()).data] if not wanted else []
-        wanted = wanted or next((i for i in ids if SONNET.search(i)), "") or "claude-sonnet-5-5"
-    except Exception as exc:  # the list is a convenience; the usual id still works
+        ids = [m.id for m in (await data["abacus"].models.list()).data]
+    except Exception as exc:  # the list is a convenience; the usual ids still work
         LOG.warning("RouteLLM model list unavailable: %s", type(exc).__name__)
-        wanted = wanted or "claude-sonnet-5-5"
-    model = ABACUS_PREFIX + wanted
-    if model not in data["models"]:
-        data["models"].append(model)
+        ids = []
+    chat = data.get("abacus_model") or next((i for i in ids if SONNET.search(i)), "") or "claude-sonnet-5-5"
+    if ABACUS_PREFIX + chat not in data["models"]:
+        data["models"].append(ABACUS_PREFIX + chat)
+    data["abacus_image"] = data.get("abacus_image") or pick_nano(ids)
 
 
 async def generate(context, live, toolbox=None, **request):
@@ -1324,18 +1336,18 @@ async def respond(update, context, target, content, saved_question, voice=False)
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
-    media = None
-    if gen_settings(context.bot_data)[0] or "free" in gen_settings(context.bot_data)[1].values():
-        async def media(kind, prompt, fmt, seconds=5, voice=True):
-            error = await start_generation(context.application, user_id, lang(update), kind, prompt, fmt, seconds, voice)
-            if error == "no_credits":
-                return ("Not started: the user has no free generations or credits left. Tell them to top up in the Mini App "
-                        "(button Secret AI → Generation) with Telegram Stars.")
-            if error:
-                return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
-            return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
+    # Free and paid image/video options are always available.
+    async def media(kind, prompt, fmt, seconds=5, voice=True):
+        error = await start_generation(context.application, user_id, lang(update), kind, prompt, fmt, seconds, voice)
+        if error == "no_credits":
+            return ("Not started: the user has no free generations or credits left. Tell them to top up in the Mini App "
+                    "(button Secret AI → Generation) with Telegram Stars.")
+        if error:
+            return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
+        return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
-                      apps=apps, media=media, extra=[secretary_tool(context, user_id, lang(update) == "ru")])
+                      apps=apps, media=media, extra=[secretary_tool(context, user_id, lang(update) == "ru"),
+                                                     edit_tool(context, user_id, lang(update))])
     instructions = (SYSTEM + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
     speak_only = voice and bool(context.bot_data.get("tts_model"))
@@ -1822,6 +1834,74 @@ async def watch_username(app):
             pass
 
 
+# ----- photo editing: the user's recent photos (also albums) changed or combined by Nano Banana / GPT Image -----
+
+EDIT_TOOL = {"type": "function", "name": "edit_photos",
+             "description": ("Edit or combine the photos the user sent in this chat (the most recent ones): remove people or "
+                             "objects, put a person from one photo next to someone in another, change the background, "
+                             "clothes, light or style, restore or enhance. Use it whenever the user asks to change their "
+                             "photo(s). The result arrives in the chat by itself; just say briefly that you're on it."),
+             "parameters": {"type": "object", "properties": {
+                 "instruction": {"type": "string", "description": ("what to do, detailed, in English; refer to the photos "
+                                                                   "as the first, second… image in the order they were sent")},
+                 "photos": {"type": "integer", "minimum": 1, "maximum": 4, "description": "how many of the latest photos"},
+                 "format": {"type": "string", "enum": ["square", "portrait", "landscape"]}},
+                 "required": ["instruction", "photos"], "additionalProperties": False}}
+RECENT_PHOTOS_SECONDS = 3600
+
+
+def remember_photo(data, user_id, message):
+    """Keep the user's latest photos (an hour) so "убери людей с этой фотки" knows which photos are meant."""
+    photo = message.photo[-1].file_id if message.photo else (
+        message.document.file_id if message.document and (message.document.mime_type or "").startswith("image/") else None)
+    if not photo:
+        return
+    items = data.setdefault("recent_photos", {}).setdefault(user_id, [])
+    items.append((photo, time.time()))
+    del items[:-8]
+
+
+def edit_tool(context, user_id, language):
+    data = context.bot_data
+
+    async def run(args):
+        fresh = [photo for photo, at in data.get("recent_photos", {}).get(user_id, []) if time.time() - at < RECENT_PHOTOS_SECONDS]
+        count = max(1, min(4, int(args.get("photos") or 1)))
+        if not fresh:
+            return "No recent photos. Ask the user to send the photo(s) first, then repeat the request."
+        error = await start_generation(context.application, user_id, language, "photo", args.get("instruction") or "",
+                                       args.get("format") or "portrait", images=fresh[-count:])
+        if error == "no_credits":
+            return "Not started: no free generations or credits left; tell the user to top up in the Mini App (Generation)."
+        if error:
+            return f"Not started ({error}). Tell the user briefly that photo editing is unavailable right now."
+        return "Started. The edited photo will arrive in the chat by itself in about a minute; tell the user briefly."
+
+    return {"definition": EDIT_TOOL, "run": run, "status": ("Редактирую фото", "Editing the photo"),
+            "hint": "You can edit and combine the user's photos with edit_photos (Nano Banana / GPT Image)."}
+
+
+async def answer_album(updates, context):
+    """Several photos sent together (an album) with one caption: one answer that sees all of them."""
+    first = updates[0]
+    message, user_id = first.effective_message, first.effective_user.id
+    caption = next((u.effective_message.caption for u in updates if u.effective_message.caption), "") or ""
+    question = caption or ui(first, "Что на этих фото?", "What is in these photos?")
+    content = [{"type": "input_text", "text": question}]
+    for update in updates[:4]:
+        msg = update.effective_message
+        image = msg.photo[-1] if msg.photo else msg.document
+        remote = await image.get_file()
+        raw = await remote.download_as_bytearray()
+        content.append({"type": "input_image", "image_url": "data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii")})
+    async with user_lock(context, user_id):
+        try:
+            await respond(first, context, message, content, f"[{len(updates)} фото] " + question)
+        except Exception as exc:
+            context.error = exc
+            await on_error(first, context)
+
+
 # ----- AI secretary (Telegram Business) -----
 
 def secretary_tool(context, user_id, ru):
@@ -2046,7 +2126,7 @@ def gen_state(bot_data, user_id):
     key, models = gen_settings(bot_data)
     free, credits = bot_data["memory"].gen_info(user_id)
     owner = bot_data["connections"].get_meta("owner") == user_id
-    state = {"ready": bool(key) or models["photo"] == "free", "video_ready": bool(video_key(bot_data, models["video"])), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
+    state = {"ready": bool(key) or models["photo"] in ("free", OPENAI_IMAGE), "video_ready": bool(video_key(bot_data, models["video"])), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
              "credits": credits, "cost": COST, "video_prices": VIDEO_PRICES, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
     if owner:
         state["models"] = models
@@ -2055,7 +2135,7 @@ def gen_state(bot_data, user_id):
     return state
 
 
-async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5, voice=True):
+async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5, voice=True, images=None):
     """Check the key and quota, take the generation and run it in the background. Returns None or an error code."""
     data = app.bot_data
     prompt = (prompt or "").strip()[:MAX_PROMPT]
@@ -2066,8 +2146,8 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
         key = video_key(data, models["video"])
         if not key:
             return "no_key" if video_provider(models["video"]) == "fal" else "no_video_key"
-    elif models["photo"] == "free":
-        key = "free"
+    elif models["photo"] in ("free", OPENAI_IMAGE) or images:
+        key = models["photo"]
     elif not key:
         return "no_key"
     cost = price(kind, seconds)
@@ -2075,7 +2155,8 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
     if not how:
         return "no_credits"
     job = {"user_id": user_id, "language": language, "kind": kind, "prompt": prompt, "fmt": fmt if fmt in FORMATS else "portrait",
-           "seconds": seconds, "voice": bool(voice), "key": key, "model": models[kind], "how": how, "cost": cost}
+           "seconds": seconds, "voice": bool(voice), "key": key, "model": models[kind], "how": how, "cost": cost,
+           "images": list(images or [])[:4]}
     task = asyncio.create_task(generation_job(app, job))
     jobs = data.setdefault("gen_tasks", set())
     jobs.add(task)
@@ -2085,6 +2166,8 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
 
 def waiting_text(job):
     ru = job["language"] == "ru"
+    if job["kind"] == "photo" and job.get("images"):
+        return "🪄 Редактирую фото… обычно это 20–60 секунд" if ru else "🪄 Editing the photo… usually 20–60 seconds"
     if job["kind"] == "photo":
         return "🎨 Рисую… обычно это 10–30 секунд" if ru else "🎨 Drawing… usually 10–30 seconds"
     seconds = job["seconds"]
@@ -2238,6 +2321,36 @@ async def add_sound(data, job, url, scene):
         return url
 
 
+async def paid_image(data, prompt, fmt, images=None):
+    """Nano Banana on Abacus when it's set up, otherwise GPT Image on the OpenAI key."""
+    if data.get("abacus") and data.get("abacus_image"):
+        try:
+            return await abacus_image(data["abacus"], data["http"], data["abacus_image"], prompt, fmt, images)
+        except MediaError as exc:
+            if exc.code == "blocked":
+                raise
+            LOG.warning("Nano Banana failed: %s; trying GPT Image", exc.code)
+        except Exception as exc:  # RouteLLM down or the model id is different: OpenAI still can
+            LOG.warning("Nano Banana failed: %s; trying GPT Image", type(exc).__name__)
+    try:
+        return await openai_image(data["client"], data.get("image_model") or "gpt-image-1", prompt, fmt, images)
+    except BadRequestError as exc:
+        raise MediaError("blocked" if "safety" in str(exc).lower() or "moderation" in str(exc).lower() else "failed",
+                         type(exc).__name__) from None
+
+
+async def photo_bytes(bot, photos):
+    """Photos for an edit: bytes as they are, Telegram file ids downloaded."""
+    result = []
+    for photo in photos or []:
+        if isinstance(photo, (bytes, bytearray)):
+            result.append(bytes(photo))
+        else:
+            remote = await bot.get_file(photo)
+            result.append(bytes(await remote.download_as_bytearray()))
+    return result
+
+
 async def generation_job(app, job):
     bot, data = app.bot, app.bot_data
     user_id, ru, kind = job["user_id"], job["language"] == "ru", job["kind"]
@@ -2248,7 +2361,16 @@ async def generation_job(app, job):
         pass
     try:
         caption = job["prompt"][:900]
-        if kind == "photo":
+        if kind == "photo" and (job.get("images") or job["model"] == OPENAI_IMAGE):
+            images = await photo_bytes(bot, job.get("images"))
+            try:
+                image = await paid_image(data, job["prompt"], job["fmt"], images)
+            except MediaError:
+                if images:
+                    raise  # an edit can't fall back to drawing from scratch
+                image = await free_image(data["http"], await english_prompt(data, job["prompt"]), job["fmt"], data.get("cloudflare"))
+            await bot.send_photo(user_id, InputFile(image, filename="secret-ai.jpg"), caption=caption)
+        elif kind == "photo":
             prompt = await english_prompt(data, job["prompt"])
             if job["model"] == "free":
                 image = await free_image(data["http"], prompt, job["fmt"], data.get("cloudflare"))
@@ -2319,6 +2441,20 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     message = update.effective_message
     if message.text and await secretary_switch(update, context, message.text):
+        return
+    remember_photo(context.bot_data, update.effective_user.id, message)
+    if message.media_group_id and (message.photo or message.document):
+        # An album arrives as separate messages: collect them for a moment and answer once.
+        key = (update.effective_user.id, message.media_group_id)
+        album = context.bot_data.setdefault("albums", {}).setdefault(key, [])
+        album.append(update)
+        if len(album) == 1:
+            async def later():
+                await asyncio.sleep(1.5)
+                await answer_album(context.bot_data["albums"].pop(key), context)
+            task = asyncio.create_task(later())
+            context.bot_data.setdefault("album_tasks", set()).add(task)
+            task.add_done_callback(context.bot_data["album_tasks"].discard)
         return
     lock = user_lock(context, update.effective_user.id)
     if lock.locked():
@@ -2716,6 +2852,11 @@ class Bridge:
         language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
         return self._run(start_generation(self.app, tg_user["id"], language, kind, prompt, fmt, seconds, voice))
 
+    def edit(self, tg_user, images, prompt, fmt="portrait"):
+        """Mini App: edit/combine uploaded photos (bytes)."""
+        language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
+        return self._run(start_generation(self.app, tg_user["id"], language, "photo", prompt, fmt, images=images))
+
     def invoice(self, tg_user, pack):
         """Telegram Stars invoice link for a credit pack."""
         credits, stars = PACKS[pack]
@@ -2845,6 +2986,8 @@ def main():
         abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
         if os.environ.get("ABACUS_API_KEY", "").strip() else None,
         abacus_model=os.environ.get("ABACUS_MODEL", "").strip(),
+        abacus_image=os.environ.get("ABACUS_IMAGE_MODEL", "").strip(),
+        image_model=os.environ.get("OPENAI_IMAGE_MODEL", "").strip(),
         web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
         # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),

@@ -1,5 +1,6 @@
 """HTTP server: health checks, the Telegram Mini App and its API (apps, settings), GitHub OAuth callback."""
 import html
+import base64
 import json
 import logging
 from http.server import BaseHTTPRequestHandler
@@ -18,6 +19,7 @@ WEBAPP = Path(__file__).with_name("webapp")
 PAGE = WEBAPP / "index.html"
 LOGO = WEBAPP / "logo.svg"
 MAX_BODY = 64 * 1024
+MAX_UPLOAD = 16 * 1024 * 1024  # /api/edit: up to 4 photos (resized in the browser)
 MAX_PROMPT = 1500
 
 
@@ -87,9 +89,9 @@ def make_handler(config):
                 return None
             return user
 
-        def _json(self):
+        def _json(self, limit=MAX_BODY):
             length = int(self.headers.get("Content-Length") or 0)
-            if length > MAX_BODY:
+            if length > limit:
                 raise ValueError("too large")
             data = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(data, dict):
@@ -176,7 +178,7 @@ def make_handler(config):
             if not user:
                 return
             try:
-                data = self._json()
+                data = self._json(MAX_UPLOAD if path == "/api/edit" else MAX_BODY)
             except ValueError:
                 self._send(400, {"error": "bad request"})
                 return
@@ -243,6 +245,21 @@ def make_handler(config):
                 except (TypeError, ValueError):
                     seconds = 8
                 error = bridge.generate(user, kind, prompt, str(data.get("format") or "square"), seconds, data.get("voice") is not False)
+                if error:
+                    self._send(400, {"error": f"gen_{error}"})
+                    return
+                self._send(200, {"gen": bridge.gen_state(uid)})
+            elif path == "/api/edit":
+                prompt = str(data.get("prompt") or "").strip()
+                raw = data.get("images") if isinstance(data.get("images"), list) else []
+                try:
+                    images = [base64.b64decode(str(item).split(",", 1)[-1], validate=True) for item in raw[:4]]
+                except ValueError:
+                    images = []
+                if not prompt or len(prompt) > 1500 or not images or any(len(i) > 6_000_000 for i in images):
+                    self._send(400, {"error": "bad request"})
+                    return
+                error = bridge.edit(user, images, prompt, str(data.get("format") or "portrait"))
                 if error:
                     self._send(400, {"error": f"gen_{error}"})
                     return
