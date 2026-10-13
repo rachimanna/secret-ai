@@ -416,6 +416,58 @@
   .sheet { background: rgba(28,28,30,.97); }
   .btn { background: var(--accent); box-shadow: 0 10px 26px rgba(62,139,255,.3); }
 
+  /* ---- sizes closer to Mira, nothing wider than the screen ---- */
+  html, body { overflow-x: hidden; max-width: 100vw; }
+  main { overflow-x: hidden; }
+  .backdrop { position: absolute; height: 640px; }
+  .topbar { flex-wrap: nowrap; }
+  .pill { height: 40px; padding: 0 14px; font-size: 15.5px; min-width: 0; }
+  #model-btn { flex: 1 1 auto; max-width: 58%; }
+  .pill .model-name { max-width: 100%; }
+  .pill.cta { flex: 0 1 auto; }
+  .pill.cta span { overflow: hidden; text-overflow: ellipsis; }
+  .hero { padding: 18px 0 22px; }
+  .hero .logo { width: 108px; height: 108px; }
+  .hero .edit-btn { width: 36px; height: 36px; right: -4px; bottom: 0; }
+  .hero .edit-btn svg { width: 16px; height: 16px; }
+  .hero h1 { font-size: 27px; margin-top: 16px; }
+  .section { margin-top: 30px; }
+  .section > h2 { font-size: 22px; margin: 0 6px 2px; }
+  .section > .sub { font-size: 14.5px; margin: 2px 6px 12px; }
+  .section > h2 + .list { margin-top: 12px; }
+  .section > h2.cap { font-size: 15px; margin: 0 16px 8px; }
+  .list { border-radius: 22px; }
+  .row { padding: 10px 16px; min-height: 58px; gap: 12px; }
+  .row + .row::before { left: 64px; }
+  .row .t { font-size: 16px; flex-wrap: nowrap; }
+  .row .t > .badge { flex: none; }
+  .row .d { font-size: 13.5px; }
+  .row .val { font-size: 15px; }
+  .row .chev { width: 18px; height: 18px; }
+  .row .ic.emoji { width: 36px; height: 36px; font-size: 28px; }
+  .row .ic.spark { width: 28px; height: 28px; }
+  .row .ic.spark svg { width: 24px; height: 24px; }
+  .row .ic.sym, .row .ic.sym svg { width: 24px; height: 24px; }
+  .row.more { font-size: 16px; }
+  .quick .row { min-height: 64px; }
+  .quick .row + .row::before { left: 56px; }
+  .save { font-size: 13.5px; }
+  .badge { font-size: 11.5px; padding: 2px 7px; border-radius: 7px; }
+  .plus { width: 34px; height: 34px; }
+  .plus svg { width: 26px; height: 26px; }
+  .page-title { font-size: 28px; margin: 12px 6px 4px; }
+  .page-sub { font-size: 14.5px; margin: 0 6px 16px; }
+  .wallet .v { font-size: 22px; }
+  .pill-btn { height: 38px; font-size: 15.5px; padding: 0 18px; }
+  .tpl { height: 140px; border-radius: 22px; }
+  .tpl .e { font-size: 32px; }
+  .tpl b { font-size: 16.5px; }
+  .tabbar { height: 64px; border-radius: 32px; }
+  .tabbar .lens { border-radius: 27px; }
+  .tab { font-size: 11px; }
+  .tab svg { width: 25px; height: 25px; }
+  .tab .ghost-ic, .tab .ghost-ic svg { width: 27px; height: 27px; }
+
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -695,7 +747,7 @@ const DISCOVER = lang === "ru" ? [
     ["🧠", "Объясни просто", "Сложная тема за 2 минуты", "Объясни простыми словами, как работают нейросети, с примером из жизни."],
     ["🌐", "Переведи текст", "Сохраню стиль и тон", "Я пришлю текст — переведи его, сохранив стиль и тон.", null, true],
     ["🦄", "Настройте личность", "Как Secret AI с вами говорит", "", null, false, "", "persona"],
-    ["💱", "Курс валют сегодня", "Свежие данные из интернета", "Какой сегодня курс доллара и евро к рублю? Найди свежие данные."],
+    ["💶", "Курс валют сегодня", "Свежие данные из интернета", "Какой сегодня курс доллара и евро к рублю? Найди свежие данные."],
   ]],
   ["Групповые чаты", [
     ["🤝", "Добавить в группу", "Буду шутить, кидать мемы и цитаты", "", null, false, "", "group"],
@@ -732,7 +784,7 @@ const DISCOVER = lang === "ru" ? [
     ["🧠", "Explain simply", "A hard topic in 2 minutes", "Explain in simple words how neural networks work, with a real-life example."],
     ["🌐", "Translate text", "Keeping style and tone", "I'll send a text — translate it keeping the style and tone.", null, true],
     ["🦄", "Set the personality", "How Secret AI talks to you", "", null, false, "", "persona"],
-    ["💱", "Exchange rates today", "Fresh data from the web", "What are today's USD and EUR exchange rates? Find fresh data."],
+    ["💶", "Exchange rates today", "Fresh data from the web", "What are today's USD and EUR exchange rates? Find fresh data."],
   ]],
   ["Group chats", [
     ["🤝", "Add to a group", "Jokes, memes and quotes", "", null, false, "", "group"],
@@ -1585,7 +1637,7 @@ function tgColor(method, color, version) {
 }
 const bgColor = () => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
 function paintHeader() {
-  const blue = document.body.dataset.tab === "agent" && window.scrollY < 60;
+  const blue = document.body.dataset.tab === "agent" && window.scrollY < 40;
   tgColor("setHeaderColor", blue ? "#3b44e6" : bgColor(), "6.1");
 }
 function applyTheme() {
