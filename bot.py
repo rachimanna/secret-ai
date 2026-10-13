@@ -845,20 +845,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     store, user_id = context.bot_data["connections"], update.effective_user.id
     if not store.get_meta(f"welcomed:{user_id}"):
-        store.set_meta(f"welcomed:{user_id}", True)
-        await send_welcome(context, update.effective_message)
+        await send_welcome(context, update.effective_message, user_id)
     await send(update.effective_message, ui(update, "Привет! ", "Hi! ") + ui(update, HELP_RU, HELP_EN))
 
 
 async def prepare_welcome(app):
     """Make the welcome video note once (an AI presenter if fal is set up, otherwise the talking mascot)."""
     data, store = app.bot_data, app.bot_data["connections"]
-    if store.get_meta("welcome_note") or not data.get("tts_model"):
+    if store.get_meta("welcome_note") or await restore_welcome(app) or not data.get("tts_model"):
         return
     try:
         voice = await welcome.speech(data["client"], data["tts_model"], data["tts_voice"], welcome.TEXT["ru"])
     except Exception as exc:  # no voice, no welcome note
-        LOG.warning("Welcome voice failed: %s", type(exc).__name__)
+        LOG.warning("Welcome voice failed: %s %s", type(exc).__name__, getattr(exc, "message", "") or str(exc)[:200])
         return
     fal_key = gen_settings(data)[0]
     if fal_key:
@@ -866,38 +865,111 @@ async def prepare_welcome(app):
             data["welcome_bytes"] = await welcome.presenter_note(data["http"], fal_key, voice)
             return
         except Exception as exc:  # the mascot still says hi
-            LOG.warning("Welcome presenter failed: %s", type(exc).__name__)
+            LOG.warning("Welcome presenter failed: %s %s", type(exc).__name__, str(exc)[:200])
     try:
         data["welcome_bytes"] = await welcome.mascot_note(voice)
     except Exception as exc:
-        LOG.warning("Welcome note failed: %s", type(exc).__name__)
+        LOG.warning("Welcome note failed: %s %s", type(exc).__name__, str(exc)[:200])
 
 
-async def send_welcome(context, target):
-    """The round welcome video: by its saved file_id, or the freshly made file (then its file_id is saved)."""
+async def make_welcome(app):
+    """Make the welcome note right after start and park it pinned in the owner's chat: new users get it instantly."""
+    await prepare_welcome(app)
+    data, store = app.bot_data, app.bot_data["connections"]
+    owner = store.get_meta("owner")
+    if not data.get("welcome_bytes") or not owner or store.get_meta("welcome_note"):
+        return
+    try:
+        note = await app.bot.send_video_note(owner, InputFile(data["welcome_bytes"], filename="welcome.mp4"),
+                                             length=welcome.SIZE, disable_notification=True)
+        await app.bot.pin_chat_message(owner, note.message_id, disable_notification=True)
+    except TelegramError as exc:
+        LOG.warning("Could not park the welcome note: %s", type(exc).__name__)
+        return
+    if note.video_note:
+        store.set_meta("welcome_note", {"file_id": note.video_note.file_id, "version": welcome.VERSION})
+        data.pop("welcome_bytes", None)
+
+
+async def restore_welcome(app):
+    """The welcome note survives a wiped database: it is kept pinned in the owner's chat with the bot. True if found."""
+    store, owner = app.bot_data["connections"], app.bot_data["connections"].get_meta("owner")
+    if not owner:
+        return False
+    try:
+        pinned = (await app.bot.get_chat(owner)).pinned_message
+    except Exception as exc:  # network, or a chat field this library version can't read
+        LOG.warning("Could not read the pinned welcome note: %s", type(exc).__name__)
+        return False
+    if pinned and pinned.video_note and pinned.from_user and pinned.from_user.id == app.bot.id:
+        store.set_meta("welcome_note", {"file_id": pinned.video_note.file_id, "version": "pinned"})
+        return True
+    return False
+
+
+async def keep_welcome(context, file_id):
+    """Pin the welcome note silently in the owner's chat so a restart (wiped database) can find it again."""
+    owner = context.bot_data["connections"].get_meta("owner")
+    if not owner:
+        return
+    try:
+        note = await context.bot.send_video_note(owner, file_id, disable_notification=True)
+        await context.bot.pin_chat_message(owner, note.message_id, disable_notification=True)
+    except TelegramError as exc:
+        LOG.warning("Could not keep the welcome note: %s", type(exc).__name__)
+
+
+async def deliver_welcome(context, target, user_id):
+    """Send the round welcome video: by its saved file_id or the fresh file (its file_id is saved). True if sent."""
     data, store = context.bot_data, context.bot_data["connections"]
     saved = store.get_meta("welcome_note")
     try:
         if saved:
             await target.reply_video_note(saved["file_id"])
+        elif data.get("welcome_bytes"):
+            sent = await target.reply_video_note(InputFile(data["welcome_bytes"], filename="welcome.mp4"), length=welcome.SIZE)
+            if sent.video_note:
+                store.set_meta("welcome_note", {"file_id": sent.video_note.file_id, "version": welcome.VERSION})
+                data.pop("welcome_bytes", None)
+                await keep_welcome(context, sent.video_note.file_id)
+        else:
+            return False
+    except TelegramError as exc:
+        LOG.warning("Welcome note not sent: %s %s", type(exc).__name__, getattr(exc, "message", ""))
+        return False
+    store.set_meta(f"welcomed:{user_id}", True)
+    return True
+
+
+async def send_welcome(context, target, user_id):
+    """The welcome note now if it's ready; otherwise it is sent by itself as soon as it's made. True if sent now."""
+    if await deliver_welcome(context, target, user_id):
+        return True
+    data = context.bot_data
+    task = data.get("welcome_task")
+    if not task or task.done():  # not being made (e.g. it failed): try again in the background
+        task = data["welcome_task"] = asyncio.create_task(make_welcome(context.application))
+
+    async def later():
+        try:
+            await asyncio.wait_for(asyncio.shield(task), 900)
+        except Exception:  # failed or too slow: nothing to send
             return
-        task = data.get("welcome_task")
-        if not data.get("welcome_bytes") and task and not task.done():
-            await asyncio.wait_for(asyncio.shield(task), 25)
-        if not data.get("welcome_bytes"):
-            return
-        sent = await target.reply_video_note(InputFile(data["welcome_bytes"], filename="welcome.mp4"), length=welcome.SIZE)
-        if sent.video_note:
-            store.set_meta("welcome_note", {"file_id": sent.video_note.file_id, "version": welcome.VERSION})
-            data.pop("welcome_bytes", None)
-    except (TelegramError, asyncio.TimeoutError) as exc:
-        LOG.warning("Welcome note not sent: %s", type(exc).__name__)
+        await deliver_welcome(context, target, user_id)
+
+    background = asyncio.create_task(later())
+    data.setdefault("welcome_waiters", set()).add(background)
+    background.add_done_callback(data["welcome_waiters"].discard)
+    return False
 
 
 async def welcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/welcome: show the welcome video note again."""
-    if await authorized(update, context):
-        await send_welcome(context, update.effective_message)
+    if not await authorized(update, context):
+        return
+    if not await send_welcome(context, update.effective_message, update.effective_user.id):
+        await send(update.effective_message, ui(update, "🎬 Кружок ещё готовится — пришлю, как только будет готов.",
+                                                "🎬 The video note is still being made — I'll send it when it's ready."))
 
 
 async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -914,6 +986,7 @@ async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                "Record a video note, then reply to it with /setwelcome."))
         return
     store.set_meta("welcome_note", {"file_id": note.file_id, "version": "custom"})
+    await keep_welcome(context, note.file_id)
     await send(message, ui(update, "✅ Теперь новые пользователи будут получать этот кружок.", "✅ New users will get this video note."))
 
 
@@ -2330,7 +2403,7 @@ async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
-    app.bot_data["welcome_task"] = asyncio.create_task(prepare_welcome(app))
+    app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
     if not app.bot_data.get("logo_id"):
         # The application is not running yet inside post_init, so start a plain task and keep a reference.
         app.bot_data["logo_task"] = asyncio.create_task(ensure_logo(app))
