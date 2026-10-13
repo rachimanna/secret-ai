@@ -540,15 +540,25 @@ class DraftReply:
         track_step(self, note)
 
     async def _push(self, text, entities=None):
-        params = {"chat_id": self.chat_id, "draft_id": self.draft_id, "text": text}
-        if entities:
-            params["entities"] = entities
-        await self.bot.do_api_request("sendMessageDraft", api_kwargs=params)
+        # An empty draft is Telegram's own see-through "Thinking… 5s" placeholder (Bot API 10).
+        await self.bot.send_message_draft(self.chat_id, self.draft_id, text or None, entities=entities or None)
         self.shown, self.pushed = text, time.monotonic()
 
+    def frame(self):
+        """Telegram's native thinking placeholder, or our status while the bot is busy (searching, starting a video…)."""
+        if not self.note and not self.done:
+            return ""
+        return thinking_frame(self.language, self.config["logo"], self.started, note=self.note, done=self.done)
+
+    async def _show_frame(self):
+        frame = self.frame()
+        if frame:
+            await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
+        else:
+            await self._push("")
+
     async def start(self):
-        frame = thinking_frame(self.language, self.config["logo"], self.started)
-        await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
+        await self._show_frame()
         self.tasks = [asyncio.create_task(self._loop()), asyncio.create_task(typing_loop(self.target, self.action))]
 
     async def _pause(self, delay):
@@ -559,10 +569,9 @@ class DraftReply:
 
     async def _tick(self):
         if not self.text.strip():
-            frame = thinking_frame(self.language, self.config["logo"], self.started, note=self.note, done=self.done)
-            # The frame rarely changes now: re-send it before Telegram drops a draft that saw no updates for 30 s.
-            if frame != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE:
-                await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
+            # Re-send before Telegram drops a draft that saw no updates for 30 s.
+            if self.frame() != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE:
+                await self._show_frame()
             return
         pending = self.text[self.offset:]
         if "```" in pending:
