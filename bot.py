@@ -41,7 +41,7 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
@@ -2121,7 +2121,8 @@ def gen_settings(bot_data):
     if models.get("photo") in OLD_PHOTO_DEFAULTS:
         models["photo"] = ""
     defaults = dict(DEFAULT_MODELS, video=os.environ.get("VIDEO_MODEL", "").strip()
-                    or (KLING_DIRECT if bot_data.get("kling_env_key") else KLING if key else "free"))
+                    or (ANYMODEL_PREFIX + bot_data["anymodel_video"] if bot_data.get("anymodel_key")
+                        else KLING_DIRECT if bot_data.get("kling_env_key") else KLING if key else "free"))
     return key, {kind: models.get(kind) or default for kind, default in defaults.items()}
 
 
@@ -2134,6 +2135,8 @@ def video_key(bot_data, model):
         return bot_data["connections"].get_meta("gemini_key", secret=True) or bot_data.get("gemini_env_key") or ""
     if provider == "kling":
         return bot_data.get("kling_env_key") or ""
+    if provider == "anymodel":
+        return bot_data.get("anymodel_key") or ""
     if provider == "higgsfield":
         return bot_data["connections"].get_meta("hf_key", secret=True) or bot_data.get("hf_env_key") or ""
     return gen_settings(bot_data)[0]
@@ -2296,13 +2299,20 @@ async def voice_over(data, job, scenes):
 
 
 async def make_kling_video(data, job):
-    """Kling scenes (its own API) in parallel with their sound effects, plus the voice-over, in one MP4."""
+    """Kling (its own API) or AnyModel (Grok Imagine...) scenes in parallel with their sound effects, plus the
+    voice-over, in one MP4."""
     scenes = await plan_scenes(data, job)
     quiet = " No dialogue, nobody talks, no lip movement."
-    clips = await asyncio.gather(*[
-        kling_generate(data["http"], job["key"], job["model"], scene["visual"].rstrip(". ") + "." + quiet, job["fmt"],
-                       KLING_SECONDS, data.get("kling_api") or KLING_API)
-        for scene in scenes])
+    if video_provider(job["model"]) == "anymodel":
+        clips = await asyncio.gather(*[
+            anymodel_generate(data["http"], job["key"], job["model"], scene["visual"].rstrip(". ") + "." + quiet,
+                              job["fmt"], ANYMODEL_SECONDS, data.get("anymodel_api") or ANYMODEL_API)
+            for scene in scenes])
+    else:
+        clips = await asyncio.gather(*[
+            kling_generate(data["http"], job["key"], job["model"], scene["visual"].rstrip(". ") + "." + quiet, job["fmt"],
+                           KLING_SECONDS, data.get("kling_api") or KLING_API)
+            for scene in scenes])
     voice = await voice_over(data, job, scenes)
     return await montage(list(clips), job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0)
 
@@ -2419,7 +2429,7 @@ async def generation_job(app, job):
         else:
             provider = video_provider(job["model"])
             video = await (make_free_video(data, job) if provider == "free" else make_video(data, job) if provider == "fal"
-                           else make_kling_video(data, job) if provider == "kling" else make_veo_video(data, job))
+                           else make_kling_video(data, job) if provider in ("kling", "anymodel") else make_veo_video(data, job))
             await bot.send_video(user_id, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
                                  write_timeout=180, read_timeout=180)
     except Exception as exc:  # any failure: give the generation back and explain
@@ -3022,6 +3032,9 @@ def main():
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
         kling_env_key=kling_env_key(),
         hf_token=os.environ.get("HF_TOKEN", "").strip(),
+        anymodel_key=os.environ.get("ANYMODEL_API_KEY", "").strip().removeprefix("Bearer ").strip(),
+        anymodel_api=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
+        anymodel_video=os.environ.get("ANYMODEL_VIDEO_MODEL", "").strip() or ANYMODEL_VIDEO,
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),

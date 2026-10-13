@@ -234,7 +234,7 @@ def is_fal(model):
 def video_provider(model):
     """'free', 'veo', 'fal', 'kling' (kling:<model_name>) or 'higgsfield' (anything else, e.g. bytedance/seedance-2.5/text-to-video)."""
     return ("free" if model == "free" else "veo" if is_veo(model) else "fal" if is_fal(model)
-            else "kling" if model.startswith(KLING_PREFIX) else "higgsfield")
+            else "kling" if model.startswith(KLING_PREFIX) else "anymodel" if model.startswith(ANYMODEL_PREFIX) else "higgsfield")
 
 
 # ---------- Kling's own API: Access Key + Secret Key from the Kling developer console ----------
@@ -312,6 +312,129 @@ async def kling_generate(http, key, model, prompt, fmt, seconds=KLING_SECONDS, b
             message = str(data.get("task_status_msg", ""))
             raise MediaError("blocked" if "risk" in message.lower() or "content" in message.lower() else "failed", message[:200])
     raise MediaError("timeout")
+
+
+# ---------- AnyModel (OpenAI-compatible gateway): Grok Imagine, Kling, Veo video on one key ----------
+
+ANYMODEL_PREFIX = "anymodel:"
+ANYMODEL_API = "https://anymodel.org/v1"  # ANYMODEL_BASE env overrides
+ANYMODEL_VIDEO = "grok-imagine-video"  # ANYMODEL_VIDEO_MODEL env overrides
+ANYMODEL_SECONDS = 10
+DONE = ("done", "completed", "succeeded", "success", "succeed", "finished")
+FAILED = ("failed", "error", "expired", "cancelled", "canceled", "rejected")
+
+
+async def anymodel_generate(http, key, model, prompt, fmt, seconds=ANYMODEL_SECONDS, base=ANYMODEL_API):
+    """One clip with its own sound. Speaks xAI's video API (POST /videos/generations, GET /videos/{id}) and falls back to
+    OpenAI's (POST /videos, GET /videos/{id}/content). Returns the MP4 bytes."""
+    name = model[len(ANYMODEL_PREFIX):] if model.startswith(ANYMODEL_PREFIX) else model
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    aspect = {"square": "1:1", "portrait": "9:16"}.get(fmt, "16:9")
+    size = {"square": "720x720", "portrait": "720x1280"}.get(fmt, "1280x720")
+
+    async def call(method, path, **kwargs):
+        try:
+            return await http.request(method, base + path, headers=headers, timeout=kwargs.pop("timeout", 60),
+                                      follow_redirects=True, **kwargs)
+        except httpx.HTTPError as exc:
+            raise MediaError("failed", type(exc).__name__) from None
+
+    attempts = (("/videos/generations", {"model": name, "prompt": prompt[:4000], "duration": seconds, "aspect_ratio": aspect,
+                                         "resolution": "720p"}),
+                ("/videos", {"model": name, "prompt": prompt[:4000], "seconds": str(seconds), "size": size}))
+    response = None
+    for path, body in attempts:
+        response = await call("POST", path, json=body)
+        if response.status_code not in (404, 405):
+            break
+    detail = _gateway_error(response)
+    if response.status_code in (401, 403):
+        raise MediaError("bad_video_key", detail)
+    if response.status_code == 402 or any(w in detail.lower() for w in ("balance", "insufficient", "credit", "funds", "баланс")):
+        raise MediaError("video_billing", detail)
+    if response.status_code == 429:
+        raise MediaError("busy", detail)
+    if response.status_code in (404, 405):
+        raise MediaError("model", "no video endpoint")
+    if response.status_code >= 400:
+        blocked = any(w in detail.lower() for w in ("moderation", "safety", "policy", "nsfw"))
+        raise MediaError("blocked" if blocked else "model" if "model" in detail.lower() else "failed",
+                         f"submit {response.status_code} {detail}")
+    job = _json(response)
+    ready = _video_url(job)
+    if ready:
+        return await _download(http, ready, headers)
+    inner = job.get("data") if isinstance(job.get("data"), dict) else {}
+    task = job.get("request_id") or job.get("id") or job.get("task_id") or inner.get("id") or inner.get("task_id")
+    if not task:
+        raise MediaError("failed", "no request id")
+    deadline = time.monotonic() + 1200
+    while time.monotonic() < deadline:
+        await asyncio.sleep(POLL_SECONDS * 2)
+        try:
+            response = await call("GET", f"/videos/{task}")
+            if response.status_code == 404:
+                response = await call("GET", f"/videos/generations/{task}")
+        except MediaError:
+            continue
+        if response.status_code >= 500 or response.status_code == 404:
+            continue
+        data = _json(response)
+        inner = data.get("data") if isinstance(data.get("data"), dict) else {}
+        status = str(data.get("status") or inner.get("status") or "").lower()
+        url = _video_url(data)
+        if url:
+            return await _download(http, url, headers)
+        if status in DONE:  # OpenAI style: the file comes from /content
+            content = await call("GET", f"/videos/{task}/content", timeout=180)
+            if content.status_code < 400 and content.content[:12].find(b"ftyp") != -1:
+                return content.content
+            raise MediaError("failed", "done without a video")
+        if status in FAILED:
+            message = _gateway_error(response) or status
+            blocked = any(w in message.lower() for w in ("moderation", "safety", "policy", "nsfw"))
+            raise MediaError("blocked" if blocked else "failed", message[:200])
+    raise MediaError("timeout")
+
+
+def _json(response):
+    try:
+        data = response.json()
+        return data if isinstance(data, dict) else {"data": data}
+    except ValueError:
+        return {}
+
+
+def _video_url(data):
+    """The finished video's URL in the common response shapes (video.url, url, output, data[0].url, result...)."""
+    if isinstance(data, str):
+        return data if data.startswith("http") else ""
+    if isinstance(data, list):
+        return next((u for u in map(_video_url, data) if u), "")
+    if not isinstance(data, dict):
+        return ""
+    for key in ("video", "video_url", "url", "output", "result", "data", "videos", "generations"):
+        if key in data:
+            found = _video_url(data[key])
+            if found:
+                return found
+    return ""
+
+
+def _gateway_error(response):
+    data = _json(response)
+    error = data.get("error")
+    if isinstance(error, dict):
+        return str(error.get("message") or error)[:200]
+    return str(error or data.get("message") or data.get("detail") or "")[:200]
+
+
+async def _download(http, url, headers):
+    video = await http.get(url, timeout=180, follow_redirects=True,
+                           headers=headers if url.startswith(ANYMODEL_API.split("/v1")[0]) else None)
+    if video.status_code >= 400:
+        raise MediaError("failed", f"download {video.status_code}")
+    return video.content
 
 
 def _kling_error(response):
