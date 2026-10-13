@@ -2931,14 +2931,18 @@ async def speech_audio(data, text):
     fish = data["connections"].get_meta("fish_voice") or data.get("fish_voice") or ""
     if fish and fish != "off" and data.get("fish_key"):
         try:
-            return await fish_speech(data["http"], data["fish_key"], fish, text, data.get("fish_model", ""))
+            audio = await fish_speech(data["http"], data["fish_key"], fish, text, data.get("fish_model", ""))
+            LOG.info("Voice reply: Fish Audio voice %s", fish)
+            return audio
         except Exception as exc:
             LOG.warning("Fish Audio voice failed: %s %s", type(exc).__name__, str(exc)[:200])
     elif fish and fish != "off" and data.get("anymodel_key") and data.get("fish_via_anymodel", True):
         # No Fish Audio key: ask AnyModel's free Fish route for the same voice.
         try:
-            return await anymodel_speech(data["http"], data["anymodel_key"], ANYMODEL_FISH, text,
-                                         data.get("anymodel_api") or ANYMODEL_API, reference_id=fish)
+            audio = await anymodel_speech(data["http"], data["anymodel_key"], ANYMODEL_FISH, text,
+                                          data.get("anymodel_api") or ANYMODEL_API, reference_id=fish)
+            LOG.info("Voice reply: AnyModel %s asked for Fish voice %s", ANYMODEL_FISH, fish)
+            return audio
         except Exception as exc:
             LOG.warning("Fish voice through AnyModel failed: %s %s", type(exc).__name__, str(exc)[:200])
     if data.get("anymodel_key") and data.get("anymodel_voice"):
@@ -2949,11 +2953,14 @@ async def speech_audio(data, text):
                 data["anymodel_voice_id"] = await anymodel_voice_id(data["http"], data["anymodel_key"], wanted, base)
                 LOG.info("AnyModel voice: %s", data["anymodel_voice_id"] or "not found, using the usual voice")
             if data["anymodel_voice_id"]:
-                return await anymodel_speech(data["http"], data["anymodel_key"], data["anymodel_voice_id"], text, base)
+                audio = await anymodel_speech(data["http"], data["anymodel_key"], data["anymodel_voice_id"], text, base)
+                LOG.info("Voice reply: AnyModel voice %s", data["anymodel_voice_id"])
+                return audio
         except Exception as exc:  # the usual voice still answers
             LOG.warning("AnyModel voice failed: %s %s", type(exc).__name__, str(exc)[:200])
     audio = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"], input=text,
                                                      response_format="opus")
+    LOG.info("Voice reply: OpenAI voice %s", data["tts_voice"])
     return audio.content
 
 
