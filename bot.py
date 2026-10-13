@@ -830,7 +830,7 @@ def is_abacus(model):
 
 # Chat-completions gateways: model prefix -> the bot_data key of its client. AnyModel models also get function tools.
 CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat"}
-OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-8"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
+OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-6"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
 GPT_PICK = "gpt-6.1-sol"  # the second model in the picker
 
 
@@ -1007,18 +1007,29 @@ async def discover_models(app):
     if not gpt:
         LOG.warning("%s is not on the OpenAI key or RouteLLM; offering %s instead", GPT_PICK, data["model"])
         gpt = data["model"]
-    gemini = None
-    if data.get("anymodel_chat") and os.environ.get("GEMINI_CHAT", "").strip() == "1":  # off unless asked for
+    gemini, any_ids = None, []
+    if data.get("anymodel_chat"):
         try:
-            gemini = pick_gemini([m.id for m in (await data["anymodel_chat"].models.list()).data])
+            any_ids = [m.id for m in (await data["anymodel_chat"].models.list()).data]
         except Exception as exc:
             LOG.warning("AnyModel model list unavailable: %s", type(exc).__name__)
+    claude = OPUS if data.get("anymodel_chat") else None
+    if claude and any_ids and claude[len(ANYMODEL_PREFIX):] not in any_ids:
+        # The catalog spells it differently, or doesn't have it: take the closest Claude Opus it has.
+        wanted = claude.rsplit("opus-", 1)[1]
+        found = [i for i in any_ids if "opus" in i.lower() and wanted.replace("-", "") in re.sub(r"\D", "", i)]
+        others = sorted(i for i in any_ids if "claude-opus" in i.lower())
+        pick = (sorted(found, key=lambda i: (not i.startswith("cc/"), i)) or others[-1:] or [None])[0]
+        LOG.warning("%s is not in the AnyModel catalog; using %s", claude, pick or "it anyway")
+        claude = ANYMODEL_PREFIX + pick if pick else claude
+    if any_ids and os.environ.get("GEMINI_CHAT", "").strip() == "1":  # off unless asked for
+        gemini = pick_gemini(any_ids)
+    if gemini is not None or os.environ.get("GEMINI_CHAT", "").strip() == "1":
         if gemini:
             gemini = ANYMODEL_PREFIX + gemini
             LOG.info("Gemini on AnyModel: %s", gemini)
         else:
             LOG.warning("Gemini 3.8 is not in the AnyModel catalog")
-    claude = OPUS if data.get("anymodel_chat") else None
     data["models"] = [m for m in (gemini, claude, gpt) if m]
     chosen = data.get("chat_override")
     data["chat_default"] = chosen if chosen in data["models"] else data["models"][0]
