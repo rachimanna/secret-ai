@@ -23,6 +23,7 @@ DEFAULT_MODELS = {"photo": "openai-image", "video": "free"}  # photos: GPT Image
 OLD_VIDEO_DEFAULTS = ("veo-3.1-fast-generate-preview", "bytedance/seedance-2.5/text-to-video",
                       "fal-ai/kling-video/v2.6/pro/text-to-video")
 OLD_PHOTO_DEFAULTS = ("fal-ai/flux/schnell",)
+KLING = "fal-ai/kling-video/v2.6/pro/text-to-video"  # the video model once a fal key is set (VIDEO_MODEL env overrides)
 SOUND_MODEL = "fal-ai/mmaudio-v2"  # video-to-audio: sound effects that match the picture, about $0.001 per second
 FAL_SCENE_SECONDS = 10  # Kling makes 5- or 10-second clips
 TIMEOUTS = {"photo": 180, "video": 1800, "sound": 300}

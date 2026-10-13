@@ -41,7 +41,7 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
@@ -2107,7 +2107,8 @@ def gen_settings(bot_data):
         models["video"] = ""  # an old default saved from the form: use the current one (free)
     if models.get("photo") in OLD_PHOTO_DEFAULTS:
         models["photo"] = ""
-    return key, {kind: models.get(kind) or default for kind, default in DEFAULT_MODELS.items()}
+    defaults = dict(DEFAULT_MODELS, video=os.environ.get("VIDEO_MODEL", "").strip() or (KLING if key else "free"))
+    return key, {kind: models.get(kind) or default for kind, default in defaults.items()}
 
 
 def video_key(bot_data, model):
@@ -2126,7 +2127,7 @@ def gen_state(bot_data, user_id):
     key, models = gen_settings(bot_data)
     free, credits = bot_data["memory"].gen_info(user_id)
     owner = bot_data["connections"].get_meta("owner") == user_id
-    state = {"ready": bool(key) or models["photo"] in ("free", OPENAI_IMAGE), "video_ready": bool(video_key(bot_data, models["video"])), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
+    state = {"ready": bool(key) or models["photo"] in ("free", OPENAI_IMAGE), "video_ready": bool(video_key(bot_data, models["video"])), "video_on": models["video"] != "free", "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
              "credits": credits, "cost": COST, "video_prices": VIDEO_PRICES, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
     if owner:
         state["models"] = models

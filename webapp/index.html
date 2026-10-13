@@ -446,7 +446,7 @@ const T = {
     makeEdit: "Изменить фото", editSub: "Убрать людей, совместить фото, сменить фон",
     editLead: "Добавь до 4 фото и напиши, что сделать. Лица и детали останутся как есть.",
     editPh: "Например: убери людей сзади и поставь девушку со 2-го фото рядом со мной", addPhotos: "Добавить фото",
-    editGo: "Изменить", editNeed: "Добавь хотя бы одно фото и напиши, что сделать", videoSub: "Бесплатно: оживлённые кадры и русская озвучка · 8 с – 1 мин",
+    editGo: "Изменить", editNeed: "Добавь хотя бы одно фото и напиши, что сделать", videoSub: "Kling: живое видео, звуки и русская озвучка · 8 с – 1 мин",
     length: "Длительность", sec: " с", min: " мин", withVoice: "Озвучка на русском", noVoice: "Без озвучки", scenes: n => `${n} ${n % 10 >= 2 && n % 10 <= 4 && (n % 100 < 12 || n % 100 > 14) ? "сцены" : "сцен"}`,
     describe: "Опишите, что создать…", describeStyle: s => `Что изобразить в стиле «${s}»?`, create: "Создать ✨",
     fmtSquare: "Квадрат", fmtPortrait: "Вертикаль", fmtLandscape: "Горизонталь",
@@ -507,7 +507,7 @@ const T = {
     makeEdit: "Edit photos", editSub: "Remove people, put photos together, change the background",
     editLead: "Add up to 4 photos and say what to do. Faces and details stay as they are.",
     editPh: "E.g.: remove the people behind me and put the girl from the 2nd photo next to me", addPhotos: "Add photos",
-    editGo: "Edit", editNeed: "Add at least one photo and say what to do", videoSub: "People on screen speak your language · 8 s – 1 min",
+    editGo: "Edit", editNeed: "Add at least one photo and say what to do", videoSub: "Kling: real video, sound and voice-over · 8 s – 1 min",
     length: "Length", sec: " s", min: " min", withVoice: "With voice-over", noVoice: "No voice-over", scenes: n => `${n} scenes`,
     describe: "Describe what to create…", describeStyle: s => `What to show in the “${s}” style?`, create: "Create ✨",
     fmtSquare: "Square", fmtPortrait: "Portrait", fmtLandscape: "Landscape",
@@ -1235,10 +1235,11 @@ function renderGen() {
   $("gen").innerHTML = setup + wallet + `
     <div class="list">
       <button class="row press" data-gen="photo"><div class="ic sym">${GEN_ICON.photo}</div><div class="body"><div class="t">${T.makePhoto}</div><div class="d">${T.photoSub}</div></div>${ICON.chev}</button>
+      ${state.gen.video_on ? `<button class="row press" data-gen="video"><div class="ic sym">${GEN_ICON.video}</div><div class="body"><div class="t">${T.makeVideo}</div><div class="d">${T.videoSub}</div></div>${ICON.chev}</button>` : ""}
       <button class="row press" data-edit="1"><div class="ic sym">${EDIT_ICON}</div><div class="body"><div class="t">${T.makeEdit}</div><div class="d">${T.editSub}</div></div>${ICON.chev}</button>
     </div>
     <div class="section"><h2>${T.templates}</h2><div class="tpl-grid" style="margin-top:12px">
-      ${GEN_TEMPLATES.map(([kind, e, t, d, , c1, c2], i) => kind === "video" ? "" : `<button class="tpl press" data-tpl="${i}" style="--c1:${c1};--c2:${c2}">
+      ${GEN_TEMPLATES.map(([kind, e, t, d, , c1, c2], i) => kind === "video" && !state.gen.video_on ? "" : `<button class="tpl press" data-tpl="${i}" style="--c1:${c1};--c2:${c2}">
         <span class="kind">${kind === "video" ? T.kindVideo : T.kindPhoto}</span><span class="e">${lineIcon(e)}</span><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}
     </div></div>`;
   $("gen-buy")?.addEventListener("click", openBuySheet);
