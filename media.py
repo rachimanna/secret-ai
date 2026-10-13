@@ -396,10 +396,11 @@ async def anymodel_generate(http, key, model, prompt, fmt, seconds=ANYMODEL_SECO
     raise MediaError("timeout")
 
 
-async def anymodel_voices(http, key, base=ANYMODEL_API):
-    """Voices the API can speak with: (model id, label) from the TTS catalog, then the Russian edge-tts voices."""
+async def anymodel_voices(http, key, base=ANYMODEL_API, every_language=False):
+    """Voices the API can speak with: (model id, label) from the TTS catalog, then the edge-tts voices (Russian ones, or
+    every language)."""
     voices = []
-    for path in ("/models/tts", "/audio/voices?provider=edge-tts&lang=ru"):
+    for path in ("/models/tts", "/audio/voices?provider=edge-tts" + ("" if every_language else "&lang=ru")):
         try:
             response = await http.get(base + path, headers={"Authorization": f"Bearer {key}"}, timeout=30)
             entries = (response.json().get("data") or []) if response.status_code < 400 else []

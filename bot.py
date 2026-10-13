@@ -2167,6 +2167,12 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(message, "Нужен ключ AnyModel: переменная ANYMODEL_API_KEY в Render.")
         return
     base, query = data.get("anymodel_api") or ANYMODEL_API, " ".join(context.args or []).strip()
+    if query.lower() in ("all", "все", "всё"):
+        voices = await anymodel_voices(data["http"], data["anymodel_key"], base, every_language=True)
+        lines = [f"{model}" + (f" — {label}" if label else "") for model, label in voices]
+        await send(message, f"🎙 Все голоса API ({len(voices)}):\n" + "\n".join(lines) if voices
+                   else "AnyModel не отдал список голосов.")
+        return
     voices = await anymodel_voices(data["http"], data["anymodel_key"], base)
     if query:
         found = await anymodel_voice_id(data["http"], data["anymodel_key"], query, base) if query.lower() != "off" else ""
@@ -2184,7 +2190,8 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lines = [f"• {model}" + (f" — {label}" if label else "") for model, label in voices[:60]]
     await send(message, head + f"Голоса, доступные через API ({len(voices)}):\n" + "\n".join(lines)
-               + "\n\nВыбрать: /voice <имя или id>, например /voice " + voices[0][0] + "\nОбычный голос: /voice off")
+               + "\n\nВыбрать: /voice <имя или id>, например /voice " + voices[0][0] + "\nВсе голоса всех языков: /voice all"
+               + "\nОбычный голос: /voice off")
 
 
 async def secretary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
