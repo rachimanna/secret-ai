@@ -1135,7 +1135,7 @@ async def group_chat(update, context):
     lock = data["locks"][chat_id]
     if not addressed_to_bot(message, context.bot, data):
         remember_group_message(store, message, name)
-        quiet = time.monotonic() - data["group_spoke"].get(chat_id, 0)
+        quiet = time.monotonic() - data["group_spoke"].get(chat_id, float("-inf"))
         if lock.locked() or quiet < GROUP_RANDOM_PAUSE or random.random() >= GROUP_RANDOM_CHANCE:
             return
         data["group_spoke"][chat_id] = time.monotonic()
