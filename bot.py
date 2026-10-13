@@ -36,6 +36,7 @@ from telegram.ext import (Application, BusinessConnectionHandler, CallbackContex
                           PreCheckoutQueryHandler, filters)
 
 import miniapp
+import persist
 import secretary as sec
 import welcome
 from apps import Pipedream, PipedreamError
@@ -3177,6 +3178,8 @@ async def post_init(app):
     app.bot_data["bot_name"] = app.bot.username
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
+    if app.bot_data.get("snapshots"):
+        app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
     await resolve_abacus_model(app)
     await discover_models(app)
     if not app.bot_data.get("logo_id"):
@@ -3199,6 +3202,12 @@ async def post_init(app):
 
 
 async def shutdown(app):
+    if app.bot_data.get("snapshots"):  # the last minute of memory before the deploy replaces this machine
+        app.bot_data["snapshot_task"].cancel()
+        try:
+            await asyncio.wait_for(asyncio.to_thread(app.bot_data["snapshots"].save), 25)
+        except Exception as exc:
+            LOG.warning("Final database save failed: %s", type(exc).__name__)
     await app.bot_data["client"].close()
     await app.bot_data["http"].aclose()
     app.bot_data["pipedream"].http.close()
@@ -3384,6 +3393,12 @@ def main():
         raise SystemExit("Invalid ALLOWED_USERS or PORT configuration.") from None
     # Updates run concurrently across users; a per-user lock keeps each conversation and /reset in order.
     database = os.environ.get("DATABASE_PATH", "memory.db")
+    snapshots = persist.from_env(database)
+    if snapshots:  # Render wipes the disk on every deploy: bring the database back from Postgres first
+        try:
+            snapshots.restore()
+        except Exception as exc:  # better to start with an empty memory than not at all
+            LOG.error("Could not restore the database from Postgres: %s %s", type(exc).__name__, str(exc)[:200])
     public_url = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
     if public_url and not public_url.startswith("https://"):
         raise SystemExit("PUBLIC_URL must start with https:// (Telegram Mini Apps require HTTPS).")
@@ -3403,7 +3418,7 @@ def main():
     app.bot_data.update(
         connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key, timeout=120, max_retries=2),
-        memory=Memory(database), allowed=allowed,
+        memory=Memory(database), allowed=allowed, snapshots=snapshots,
         model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
