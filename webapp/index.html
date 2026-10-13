@@ -318,6 +318,104 @@
   .footer { text-align: center; color: var(--hint-2); font-size: 13px; margin-top: 28px; }
   .footer .mini { width: 44px; height: 44px; margin: 0 auto 6px; opacity: .8; }
 
+  /* ================= iOS-style skin: blue hero, grey grouped cards, big titles, emoji rows ================= */
+  :root { --bg: #1c1c1e; --bg-2: #2c2c2e; --card: #2c2c2e; --card-solid: #2c2c2e; --line: rgba(255,255,255,.09);
+          --accent: #3e8bff; --hint: rgba(235,235,245,.6); --hint-2: rgba(235,235,245,.3); --hero: #3b44e6; }
+  :root[data-theme="light"] { --bg: #f2f2f7; --bg-2: #fff; --card: #fff; --card-solid: #fff; --line: rgba(60,60,67,.12); --accent: #007aff; }
+  .backdrop { height: 760px; opacity: 0;
+    background: linear-gradient(180deg, #3b44e6 0%, #3d5be4 22%, #3f7fdc 42%, #2f63b8 58%, rgba(28,28,30,0) 82%); }
+  .backdrop::after { opacity: .7; background: radial-gradient(60% 30% at 50% 46%, rgba(120,190,255,.5), transparent 70%); }
+  body[data-tab="agent"] .backdrop { opacity: 1; }
+  body[data-tab="apps"] .backdrop, body[data-tab="settings"] .backdrop, body[data-tab="gen"] .backdrop, body[data-tab="discover"] .backdrop { opacity: 0; }
+  :root[data-theme="light"] .backdrop { background: linear-gradient(180deg, #3b44e6 0%, #3f7fdc 40%, rgba(242,242,247,0) 80%); }
+
+  /* top bar on the blue hero */
+  .pill { height: 44px; padding: 0 18px; border-radius: 22px; font-size: 17px; }
+  #model-btn { background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.18); color: #fff; box-shadow: none; }
+  .pill.cta { background: linear-gradient(135deg, #8a5cff, #b25cf6); border-color: rgba(255,255,255,.22); color: #fff;
+              box-shadow: 0 8px 24px rgba(120,70,240,.35); }
+  .pill.cta svg { color: #fff; }
+  .menu { background: rgba(44,44,46,.97); }
+  .menu .check { color: var(--accent); }
+
+  /* mascot + greeting */
+  .hero { padding: 28px 0 30px; color: #fff; }
+  .hero .logo { width: 132px; height: 132px; }
+  .hero .logo::before { display: none; }
+  .hero .edit-btn { position: absolute; right: -6px; bottom: -2px; z-index: 2; width: 44px; height: 44px; border-radius: 50%;
+                    display: grid; place-items: center; color: #fff; background: rgba(120,140,200,.55);
+                    border: 1.5px solid rgba(255,255,255,.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .hero .edit-btn svg { width: 20px; height: 20px; }
+  .hero h1 { font-size: 34px; font-weight: 800; margin: 22px 0 0; color: #fff; letter-spacing: -.02em; }
+  .hero p { display: none; }
+  :root[data-theme="light"] .hero h1 { color: #fff; }
+
+  /* big section titles with a grey line under them */
+  .section { margin-top: 38px; }
+  .section > h2 { font-size: 26px; font-weight: 800; letter-spacing: -.02em; text-transform: none; color: var(--text); margin: 0 8px 4px; }
+  .section > .sub { font-size: 16px; color: var(--hint); margin: 4px 8px 14px; }
+  .section > h2 + .list { margin-top: 14px; }
+  .section > h2.cap { font-size: 17px; font-weight: 600; color: var(--hint); margin: 0 18px 10px; }
+
+  /* grouped cards and rows */
+  .list { background: var(--card); border: 0; border-radius: 26px; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .row { padding: 12px 18px; min-height: 66px; gap: 14px; }
+  .row + .row::before { left: 76px; right: 0; }
+  .row.compact + .row.compact::before { left: 60px; }
+  .row .t { font-size: 17.5px; font-weight: 500; }
+  .row .d { font-size: 15px; }
+  .row .val { font-size: 16.5px; }
+  .row .chev { width: 20px; height: 20px; color: var(--hint-2); }
+  .row .ic.emoji { width: 44px; height: 44px; font-size: 36px; background: none; box-shadow: none; }
+  .row .ic.spark { width: 34px; height: 34px; background: none; }
+  .row .ic.spark svg { width: 30px; height: 30px; }
+  .row .ic.sym { color: var(--text); width: 30px; height: 30px; }
+  .row .ic.sym svg { width: 26px; height: 26px; stroke-width: 1.7; }
+  .row.more { color: var(--accent); font-size: 18px; }
+  .row.more .ic { color: var(--accent); }
+  .badge { font-size: 13px; font-weight: 600; padding: 3px 9px; border-radius: 9px; letter-spacing: .01em; }
+  .badge.new { background: var(--accent); color: #fff; }
+  .badge.pro { background: #8a5cff; color: #fff; }
+  .save { font-size: 15px; font-weight: 500; color: #34c759; }
+  .quick .row { min-height: 74px; }
+  .quick .row + .row::before { left: 66px; }
+  .plus { width: 40px; height: 40px; }
+  .plus svg { width: 30px; height: 30px; stroke-width: 1.6; }
+
+  /* page titles on the other tabs */
+  .page-title { font-size: 34px; font-weight: 800; margin: 14px 8px 6px; }
+  .page-sub { font-size: 16px; margin: 0 8px 18px; }
+
+  /* generation: tokens card, rows, template cards */
+  .wallet { background: var(--card); border: 0; box-shadow: none; border-radius: 26px; padding: 18px 20px; backdrop-filter: none; }
+  .wallet .k { font-size: 16px; }
+  .wallet .v { font-size: 26px; }
+  .pill-btn { height: 44px; padding: 0 22px; border-radius: 22px; font-size: 17px; font-weight: 600; background: var(--accent); box-shadow: none; }
+  .tpl-grid { gap: 12px; }
+  .tpl { height: 168px; border-radius: 26px; border: 0; padding: 16px; }
+  .tpl .e { width: auto; height: auto; background: none; top: 16px; right: 16px; font-size: 40px; line-height: 1; }
+  .tpl b { font-size: 19px; font-weight: 700; color: #fff; text-shadow: 0 1px 8px rgba(0,0,0,.4); }
+  .tpl span { font-size: 13.5px; }
+  .tpl .kind { top: 16px; left: 16px; }
+
+  /* tab bar: four tabs, blue when active */
+  .tabbar { grid-template-columns: repeat(4, 1fr); height: 74px; border-radius: 37px; padding: 6px;
+            background: rgba(28,28,30,.86); border-color: rgba(255,255,255,.1); }
+  .tabbar .lens { top: 6px; bottom: 6px; left: 6px; width: calc((100% - 12px) / 4); border-radius: 32px;
+                  background: rgba(255,255,255,.08); box-shadow: none; }
+  .tabbar .lens.hidden { opacity: 0; }
+  .tab { font-size: 12.5px; color: var(--text); gap: 4px; }
+  .tab svg { width: 30px; height: 30px; stroke-width: 1.7; }
+  .tab .ghost-ic, .tab .ghost-ic svg { width: 32px; height: 32px; }
+  .tab.on, .tab.on svg { color: var(--accent); }
+  .tab.on svg { transform: none; }
+  .tab .ghost-ic rect { fill: var(--bg); }
+  body::after { background: linear-gradient(to bottom, transparent, var(--bg) 70%); }
+
+  /* sheets on grey */
+  .sheet { background: rgba(28,28,30,.97); }
+  .btn { background: var(--accent); box-shadow: 0 10px 26px rgba(62,139,255,.3); }
+
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -340,7 +438,7 @@
       <div class="menu glass" id="model-menu" role="menu"></div>
     </div>
     <div class="hero">
-      <div class="logo" id="hero-logo"></div>
+      <div class="logo"><div id="hero-logo"></div><button class="edit-btn press" id="hero-edit" aria-label="Edit"><svg class="i" viewBox="0 0 24 24"><path d="M4 20h4L19 9a2.8 2.8 0 0 0-4-4L4 16z" fill="currentColor" stroke="none"/></svg></button></div>
       <h1 id="hello"></h1>
       <p data-t="heroSub"></p>
     </div>
@@ -406,7 +504,6 @@
     <svg viewBox="0 0 128 128"><path fill="currentColor" d="M112.99 66.00 L117.44 68.80 L120.10 71.90 L120.15 74.89 L117.52 77.38 L112.88 79.10 L107.39 80.10 L102.11 80.63 L97.76 81.03 L94.52 81.55 L92.23 82.30 L90.60 83.27 L90.03 84.91 L89.94 87.00 L90.27 89.65 L91.00 93.00 L91.89 96.98 L92.53 101.23 L92.41 105.10 L91.17 107.84 L88.78 108.93 L85.54 108.28 L81.95 106.33 L78.50 103.78 L75.48 101.33 L72.95 99.42 L70.84 98.18 L68.99 97.51 L67.29 97.34 L65.68 98.14 L64.00 99.50 L62.13 101.68 L59.91 104.87 L57.20 108.92 L53.96 113.24 L50.37 116.85 L46.87 118.72 L43.98 118.15 L42.12 115.15 L41.37 110.42 L41.47 105.02 L41.97 99.92 L42.41 95.71 L42.52 92.52 L42.23 90.18 L41.60 88.40 L40.09 87.53 L38.06 87.00 L35.40 86.78 L31.98 86.79 L27.90 86.84 L23.61 86.58 L19.85 85.66 L17.42 83.88 L16.86 81.32 L18.16 78.28 L20.82 75.18 L24.03 72.33 L27.06 69.88 L29.45 67.81 L31.10 66.00 L32.14 64.33 L31.70 62.61 L30.42 60.68 L28.30 58.41 L25.30 55.63 L21.68 52.25 L18.16 48.40 L15.68 44.49 L15.12 41.09 L16.84 38.77 L20.57 37.80 L25.49 38.02 L30.62 38.97 L35.19 40.06 L38.87 40.87 L41.65 41.18 L43.77 41.02 L45.49 40.52 L47.01 39.84 L48.33 38.86 L49.54 37.62 L50.61 35.94 L51.50 33.44 L52.23 29.77 L52.94 24.74 L53.93 18.63 L55.49 12.29 L57.80 7.05 L60.76 4.26 L64.00 4.71 L67.03 8.24 L69.48 13.84 L71.27 20.13 L72.53 25.87 L73.54 30.39 L74.54 33.57 L75.64 35.68 L76.87 37.10 L78.53 37.49 L80.55 37.34 L83.05 36.67 L86.21 35.42 L90.09 33.78 L94.46 32.17 L98.78 31.22 L102.29 31.53 L104.32 33.35 L104.57 36.52 L103.28 40.49 L101.07 44.60 L98.69 48.32 L96.71 51.44 L95.39 53.95 L94.71 56.02 L95.14 57.66 L96.86 59.01 L99.48 60.38 L103.19 61.88 L107.89 63.70Z"/><rect x="50.5" y="54" width="10.5" height="20" rx="5.25" fill="var(--bg)"/><rect x="67.5" y="54" width="10.5" height="20" rx="5.25" fill="var(--bg)"/></svg></span><span data-t="tabAgent"></span></button>
   <button class="tab" data-tab="discover"><svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><span data-t="tabDiscover"></span></button>
   <button class="tab" data-tab="gen"><svg class="i" viewBox="0 0 24 24"><path d="m4 20 10-10M14 10l2-2M18 3l.6 1.6L20 5.2l-1.4.6L18 7.5l-.6-1.7L16 5.2l1.4-.6zM9 3.5l.4 1 1 .4-1 .4-.4 1-.4-1-1-.4 1-.4zM19.5 12l.4 1 1 .4-1 .4-.4 1-.4-1-1-.4 1-.4z"/></svg><span data-t="tabGen"></span></button>
-  <button class="tab" data-tab="apps"><svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg><span data-t="tabApps"></span></button>
   <button class="tab" data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-t="tabSettings"></span></button>
 </nav>
 
@@ -460,7 +557,7 @@ const T = {
     hfKey: "Ключ Higgsfield для видео (KEY_ID:KEY_SECRET)", hfPh: "KEY_ID:KEY_SECRET (оставьте пустым, чтобы не менять)", errHfKey: "Ключ Higgsfield вставляется целиком в виде KEY_ID:KEY_SECRET",
     noCredits: "Генерации закончились — пополните звёздами", kindPhoto: "фото", kindVideo: "видео",
     ctaNone: "Приложения", ctaSome: n => `${n} подкл.`,
-    settings: "Настройки", secretAi: "Secret AI", mode: "Режим ответа", model: "Модель", profile: "Профиль", tgId: "Telegram ID",
+    settings: "Настройки", secretAi: "Secret AI", mode: "Личность Secret AI", model: "LLM-модель", myCredits: "Мои кредиты", secMode: "Режим секретаря", appTitle: "Приложение", profile: "Профиль", tgId: "Telegram ID",
     memory: "Память диалога", msgs: n => `${n} сообщ.`, appGroup: "Подключения", gh: "GitHub", ghSub: "Нажмите «Подключить», разрешите доступ на GitHub и выберите репозитории — всё.",
     mcp: "Свой MCP-сервер", mcpSub: "Для продвинутых: любой URL", clear: "Очистить память", clearAsk: "Удалить историю диалога? Это нельзя отменить.",
     cleared: "Память очищена 🧹", copied: "Скопировано", saved: "Сохранено ✓", removed: "Отключено", sent: "Отправил в чат ✨",
@@ -521,7 +618,7 @@ const T = {
     hfKey: "Higgsfield video key (KEY_ID:KEY_SECRET)", hfPh: "KEY_ID:KEY_SECRET (leave empty to keep)", errHfKey: "Paste the whole Higgsfield key as KEY_ID:KEY_SECRET",
     noCredits: "Out of generations — top up with Stars", kindPhoto: "photo", kindVideo: "video",
     ctaNone: "Apps", ctaSome: n => `${n} connected`,
-    settings: "Settings", secretAi: "Secret AI", mode: "Answer mode", model: "Model", profile: "Profile", tgId: "Telegram ID",
+    settings: "Settings", secretAi: "Secret AI", mode: "Secret AI personality", model: "LLM model", myCredits: "My credits", secMode: "Secretary mode", appTitle: "App", profile: "Profile", tgId: "Telegram ID",
     memory: "Conversation memory", msgs: n => `${n} msgs`, appGroup: "Connections", gh: "GitHub", ghSub: "Tap Connect, allow access on GitHub and pick repositories — that's it.",
     mcp: "Custom MCP server", mcpSub: "Advanced: any URL", clear: "Clear memory", clearAsk: "Delete the conversation history? This can't be undone.",
     cleared: "Memory cleared 🧹", copied: "Copied", saved: "Saved ✓", removed: "Disconnected", sent: "Sent to the chat ✨",
@@ -587,55 +684,80 @@ const QUICK = lang === "ru" ? [
   { icon: "📧", tint: 3, t: "Triage my inbox", save: "40 minutes a week", app: "gmail", appName: "Gmail", text: "Triage my email from the last day: what's important, what to reply to, what to skip." },
   { icon: "📅", tint: 0, t: "Plan my week", save: "30 minutes a day", app: "google_calendar", appName: "Google Calendar", text: "Look at my calendar for this week and make a good plan with focus time." },
 ];
+// [emoji, title, subtitle, text sent to the chat, app slug needed, draft, app name, action (opens a screen instead), badge]
 const DISCOVER = lang === "ru" ? [
   ["Лучшее", [
     ["🔍", "Задай любой вопрос", "Помогу во всём разобраться", "Привет! Что ты умеешь и чем можешь помочь мне прямо сейчас?"],
+    ["👔", "Режим секретаря", "Отвечает за тебя, пока ты занят", "", null, false, "", "secretary", "new"],
+    ["📰", "Создать сайт", "Одно сообщение — готовый сайт", "Сделай мне красивый одностраничный сайт-визитку. Спроси, о чём он, и сразу собери.", null, false, "", "", "new"],
+  ]],
+  ["Основное", [
     ["🧠", "Объясни просто", "Сложная тема за 2 минуты", "Объясни простыми словами, как работают нейросети, с примером из жизни."],
     ["🌐", "Переведи текст", "Сохраню стиль и тон", "Я пришлю текст — переведи его, сохранив стиль и тон.", null, true],
+    ["🦄", "Настройте личность", "Как Secret AI с вами говорит", "", null, false, "", "persona"],
+    ["💱", "Курс валют сегодня", "Свежие данные из интернета", "Какой сегодня курс доллара и евро к рублю? Найди свежие данные."],
+  ]],
+  ["Групповые чаты", [
+    ["🤝", "Добавить в группу", "Буду шутить, кидать мемы и цитаты", "", null, false, "", "group"],
+    ["😂", "Мемы, цитаты, демотиваторы", "/meme, /q и /dem прямо в группе", "Расскажи, что ты умеешь в групповых чатах: мемы, цитаты, демотиваторы, видео."],
+    ["🎬", "Видео по просьбе в группе", "«@бот сделай видео…»", "Как попросить тебя сделать видео прямо в группе?"],
+  ]],
+  ["Создание контента", [
+    ["🎨", "Создать изображение", "ИИ-картинки", "", null, false, "", "photo"],
+    ["🎥", "Создать видео", "ИИ-видео со звуком", "", null, false, "", "video"],
+    ["🪄", "Изменить фото", "Убрать людей, совместить, сменить фон", "", null, false, "", "edit", "new"],
+    ["✍️", "Написать пост для канала", "Цепляющий и живой", "Напиши пост для Telegram-канала о пользе ИИ-ассистентов, живо и без воды."],
   ]],
   ["Работа", [
-    ["📊", "Исследовать рынок", "Конкуренты, тренды, цифры", "Проведи краткое исследование рынка ИИ-ассистентов: игроки, тренды, возможности."],
-    ["📝", "Создать Notion-документ", "План, заметки, база знаний", "Создай в Notion страницу «План на неделю» с задачами и чек-листом.", "notion", false, "Notion"],
+    ["📈", "Исследовать рынок", "Конкуренты, тренды, цифры", "Проведи краткое исследование рынка ИИ-ассистентов: игроки, тренды, возможности."],
+    ["📓", "Создать Notion документ", "План, заметки, база знаний", "Создай в Notion страницу «План на неделю» с задачами и чек-листом.", "notion", false, "Notion"],
     ["📧", "Разбор почты", "Выделю важное", "Разбери мою почту за последние сутки и выдели важное.", "gmail", false, "Gmail"],
-    ["📅", "Напомни о встречах", "Сегодня и завтра", "Какие у меня встречи сегодня и завтра?", "google_calendar", false, "Google Calendar"],
-    ["💬", "Сводка из Slack", "Что пропустил в каналах", "Сделай сводку важного из моих Slack-каналов за сегодня.", "slack", false, "Slack"],
-  ]],
-  ["Код и GitHub", [
-    ["🐙", "Мои репозитории", "Список и последние изменения", "Покажи мои репозитории на GitHub."],
-    ["🛠", "Поправить README", "С diff и подтверждением", "В моём репозитории secret-ai улучши README: структура, установка, примеры."],
-    ["🔀", "Открыть pull request", "Изменения в новой ветке", "Сделай изменения в новой ветке и открой pull request."],
+    ["📅", "Напоминай о встречах", "Google Calendar", "Какие у меня встречи сегодня и завтра?", "google_calendar", false, "Google Calendar"],
+    ["🐙", "Мои репозитории", "GitHub", "Покажи мои репозитории на GitHub."],
     ["🐞", "Найти баг", "Разберу код и ошибку", "Я пришлю код и ошибку — найди причину и предложи исправление.", null, true],
   ]],
   ["На каждый день", [
-    ["✅", "Трекер привычек", "Формируйте привычки", "Помоги составить трекер привычек на 30 дней: 3 привычки и как не сорваться."],
+    ["✅", "Трекер привычек", "Формируйте привычки и следите за прогрессом", "Помоги составить трекер привычек на 30 дней: 3 привычки и как не сорваться."],
     ["🍳", "Что приготовить", "Из того, что есть", "Что можно быстро приготовить на ужин из простых продуктов? Дай 3 варианта."],
-    ["🎉", "Поздравление", "Тёплое и личное", "Напиши тёплое поздравление с днём рождения для близкого друга."],
-    ["✍️", "Пост для канала", "Цепляющий и живой", "Напиши пост для Telegram-канала о пользе ИИ-ассистентов, живо и без воды."],
+    ["🎉", "Поздравление с днём рождения", "Тёплое и личное", "Напиши тёплое поздравление с днём рождения для близкого друга."],
+    ["🤡", "Сделать мем обо мне", "Мемы", "Сделай про меня смешной мем: спроси пару фактов обо мне и придумай."],
   ]],
 ] : [
   ["Best", [
     ["🔍", "Ask anything", "I'll help you figure it out", "Hi! What can you do and how can you help me right now?"],
+    ["👔", "Secretary mode", "Answers for you while you're busy", "", null, false, "", "secretary", "new"],
+    ["📰", "Create a website", "One message — a ready site", "Make me a nice one-page website. Ask what it's about and build it right away.", null, false, "", "", "new"],
+  ]],
+  ["Basics", [
     ["🧠", "Explain simply", "A hard topic in 2 minutes", "Explain in simple words how neural networks work, with a real-life example."],
     ["🌐", "Translate text", "Keeping style and tone", "I'll send a text — translate it keeping the style and tone.", null, true],
+    ["🦄", "Set the personality", "How Secret AI talks to you", "", null, false, "", "persona"],
+    ["💱", "Exchange rates today", "Fresh data from the web", "What are today's USD and EUR exchange rates? Find fresh data."],
+  ]],
+  ["Group chats", [
+    ["🤝", "Add to a group", "Jokes, memes and quotes", "", null, false, "", "group"],
+    ["😂", "Memes, quotes, demotivators", "/meme, /q and /dem in the group", "Tell me what you can do in group chats: memes, quotes, demotivators, videos."],
+    ["🎬", "Videos on request in a group", "“@bot make a video…”", "How do I ask you to make a video right in a group?"],
+  ]],
+  ["Content", [
+    ["🎨", "Create an image", "AI pictures", "", null, false, "", "photo"],
+    ["🎥", "Create a video", "AI video with sound", "", null, false, "", "video"],
+    ["🪄", "Edit photos", "Remove people, combine, change the background", "", null, false, "", "edit", "new"],
+    ["✍️", "Write a channel post", "Catchy and alive", "Write a Telegram channel post about the benefits of AI assistants, lively and concise."],
   ]],
   ["Work", [
-    ["📊", "Market research", "Competitors, trends, numbers", "Do a short market research on AI assistants: players, trends, opportunities."],
-    ["📝", "Create a Notion doc", "Plans, notes, knowledge base", "Create a Notion page \"Weekly plan\" with tasks and a checklist.", "notion", false, "Notion"],
+    ["📈", "Market research", "Competitors, trends, numbers", "Do a short market research on AI assistants: players, trends, opportunities."],
+    ["📓", "Create a Notion doc", "Plans, notes, knowledge base", "Create a Notion page \"Weekly plan\" with tasks and a checklist.", "notion", false, "Notion"],
     ["📧", "Email triage", "Highlight what matters", "Triage my email from the last day and highlight what matters.", "gmail", false, "Gmail"],
-    ["📅", "Meeting reminders", "Today and tomorrow", "What meetings do I have today and tomorrow?", "google_calendar", false, "Google Calendar"],
-    ["💬", "Slack digest", "What I missed", "Summarize what matters in my Slack channels today.", "slack", false, "Slack"],
-  ]],
-  ["Code & GitHub", [
-    ["🐙", "My repositories", "List and recent changes", "Show my GitHub repositories."],
-    ["🛠", "Improve a README", "With diff and confirmation", "In my secret-ai repository improve the README: structure, setup, examples."],
-    ["🔀", "Open a pull request", "Changes in a new branch", "Make the changes in a new branch and open a pull request."],
+    ["📅", "Meeting reminders", "Google Calendar", "What meetings do I have today and tomorrow?", "google_calendar", false, "Google Calendar"],
+    ["🐙", "My repositories", "GitHub", "Show my GitHub repositories."],
     ["🐞", "Find a bug", "I'll analyze code and error", "I'll send code and an error — find the cause and suggest a fix.", null, true],
   ]],
   ["Every day", [
-    ["✅", "Habit tracker", "Build habits", "Help me make a 30-day habit tracker: 3 habits and how to stick to them."],
+    ["✅", "Habit tracker", "Build habits and track progress", "Help me make a 30-day habit tracker: 3 habits and how to stick to them."],
     ["🍳", "What to cook", "From what you have", "What can I quickly cook for dinner from simple ingredients? Give 3 options."],
-    ["🎉", "Greeting", "Warm and personal", "Write a warm birthday greeting for a close friend."],
-    ["✍️", "Channel post", "Catchy and alive", "Write a Telegram channel post about the benefits of AI assistants, lively and concise."],
+    ["🎉", "Birthday greeting", "Warm and personal", "Write a warm birthday greeting for a close friend."],
+    ["🤡", "Make a meme about me", "Memes", "Make a funny meme about me: ask a couple of facts and come up with it."],
   ]],
 ];
 const FEATURED_HOME = ["github", "notion", "linear", "atlassian", "asana", "gmail"];
@@ -769,6 +891,7 @@ $("model-menu").addEventListener("click", async e => {
   $("model-menu").classList.remove("open"); $("model-btn").setAttribute("aria-expanded", false);
 });
 $("cta-apps").addEventListener("click", () => switchTab("apps"));
+$("hero-edit").addEventListener("click", () => state && openPersonaSheet());
 
 
 /* ---------------- AI secretary + groups ---------------- */
@@ -780,7 +903,7 @@ function renderSecretary() {
   const ready = s.connected && s.can_reply;
   const sub = !ready ? T.secNotConnected : s.enabled ? `${T.secOn}: «${esc(s.rules)}»` : T.secOff;
   $("home-secretary").innerHTML = `<div class="row press" id="sec-row" role="button">
-      <div class="ic line" style="--tint:#34c759">${SEC_ICON}</div>
+      <div class="ic emoji">👔</div>
       <div class="body"><div class="t">${T.secTitle}</div><div class="d">${sub}</div></div>
       ${ready ? `<button class="switch ${s.enabled ? "on" : ""}" id="sec-switch" aria-label="${T.secTitle}"></button>` : ICON.chev}</div>`;
   $("sec-row").onclick = e => { if (!e.target.closest("#sec-switch")) openSecretarySheet(); };
@@ -822,10 +945,10 @@ function addToGroup() {
 function renderGroups() {
   const groups = state.groups || [];
   $("home-groups").innerHTML = groups.length ? groups.map((g, i) => `<button class="row press" data-group="${i}">
-      <div class="ic line" style="--tint:${TINTS[(i + 4) % TINTS.length]}">${GROUP_ICON}</div>
+      <div class="ic emoji">💬</div>
       <div class="body"><div class="t">${esc(g.title)}</div><div class="d">${T.gStats(g.messages, g.stickers)}</div></div>
       <span class="val">${T.levels[g.level]}</span>${ICON.chev}</button>`).join("") + `<button class="row more press" id="add-group"><div class="ic">${ICON.plus}</div><div class="body">${T.addToGroup}</div></button>`
-    : `<button class="row press" id="add-group"><div class="ic line" style="--tint:#f472b6">${GROUP_ICON}</div>
+    : `<button class="row press" id="add-group"><div class="ic emoji">🤝</div>
         <div class="body"><div class="t">${T.groupsEmpty}</div><div class="d">${T.groupsEmptySub}</div></div>${ICON.chev}</button>`;
   $("add-group").onclick = addToGroup;
   $("home-groups").querySelectorAll("[data-group]").forEach(b => b.onclick = () => openGroupSheet(groups[+b.dataset.group]));
@@ -860,23 +983,28 @@ function openGroupSheet(g) {
 }
 
 /* ---------------- quick + discover ---------------- */
+const SPARK_COLORS = [["#7fd3ff", "#3e8bff"], ["#ffe08a", "#f5a524"], ["#d9b8ff", "#8a5cff"]];
+const spark = i => { const [a, b] = SPARK_COLORS[i % 3]; return `<div class="ic spark"><svg viewBox="0 0 24 24"><defs><linearGradient id="sp${i}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><path fill="url(#sp${i})" d="M12 1.5c.9 5.6 3.4 8.1 9 9-5.6.9-8.1 3.4-9 9-.9-5.6-3.4-8.1-9-9 5.6-.9 8.1-3.4 9-9z"/></svg></div>`; };
 function renderQuick() {
   $("quick").innerHTML = QUICK.map((q, i) => `
     <button class="row press" style="--i:${i}" data-q="${i}">
-      ${lineTile(q.icon, q.tint)}
+      ${spark(i)}
       <div class="body"><div class="t">${esc(q.t)}</div><div class="save">${ICON.bolt} ${T.saves} ${esc(q.save)}</div></div>
       ${ICON.chev}</button>`).join("");
 }
+const BADGE = { new: lang === "ru" ? "новый" : "new", pro: "PRO" };
 function renderDiscover() {
   $("discover").innerHTML = DISCOVER.map(([title, rows], s) => `
-    <div class="section" style="--i:${s}${s === 0 ? ";margin-top:8px" : ""}"><h2>${esc(title)}</h2><div class="list">
-      ${rows.map(([emoji, t, d, text, app, draft, appName], i) => `
+    <div class="section" style="--i:${s}${s === 0 ? ";margin-top:14px" : ""}"><h2>${esc(title)}</h2><div class="list">
+      ${rows.map(([emoji, t, d, text, app, draft, appName, action, badge], i) => `
         <button class="row press" data-s="${s}" data-r="${i}">
-          ${lineTile(emoji, s * 3 + i)}
-          <div class="body"><div class="t">${esc(t)}</div><div class="d">${app ? `<span class="badge app">${esc(appName)}</span> ` : ""}${esc(d)}</div></div>
+          <div class="ic emoji">${emoji}</div>
+          <div class="body"><div class="t">${esc(t)}${badge ? `<span class="badge ${badge}">${BADGE[badge]}</span>` : ""}</div><div class="d">${esc(d)}</div></div>
           ${ICON.chev}</button>`).join("")}
     </div></div>`).join("");
 }
+const ACTIONS = { secretary: () => state.secretary ? openSecretarySheet() : toast(T.err), persona: () => openPersonaSheet(), group: () => addToGroup(),
+                  photo: () => openGenSheet("photo"), video: () => openGenSheet("video"), edit: () => openEditSheet() };
 function runScenario({ text, app, appName }) {
   haptic("medium");
   if (app && !connectedSlugs().has(app)) {
@@ -897,7 +1025,8 @@ $("quick").addEventListener("click", e => { const b = e.target.closest("[data-q]
 $("discover").addEventListener("click", e => {
   const b = e.target.closest("[data-s]");
   if (!b) return;
-  const [, , , text, app, , appName] = DISCOVER[+b.dataset.s][1][+b.dataset.r];
+  const [, , , text, app, , appName, action] = DISCOVER[+b.dataset.s][1][+b.dataset.r];
+  if (action && state) { haptic("medium"); ACTIONS[action](); return; }
   runScenario({ text, app, appName });
 });
 
@@ -1240,7 +1369,7 @@ function renderGen() {
     </div>
     <div class="section"><h2>${T.templates}</h2><div class="tpl-grid" style="margin-top:12px">
       ${GEN_TEMPLATES.map(([kind, e, t, d, , c1, c2], i) => `<button class="tpl press" data-tpl="${i}" style="--c1:${c1};--c2:${c2}">
-        <span class="kind">${kind === "video" ? T.kindVideo : T.kindPhoto}</span><span class="e">${lineIcon(e)}</span><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}
+        <span class="kind">${kind === "video" ? T.kindVideo : T.kindPhoto}</span><span class="e">${e}</span><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}
     </div></div>`;
   $("gen-buy")?.addEventListener("click", openBuySheet);
   $("gen-setup")?.addEventListener("click", openGenKeySheet);
@@ -1392,21 +1521,26 @@ function openGenKeySheet() {
 function renderSettings() {
   const s = state.settings;
   const persona = s.personas.find(p => p.id === s.persona) || s.personas[0];
-  const group = (title, rows, i) => `<div class="section" style="--i:${i};margin-top:${i ? 26 : 8}px"><h2 style="margin-bottom:10px">${title}</h2><div class="list">${rows.join("")}</div></div>`;
+  const group = (title, rows, i) => `<div class="section" style="--i:${i};margin-top:${i ? 30 : 10}px"><h2 class="cap">${title}</h2><div class="list">${rows.join("")}</div></div>`;
   const row = (id, icon, title, value = "", extra = "") => `<button class="row compact press ${extra}" id="${id}"><div class="ic sym">${icon}</div>
     <div class="body"><div class="t">${title}</div></div>${value ? `<span class="val">${value}</span>` : ""}${extra.includes("danger") ? "" : ICON.chev}</button>`;
   $("settings").innerHTML = [
-    group(T.secretAi, [row("set-mode", SYM.mode, T.mode, `${persona.emoji} ${esc(persona[lang])}`), row("set-model", SYM.model, T.model, esc(prettyModel(s.model)))], 0),
+    group(T.secretAi, [row("set-mode", SYM.mode, T.mode, `${persona.emoji} ${esc(persona[lang])}`),
+                       row("set-sec", SYM.memory, T.secMode, state.secretary?.enabled ? T.secOff.replace(/.*/, lang === "ru" ? "Вкл" : "On") : T.secOff)], 0),
+    group(T.profile, [row("set-id", SYM.user, T.tgId, String(state.user.id)), row("set-mem", SYM.memory, T.memory, T.msgs(s.messages)),
+                      row("set-credits", SYM.mode, T.myCredits, state.gen.unlimited ? "∞" : String(state.gen.credits))], 1),
+    group(T.appTitle, [row("set-model", SYM.model, T.model, esc(prettyModel(s.model)))], 2),
     group(T.appGroup, [
       row("set-gh", SYM.gh, T.gh, state.github.connected ? "@" + esc(state.github.login) : ""),
       row("set-apps", '<svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg>', T.apps, String((state.apps.connected || []).length)),
       row("set-mcp", SYM.mcp, T.mcp, state.mcp.length ? String(state.mcp.length) : ""),
       ...(state.gen.owner ? [row("set-gen", SYM.model, T.genKey, state.gen.ready ? T.keySet : "")] : []),
-    ], 1),
-    group(T.profile, [row("set-id", SYM.user, T.tgId, String(state.user.id)), row("set-mem", SYM.memory, T.memory, T.msgs(s.messages))], 2),
-    `<div class="section" style="--i:3;margin-top:26px"><div class="list">${row("set-clear", SYM.trash, T.clear, "", "danger")}</div></div>`,
+    ], 3),
+    `<div class="section" style="--i:4;margin-top:30px"><div class="list">${row("set-clear", SYM.trash, T.clear, "", "danger")}</div></div>`,
   ].join("");
   $("set-mode").onclick = openPersonaSheet;
+  $("set-sec").onclick = () => state.secretary ? openSecretarySheet() : toast(T.err);
+  $("set-credits").onclick = () => state.gen.unlimited ? switchTab("gen") : openBuySheet();
   $("set-model").onclick = () => { switchTab("agent"); setTimeout(() => toggleMenu(true), 350); };
   $("set-gh").onclick = openGitHubSheet;
   $("set-apps").onclick = () => switchTab("apps");
@@ -1422,14 +1556,15 @@ async function clearMemory() {
 }
 
 /* ---------------- tabs ---------------- */
-const TABS = ["agent", "discover", "gen", "apps", "settings"];
+const TABS = ["agent", "discover", "gen", "settings"];  // the apps page has no tab: it opens from the agent tab
 function switchTab(tab) {
   if (document.body.dataset.tab === tab) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
   haptic("select");
   document.body.dataset.tab = tab;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
   const lens = $("lens");
-  lens.style.setProperty("--tab", TABS.indexOf(tab));
+  lens.classList.toggle("hidden", TABS.indexOf(tab) < 0);
+  if (TABS.indexOf(tab) >= 0) lens.style.setProperty("--tab", TABS.indexOf(tab));
   lens.classList.remove("squish"); void lens.offsetWidth; lens.classList.add("squish");
   document.querySelectorAll(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + tab));
   $("model-menu").classList.remove("open");
@@ -1450,7 +1585,8 @@ function tgColor(method, color, version) {
 }
 const bgColor = () => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
 function paintHeader() {
-  tgColor("setHeaderColor", bgColor(), "6.1");
+  const blue = document.body.dataset.tab === "agent" && window.scrollY < 60;
+  tgColor("setHeaderColor", blue ? "#3b44e6" : bgColor(), "6.1");
 }
 function applyTheme() {
   const scheme = tg?.colorScheme || (matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark");
