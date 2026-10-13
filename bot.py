@@ -41,7 +41,7 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
@@ -1536,7 +1536,7 @@ async def group_chat(update, context):
         head = (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:"
         content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
         data["group_spoke"][chat_id] = time.monotonic()
-        await group_respond(update, context, message, content)
+        await group_respond(update, context, message, content, voice=bool(message.voice or message.video_note))
 
 
 def group_instructions(update):
@@ -1594,9 +1594,11 @@ class GroupTools:
         return "Started. It will be posted in reply in a few minutes; say so in a few words."
 
 
-async def group_respond(update, context, message, content):
+async def group_respond(update, context, message, content, voice=False):
+    """Answer in the group; a voice message gets only a voice message back."""
     data = context.bot_data
-    live = GroupReply(message, data)
+    voice = voice and bool(data.get("tts_model") or data.get("anymodel_voice"))
+    live = SilentReply(message) if voice else GroupReply(message, data)
     await live.start()
     try:
         # Only the media tool in groups: someone else's apps, repos and money must not be reachable from a shared chat.
@@ -1604,7 +1606,9 @@ async def group_respond(update, context, message, content):
         if is_abacus(model) and MEDIA_TALK.search(str(content)):
             model = data["model"]  # the media tool needs function calls, which the Abacus path doesn't do
         answer, _ = await generate(context, live, GroupTools(update, context, message), model=model,
-                                   instructions=group_instructions(update),
+                                   instructions=group_instructions(update) + (
+                                       " This person sent a voice message: your answer will be read aloud, so talk like "
+                                       "in a live chat, 1-3 short sentences, no lists, no links, no emoji." if voice else ""),
                                    input=[{"role": "user", "content": content}], store=False, max_output_tokens=32000)
     except BaseException:
         await live.abort(None)
@@ -1615,6 +1619,14 @@ async def group_respond(update, context, message, content):
     if not text and not files:
         await live.abort(None)
         return
+    if voice and text and not files:
+        await live.stop()
+        try:
+            await asyncio.wait_for(speak(context, message, text), VOICE_TIMEOUT)
+            data["groups"].add_line(message.chat_id, "Secret AI (голосом): " + text[:600])
+            return
+        except Exception as exc:  # no voice: the answer still arrives, as text
+            LOG.warning("Group voice answer failed: %s", type(exc).__name__)
     await live.finish(text or "📎")
     data["groups"].add_line(message.chat_id, "Secret AI: " + (text or "[files]")[:600])
     await send_files(update, context, message, files)
@@ -2617,14 +2629,26 @@ async def speak(context, target, text):
     if not text:
         return
     await target.get_bot().send_chat_action(chat_id=target.chat_id, action=ChatAction.RECORD_VOICE)
-    audio = await context.bot_data["client"].audio.speech.create(
-        model=context.bot_data["tts_model"], voice=context.bot_data["tts_voice"], input=text, response_format="opus")
+    audio = await speech_audio(context.bot_data, text)
     try:
-        await target.reply_voice(voice=audio.content, filename="secret-ai.ogg")
+        await target.reply_voice(voice=audio, filename="secret-ai.ogg")
     except BadRequest as exc:
         # Premium users can forbid voice messages (VOICE_MESSAGES_FORBIDDEN); an audio file is still allowed.
         LOG.warning("Voice message refused by Telegram (%s); sending an audio file", exc.message)
-        await target.reply_audio(audio=audio.content, filename="Secret AI.ogg", title="Secret AI")
+        await target.reply_audio(audio=audio, filename="Secret AI.ogg", title="Secret AI")
+
+
+async def speech_audio(data, text):
+    """OGG Opus speech: the AnyModel voice when one is set (ANYMODEL_VOICE), otherwise or on failure OpenAI TTS."""
+    if data.get("anymodel_key") and data.get("anymodel_voice"):
+        try:
+            return await anymodel_speech(data["http"], data["anymodel_key"], data["anymodel_voice"], text,
+                                         data.get("anymodel_tts_model", ""), data.get("anymodel_api") or ANYMODEL_API)
+        except Exception as exc:  # the usual voice still answers
+            LOG.warning("AnyModel voice failed: %s %s", type(exc).__name__, str(exc)[:200])
+    audio = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"], input=text,
+                                                     response_format="opus")
+    return audio.content
 
 
 async def confirm_deletion(update, context, query, pid, change):
@@ -3126,6 +3150,8 @@ def main():
         anymodel_key=os.environ.get("ANYMODEL_API_KEY", "").strip().removeprefix("Bearer ").strip(),
         anymodel_api=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
         anymodel_video=os.environ.get("ANYMODEL_VIDEO_MODEL", "").strip() or ANYMODEL_VIDEO,
+        anymodel_voice=os.environ.get("ANYMODEL_VOICE", "").strip(),
+        anymodel_tts_model=os.environ.get("ANYMODEL_TTS_MODEL", "").strip(),
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),

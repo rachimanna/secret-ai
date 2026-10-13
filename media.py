@@ -397,6 +397,27 @@ async def anymodel_generate(http, key, model, prompt, fmt, seconds=ANYMODEL_SECO
     raise MediaError("timeout")
 
 
+async def anymodel_speech(http, key, voice, text, model="", base=ANYMODEL_API):
+    """Speech in one of AnyModel's voices (OpenAI-style POST /audio/speech) as an OGG Opus voice message."""
+    body = {"voice": voice, "input": text, "response_format": "mp3"}
+    if model:
+        body["model"] = model
+    try:
+        response = await http.post(base + "/audio/speech", json=body, timeout=120,
+                                   headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    except httpx.HTTPError as exc:
+        raise MediaError("failed", type(exc).__name__) from None
+    if response.status_code >= 400 or response.headers.get("content-type", "").startswith("application/json"):
+        raise MediaError("bad_video_key" if response.status_code in (401, 403) else "failed",
+                         f"speech {response.status_code} {_gateway_error(response)}")
+    with tempfile.TemporaryDirectory(prefix="secret-ai-tts-") as folder:
+        folder = Path(folder)
+        (folder / "in.audio").write_bytes(response.content)
+        await _ffmpeg("-i", str(folder / "in.audio"), "-vn", "-c:a", "libopus", "-b:a", "48k", "-ac", "1",
+                      str(folder / "voice.ogg"), timeout=120)
+        return (folder / "voice.ogg").read_bytes()
+
+
 def _json(response):
     try:
         data = response.json()
