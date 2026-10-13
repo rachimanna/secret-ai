@@ -37,6 +37,7 @@ from telegram.ext import (Application, BusinessConnectionHandler, CallbackContex
 
 import miniapp
 import secretary as sec
+import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
@@ -598,6 +599,39 @@ class DraftReply:
             LOG.warning("Could not clean up an interrupted reply")
 
 
+class SilentReply:
+    """Voice in, voice out: no text while thinking, just "recording a voice message…"."""
+
+    def __init__(self, target):
+        self.target, self.text, self.task = target, "", None
+
+    def status(self, note):
+        pass
+
+    async def start(self):
+        self.task = asyncio.create_task(typing_loop(self.target, ChatAction.RECORD_VOICE))
+
+    async def update(self, text):
+        self.text = text
+
+    async def stop(self):
+        if self.task:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)
+            self.task = None
+
+    async def finish(self, text, reply_markup=None):
+        await self.stop()
+        parts = list(chunks(text)) or ["…"]
+        last = None
+        for index, part in enumerate(parts):
+            last = await reply(self.target, part, reply_markup if index == len(parts) - 1 else None)
+        return last
+
+    async def abort(self, note):
+        await self.stop()
+
+
 async def open_reply(target, language, config):
     """Start a live reply: native drafts when Telegram supports them, message edits otherwise."""
     # Drafts are smoother, but if Telegram won't show the logo there, the edited message keeps the logo.
@@ -772,7 +806,7 @@ async def authorized(update, context):
 HELP_RU = (
     "Я Secret AI ✨ Отправьте текст, голосовое, аудио, кружок или фото (можно файлом) с вопросом.\n\n"
     "Пока я думаю, вы увидите мой логотип, а ответ будет появляться прямо по ходу печати.\n"
-    "На голосовое я отвечаю голосом.\n"
+    "На голосовое и кружок я отвечаю только голосом.\n"
     "Код и скрипты присылаю файлами, а сайт ещё и публикую — с кнопкой «Открыть сайт».\n"
     "Добавьте меня в группу: отвечаю на reply и на @упоминание, помню чат, иногда сам кидаю мемы, цитаты и демотиваторы. "
     "В группе: /q — цитата (ответом на сообщение), /dem — демотиватор, /meme — мем из TikTok.\n\n"
@@ -780,6 +814,7 @@ HELP_RU = (
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
     "/myid — ваш Telegram ID\n"
+    "/welcome — приветственный кружок (владелец: /setwelcome ответом на свой кружок)\n"
     "/app — Mini App: приложения в одно касание, режимы, модель\n"
     "/secretary — ИИ-секретарь: отвечает людям в твоей личке, пока ты занят (Telegram Business)\n"
     "/emojiid — узнать ID анимированного эмодзи\n"
@@ -806,8 +841,80 @@ HELP_EN = (
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await authorized(update, context):
+        return
+    store, user_id = context.bot_data["connections"], update.effective_user.id
+    if not store.get_meta(f"welcomed:{user_id}"):
+        store.set_meta(f"welcomed:{user_id}", True)
+        await send_welcome(context, update.effective_message)
+    await send(update.effective_message, ui(update, "Привет! ", "Hi! ") + ui(update, HELP_RU, HELP_EN))
+
+
+async def prepare_welcome(app):
+    """Make the welcome video note once (an AI presenter if fal is set up, otherwise the talking mascot)."""
+    data, store = app.bot_data, app.bot_data["connections"]
+    if store.get_meta("welcome_note") or not data.get("tts_model"):
+        return
+    try:
+        voice = await welcome.speech(data["client"], data["tts_model"], data["tts_voice"], welcome.TEXT["ru"])
+    except Exception as exc:  # no voice, no welcome note
+        LOG.warning("Welcome voice failed: %s", type(exc).__name__)
+        return
+    fal_key = gen_settings(data)[0]
+    if fal_key:
+        try:
+            data["welcome_bytes"] = await welcome.presenter_note(data["http"], fal_key, voice)
+            return
+        except Exception as exc:  # the mascot still says hi
+            LOG.warning("Welcome presenter failed: %s", type(exc).__name__)
+    try:
+        data["welcome_bytes"] = await welcome.mascot_note(voice)
+    except Exception as exc:
+        LOG.warning("Welcome note failed: %s", type(exc).__name__)
+
+
+async def send_welcome(context, target):
+    """The round welcome video: by its saved file_id, or the freshly made file (then its file_id is saved)."""
+    data, store = context.bot_data, context.bot_data["connections"]
+    saved = store.get_meta("welcome_note")
+    try:
+        if saved:
+            await target.reply_video_note(saved["file_id"])
+            return
+        task = data.get("welcome_task")
+        if not data.get("welcome_bytes") and task and not task.done():
+            await asyncio.wait_for(asyncio.shield(task), 25)
+        if not data.get("welcome_bytes"):
+            return
+        sent = await target.reply_video_note(InputFile(data["welcome_bytes"], filename="welcome.mp4"), length=welcome.SIZE)
+        if sent.video_note:
+            store.set_meta("welcome_note", {"file_id": sent.video_note.file_id, "version": welcome.VERSION})
+            data.pop("welcome_bytes", None)
+    except (TelegramError, asyncio.TimeoutError) as exc:
+        LOG.warning("Welcome note not sent: %s", type(exc).__name__)
+
+
+async def welcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/welcome: show the welcome video note again."""
     if await authorized(update, context):
-        await send(update.effective_message, ui(update, "Привет! ", "Hi! ") + ui(update, HELP_RU, HELP_EN))
+        await send_welcome(context, update.effective_message)
+
+
+async def set_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/setwelcome in reply to a video note (owner only): new users get that note instead."""
+    if not await authorized(update, context):
+        return
+    message, store = update.effective_message, context.bot_data["connections"]
+    if store.get_meta("owner") != update.effective_user.id:
+        await send(message, ui(update, "Менять приветствие может только владелец бота.", "Only the bot owner can change the welcome."))
+        return
+    note = message.reply_to_message.video_note if message.reply_to_message else None
+    if not note:
+        await send(message, ui(update, "Запиши кружок, а потом ответь на него командой /setwelcome.",
+                               "Record a video note, then reply to it with /setwelcome."))
+        return
+    store.set_meta("welcome_note", {"file_id": note.file_id, "version": "custom"})
+    await send(message, ui(update, "✅ Теперь новые пользователи будут получать этот кружок.", "✅ New users will get this video note."))
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -882,7 +989,10 @@ async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=ui(update, f"📄 История: {len(history)} сообщений", f"📄 History: {len(history)} messages"))
 
 
-async def media_text(media, client):
+WHISPER_LANGS = {"ru", "en", "uk", "kk", "be", "uz", "de", "fr", "es", "it", "pt", "tr", "pl", "ar", "zh", "ja", "ko"}
+
+
+async def media_text(media, client, language=None):
     duration = seconds(getattr(media, "duration", 0) or 0)
     if (media.file_size or 0) > 19_000_000 or duration > 600:
         raise ValueError("voice_limit")
@@ -906,7 +1016,9 @@ async def media_text(media, client):
         if target.stat().st_size > 20_000_000:
             raise ValueError("voice_limit")
         with target.open("rb") as audio:
-            result = await client.audio.transcriptions.create(model="whisper-1", file=audio)
+            # A hint keeps one-second clips from being "recognized" as Portuguese or Chinese.
+            hint = {"language": language} if language in WHISPER_LANGS else {}
+            result = await client.audio.transcriptions.create(model="whisper-1", file=audio, **hint)
         return result.text.strip()
 
 
@@ -919,14 +1031,14 @@ async def read_question(update, context):
     if media:
         status = await reply(message, ui(update, "🎧 Слушаю и расшифровываю…", "🎧 Listening and transcribing…"))
         try:
-            transcript = await media_text(media, client)
+            transcript = await media_text(media, client, (update.effective_user.language_code or "ru")[:2])
         except BaseException:
             await status.delete()
             raise
         if not transcript:
             await status.edit_text(ui(update, "Не удалось распознать речь. Запишите ещё раз.", "No speech recognized. Please try again."))
             return None
-        await status.edit_text(ui(update, "🎙 Расшифровка:\n", "🎙 Transcription:\n") + transcript)
+        await status.delete()  # the answer comes as a voice message; no transcript bubble in between
         question = transcript if not message.caption else f"{message.caption}\n\n{transcript}"
     image = message.photo[-1] if message.photo else message.document
     if image:
@@ -969,8 +1081,12 @@ async def respond(update, context, target, content, saved_question, voice=False)
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
     prune_pending(context.bot_data["pending"])
-    # The logo shows at once; tokens and connected apps are prepared meanwhile, in parallel.
-    live = await open_reply(target, lang(update), context.bot_data)
+    # The logo shows at once (or "recording a voice message…" for voice); tokens and apps are prepared meanwhile.
+    if voice and context.bot_data.get("tts_model"):
+        live = SilentReply(target)
+        await live.start()
+    else:
+        live = await open_reply(target, lang(update), context.bot_data)
     try:
         taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
         _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
@@ -992,6 +1108,10 @@ async def respond(update, context, target, content, saved_question, voice=False)
                       apps=apps, media=media, extra=[secretary_tool(context, user_id, lang(update) == "ru")])
     instructions = (SYSTEM + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
+    speak_only = voice and bool(context.bot_data.get("tts_model"))
+    if speak_only:
+        instructions += (" The user sent a voice message and your answer will be read aloud as a voice message: talk like "
+                         "in a live conversation, short (2-5 sentences), no lists, no markdown, no links, no emoji.")
     if toolbox.instructions():
         instructions += " " + toolbox.instructions()
     try:
@@ -1012,11 +1132,19 @@ async def respond(update, context, target, content, saved_question, voice=False)
         answer += ui(update, "\n\nОтвет достиг лимита. Напишите «продолжи».", "\n\nOutput limit reached. Ask me to continue.")
     memory.append_turn(user_id, saved_question, answer[:12000])
     text, files = extract_files(answer)
+    if speak_only and not files and not toolbox.proposals:
+        await live.stop()
+        try:
+            await asyncio.wait_for(speak(context, target, text), VOICE_TIMEOUT)
+            return
+        except Exception as exc:  # no voice: the answer still arrives, as text
+            LOG.warning("Voice answer failed: %s", type(exc).__name__)
+        voice = False
     last = await live.finish(text or ui(update, "📎 Готово — файлы ниже.", "📎 Done — the files are below."))
     context.bot_data["last_answer"][user_id] = last.message_id
     await send_files(update, context, target, files)
     answer = text
-    if voice and context.bot_data.get("tts_model"):
+    if voice and context.bot_data.get("tts_model") and not speak_only:
         # Recorded in the background: the user's next message must not wait for the voice (it keeps the lock otherwise).
         task = asyncio.create_task(voice_reply(update, context, target, answer))
         tasks = context.bot_data.setdefault("voice_tasks", set())
@@ -2202,6 +2330,7 @@ async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
+    app.bot_data["welcome_task"] = asyncio.create_task(prepare_welcome(app))
     if not app.bot_data.get("logo_id"):
         # The application is not running yet inside post_init, so start a plain task and keep a reference.
         app.bot_data["logo_task"] = asyncio.create_task(ensure_logo(app))
@@ -2426,6 +2555,8 @@ def main():
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGES, business_message))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler(["secretary", "sekretar"], secretary_command))
+    app.add_handler(CommandHandler("welcome", welcome_command))
+    app.add_handler(CommandHandler("setwelcome", set_welcome))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("mode", mode))
     app.add_handler(CommandHandler("reset", reset))
