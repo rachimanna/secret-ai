@@ -764,6 +764,29 @@ async def abacus_answer(context, live, request):
     return text.strip(), status == "incomplete"
 
 
+EXTRA_MODELS = ("gpt-6.1-sol",)  # offered when the OpenAI key (or, failing that, RouteLLM) has them
+
+
+async def discover_models(app):
+    """Offer newer models only if this account really has them, so the picker never lists one that fails."""
+    data = app.bot_data
+    try:
+        openai_ids = {m.id for m in (await data["client"].models.list()).data}
+    except Exception as exc:
+        LOG.warning("OpenAI model list unavailable: %s", type(exc).__name__)
+        openai_ids = set()
+    abacus_ids = set()
+    if data.get("abacus"):
+        try:
+            abacus_ids = {m.id for m in (await data["abacus"].models.list()).data}
+        except Exception as exc:
+            LOG.warning("RouteLLM model list unavailable: %s", type(exc).__name__)
+    for name in EXTRA_MODELS:
+        model = name if name in openai_ids else ABACUS_PREFIX + name if name in abacus_ids else None
+        if model and model not in data["models"]:
+            data["models"].append(model)
+
+
 async def resolve_abacus_model(app):
     """Find the account's Sonnet 5.5 id in RouteLLM's model list and offer it in the model picker."""
     data = app.bot_data
@@ -1484,7 +1507,7 @@ async def group_respond(update, context, message, content):
     await live.start()
     try:
         # No personal tools in groups: someone else's apps, repos and money must not be reachable from a shared chat.
-        answer, _ = await generate(context, live, None, model=data["model"], instructions=group_instructions(update),
+        answer, _ = await generate(context, live, None, model=group_model(data, message.chat_id), instructions=group_instructions(update),
                                    input=[{"role": "user", "content": content}], store=False, max_output_tokens=16000)
     except BaseException:
         await live.abort(None)
@@ -1555,15 +1578,31 @@ async def group_surprise(context, message, user):
         await group_remark(context, message.chat_id, target, target_line)
 
 
+def group_model(data, chat_id):
+    """The model a group talks with: its own choice from the Mini App if still offered, else the bot's default."""
+    chosen = data["groups"].model(chat_id)
+    return chosen if chosen in data["models"] else data["model"]
+
+
+async def quick_answer(data, model, instructions, text, max_tokens=2000):
+    """A short non-streamed answer from either an OpenAI model or a RouteLLM one."""
+    if is_abacus(model) and data.get("abacus"):
+        response = await data["abacus"].chat.completions.create(
+            model=model[len(ABACUS_PREFIX):], max_tokens=max_tokens,
+            messages=[{"role": "system", "content": instructions}, {"role": "user", "content": text}])
+        return response.choices[0].message.content or ""
+    response = await data["client"].responses.create(model=data["model"] if is_abacus(model) else model, store=False,
+                                                     instructions=instructions, max_output_tokens=max_tokens, input=text)
+    return response.output_text or ""
+
+
 async def group_remark(context, chat_id, target=None, target_line=None):
     data = context.bot_data
     lines = data["groups"].lines(chat_id, 120)
     task = (f"You are replying directly to this message: «{target_line}». React to it (address its author by name). "
             if target_line else "") + INTERJECT
-    response = await data["client"].responses.create(
-        model=data["model"], instructions=GROUP_STYLE, store=False, max_output_tokens=2000,
-        input=[{"role": "user", "content": "Recent messages in the group (oldest first):\n" + "\n".join(lines) + "\n\n" + task}])
-    text = humanize(response.output_text or "")
+    text = humanize(await quick_answer(data, group_model(data, chat_id), GROUP_STYLE,
+                                       "Recent messages in the group (oldest first):\n" + "\n".join(lines) + "\n\n" + task))
     if not text or text.upper().startswith("SKIP"):
         return
     await context.bot.send_message(chat_id, text[:1000], reply_parameters=reply_to(target))
@@ -2536,6 +2575,7 @@ async def post_init(app):
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
     await resolve_abacus_model(app)
+    await discover_models(app)
     if not app.bot_data.get("logo_id"):
         # The application is not running yet inside post_init, so start a plain task and keep a reference.
         app.bot_data["logo_task"] = asyncio.create_task(ensure_logo(app))
@@ -2697,6 +2737,21 @@ class Bridge:
             if member.status not in ("administrator", "creator"):
                 return False
             self.app.bot_data["groups"].set_level(chat_id, level)
+            return True
+        return self._run(write())
+
+    def set_group_model(self, user_id, chat_id, model):
+        """Admins choose the group's model ('' = default). Returns False if not allowed."""
+        async def write():
+            if model and model not in self.app.bot_data["models"]:
+                return False
+            try:
+                member = await self.app.bot.get_chat_member(chat_id, user_id)
+            except TelegramError:
+                return False
+            if member.status not in ("administrator", "creator"):
+                return False
+            self.app.bot_data["groups"].set_model(chat_id, model)
             return True
         return self._run(write())
 

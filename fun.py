@@ -38,6 +38,8 @@ class GroupStore:
                             "PRIMARY KEY (chat_id, unique_id))")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_info (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT '', "
                             "level TEXT NOT NULL DEFAULT 'normal')")
+            if "model" not in [row[1] for row in self.db.execute("PRAGMA table_info(group_info)")]:
+                self.db.execute("ALTER TABLE group_info ADD COLUMN model TEXT NOT NULL DEFAULT ''")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_members (chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
                             "last INTEGER NOT NULL, PRIMARY KEY (chat_id, user_id))")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_sent (chat_id INTEGER NOT NULL, key TEXT NOT NULL, "
@@ -151,14 +153,24 @@ class GroupStore:
             self.db.execute("INSERT INTO group_info(chat_id, level) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET "
                             "level=excluded.level", (chat_id, level))
 
+    def model(self, chat_id):
+        """The model this group talks with ('' = the bot's default)."""
+        row = self.db.execute("SELECT model FROM group_info WHERE chat_id=?", (chat_id,)).fetchone()
+        return row[0] if row else ""
+
+    def set_model(self, chat_id, model):
+        with self.db:
+            self.db.execute("INSERT INTO group_info(chat_id, model) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET "
+                            "model=excluded.model", (chat_id, model))
+
     def groups_for(self, user_id):
-        rows = self.db.execute("SELECT i.chat_id, i.title, i.level FROM group_members m JOIN group_info i USING(chat_id) "
-                               "WHERE m.user_id=? ORDER BY m.last DESC LIMIT 30", (user_id,)).fetchall()
+        rows = self.db.execute("SELECT i.chat_id, i.title, i.level, i.model FROM group_members m JOIN group_info i "
+                               "USING(chat_id) WHERE m.user_id=? ORDER BY m.last DESC LIMIT 30", (user_id,)).fetchall()
         groups = []
-        for chat_id, title, level in rows:
+        for chat_id, title, level, model in rows:
             count = lambda sql: self.db.execute(sql, (chat_id,)).fetchone()[0]
             groups.append({
-                "id": chat_id, "title": title or "Группа", "level": level if level in LEVELS else "normal",
+                "id": chat_id, "title": title or "Группа", "level": level if level in LEVELS else "normal", "model": model,
                 "messages": count("SELECT COUNT(*) FROM group_messages WHERE chat_id=?"),
                 "stickers": count("SELECT COUNT(*) FROM group_media WHERE chat_id=? AND kind IN ('sticker', 'gif')"),
                 "photos": count("SELECT COUNT(*) FROM group_media WHERE chat_id=? AND kind='photo'"),

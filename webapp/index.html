@@ -425,6 +425,7 @@ const T = {
     groupsEmptySub: "Буду подкалывать, кидать мемы из TikTok, делать цитаты и демотиваторы", addToGroup: "Добавить в группу",
     gStats: (m, s) => `${m} сообщ. в памяти · ${s} стикеров и гифок`, levelTitle: "Сглыпа-режим: как часто я вбрасываю сам",
     levels: { off: "Выкл", rare: "Редко", normal: "Обычно", often: "Часто" }, adminOnly: "Менять могут только админы группы.",
+    gModelTitle: "Модель в этой группе", gModelDefault: "По умолчанию",
     phrasesTitle: "Любимые фразы чата", gMemory: "в памяти", gStickers: "стикеров", gMemes: "мемов", errGroupAdmin: "Это могут менять только админы группы",
     groupCmds: "В группе: /q — цитата (ответом на сообщение), /dem — демотиватор, /meme — мем из TikTok.",
     connections: "Подключения", connectionsSub: "Подключайте приложения, чтобы Secret AI работал с вашими данными и автоматизировал работу",
@@ -481,6 +482,7 @@ const T = {
     groupsEmptySub: "I'll tease, post TikTok memes, make quotes and demotivators", addToGroup: "Add to a group",
     gStats: (m, s) => `${m} messages remembered · ${s} stickers and gifs`, levelTitle: "How often I chime in on my own",
     levels: { off: "Off", rare: "Rare", normal: "Normal", often: "Often" }, adminOnly: "Only group admins can change this.",
+    gModelTitle: "Model in this group", gModelDefault: "Default",
     phrasesTitle: "The chat's catchphrases", gMemory: "remembered", gStickers: "stickers", gMemes: "memes", errGroupAdmin: "Only group admins can change this",
     groupCmds: "In the group: /q — quote (reply to a message), /dem — demotivator, /meme — a TikTok meme.",
     connections: "Connections", connectionsSub: "Connect apps so Secret AI can work with your data and automate your work",
@@ -821,8 +823,20 @@ function openGroupSheet(g) {
     ${g.phrases.length ? `<div class="small">${T.phrasesTitle}</div><div class="phrases">${g.phrases.map(p => `<span>${esc(p)}</span>`).join("")}</div>` : ""}
     <div class="small">${T.levelTitle}</div>
     <div class="seg four" id="g-level">${Object.keys(T.levels).map(k => `<button class="${k === g.level ? "on" : ""}" data-level="${k}">${T.levels[k]}</button>`).join("")}</div>
-    <div class="small" style="margin-top:-6px">${T.adminOnly}</div>
+    <div class="small">${T.gModelTitle}</div>
+    <div class="list" id="g-model" style="margin-bottom:6px">${["", ...state.settings.models].map(m => `<button class="row compact press" data-model="${esc(m)}">
+        <div class="body"><div class="t">${m ? esc(prettyModel(m)) : `${T.gModelDefault} · ${esc(prettyModel(state.settings.models[0]))}`}</div></div>
+        <span class="check" style="color:var(--accent);opacity:${(g.model || "") === m ? 1 : 0}">${ICON.check}</span></button>`).join("")}</div>
+    <div class="small">${T.adminOnly}</div>
     <div class="small">${T.groupCmds}</div>`);
+  $("g-model").querySelectorAll("[data-model]").forEach(b => b.onclick = async () => {
+    haptic("select");
+    try {
+      state.groups = (await api("/api/groups/model", { chat_id: g.id, model: b.dataset.model })).groups;
+      g.model = b.dataset.model; renderGroups(); toast(T.saved);
+      $("g-model").querySelectorAll(".check").forEach(c => c.style.opacity = c.closest("[data-model]").dataset.model === g.model ? 1 : 0);
+    } catch (e) { toast(errorText(e)); haptic("error"); }
+  });
   $("g-level").querySelectorAll("[data-level]").forEach(b => b.onclick = async () => {
     const prev = g.level;
     $("g-level").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); haptic("select");

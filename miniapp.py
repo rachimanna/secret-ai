@@ -299,6 +299,16 @@ def make_handler(config):
                     self._send(403, {"error": "group_admin"})
                     return
                 self._send(200, {"groups": bridge.groups(uid)})
+            elif path == "/api/groups/model":
+                try:
+                    chat_id = int(data.get("chat_id"))
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "bad request"})
+                    return
+                if not bridge.set_group_model(uid, chat_id, str(data.get("model") or "")):
+                    self._send(403, {"error": "group_admin"})
+                    return
+                self._send(200, {"groups": bridge.groups(uid)})
             elif path == "/api/settings":
                 bridge.update(uid, persona=data.get("persona"), model=data.get("model"))
                 self._send(200, {"settings": bridge.settings(uid)})
