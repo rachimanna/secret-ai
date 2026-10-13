@@ -42,7 +42,7 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, fish_speech, fish_voice_id, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, ANYMODEL_FISH, fish_speech, fish_voice_id, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
@@ -2928,12 +2928,19 @@ async def speak(context, target, text):
 async def speech_audio(data, text):
     """OGG Opus speech: a Fish Audio voice (FISH_API_KEY + FISH_VOICE or /voice fish …), else the AnyModel voice,
     else OpenAI TTS; each one falls back to the next."""
-    fish = data["connections"].get_meta("fish_voice") or data.get("fish_voice") if data.get("fish_key") else ""
-    if fish and fish != "off":
+    fish = data["connections"].get_meta("fish_voice") or data.get("fish_voice") or ""
+    if fish and fish != "off" and data.get("fish_key"):
         try:
             return await fish_speech(data["http"], data["fish_key"], fish, text, data.get("fish_model", ""))
         except Exception as exc:
             LOG.warning("Fish Audio voice failed: %s %s", type(exc).__name__, str(exc)[:200])
+    elif fish and fish != "off" and data.get("anymodel_key") and data.get("fish_via_anymodel", True):
+        # No Fish Audio key: ask AnyModel's free Fish route for the same voice.
+        try:
+            return await anymodel_speech(data["http"], data["anymodel_key"], ANYMODEL_FISH, text,
+                                         data.get("anymodel_api") or ANYMODEL_API, reference_id=fish)
+        except Exception as exc:
+            LOG.warning("Fish voice through AnyModel failed: %s %s", type(exc).__name__, str(exc)[:200])
     if data.get("anymodel_key") and data.get("anymodel_voice"):
         try:
             base = data.get("anymodel_api") or ANYMODEL_API
@@ -3485,6 +3492,7 @@ def main():
         fish_key=os.environ.get("FISH_API_KEY", "").strip(),
         fish_voice=fish_voice_id(os.environ.get("FISH_VOICE", "") or FISH_VOICE),
         fish_model=os.environ.get("FISH_MODEL", "").strip(),
+        fish_via_anymodel=os.environ.get("FISH_VIA_ANYMODEL", "1").strip() != "0",
         chat_default=os.environ.get("CHAT_MODEL", "").strip() or OPUS,
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,

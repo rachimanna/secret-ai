@@ -428,10 +428,17 @@ async def anymodel_voice_id(http, key, wanted, base=ANYMODEL_API):
     return ""
 
 
-async def anymodel_speech(http, key, voice_model, text, base=ANYMODEL_API):
-    """Speech in an AnyModel voice (the voice is the model id) as an OGG Opus voice message."""
+ANYMODEL_FISH = "fish-farm/s2.1-pro-free"  # Fish Audio's engine on the AnyModel key
+
+
+async def anymodel_speech(http, key, voice_model, text, base=ANYMODEL_API, reference_id=""):
+    """Speech in an AnyModel voice (the voice is the model id) as an OGG Opus voice message. reference_id asks the
+    Fish Audio route for a voice from fish.audio (not documented by AnyModel: tried, and judged by ear)."""
+    body = {"model": voice_model, "input": text}
+    if reference_id:
+        body["reference_id"] = reference_id
     try:
-        response = await http.post(base + "/audio/speech", json={"model": voice_model, "input": text}, timeout=120,
+        response = await http.post(base + "/audio/speech", json=body, timeout=120,
                                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
     except httpx.HTTPError as exc:
         raise MediaError("failed", type(exc).__name__) from None
