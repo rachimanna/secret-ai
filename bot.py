@@ -3184,6 +3184,21 @@ async def ensure_logo(app):
     data["logo"], data["logo_id"] = "✨", emoji_id
 
 
+KEEP_AWAKE_EVERY = 600  # Render's free plan sleeps after 15 minutes without incoming HTTP requests
+
+
+async def keep_awake(app):
+    """Visit our own public address every 10 minutes so Render never puts the bot to sleep (a sleeping bot gets
+    no Telegram messages and the Mini App shows Render's loading screen)."""
+    url = app.bot_data["public_url"] + "/health"
+    while True:
+        await asyncio.sleep(KEEP_AWAKE_EVERY)
+        try:
+            await app.bot_data["http"].get(url, timeout=30)
+        except httpx.HTTPError as exc:
+            LOG.warning("Keep-awake ping failed: %s", type(exc).__name__)
+
+
 async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
@@ -3191,6 +3206,8 @@ async def post_init(app):
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
     if app.bot_data.get("snapshots"):
         app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
+    if app.bot_data.get("public_url") and os.environ.get("KEEP_AWAKE", "1").strip() != "0":
+        app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     await resolve_abacus_model(app)
     await discover_models(app)
     if not app.bot_data.get("logo_id"):
