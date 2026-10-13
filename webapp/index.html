@@ -733,7 +733,7 @@ function renderAll() {
 
 /* ---------------- header and model menu ---------------- */
 function prettyModel(id) {
-  return String(id).replace(/^(abacus|anymodel):/i, "").replace(/^[\w-]+\//, "").replace(/^gpt-/i, "GPT-").replace(/^claude-/i, "Claude ")
+  return String(id).replace(/^(abacus|anymodel):/i, "").replace(/^[\w-]+\//, "").replace(/^gpt-/i, "GPT-").replace(/^claude-/i, "Claude ").replace(/^gemini-/i, "Gemini ")
     .replace(/-(\w)/g, (_, c) => " " + c.toUpperCase()).replace(/ (\d)/g, " $1").replace(/(\d) (\d)/g, "$1.$2")
     .replace(/ \d{8}$/, "").replace(/^Claude (\w)/, (_, c) => "Claude " + c.toUpperCase());
 }

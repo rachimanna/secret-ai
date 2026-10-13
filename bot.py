@@ -834,6 +834,17 @@ OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-8"  # the default model when ANYMODEL
 GPT_PICK = "gpt-6.1-sol"  # the second model in the picker
 
 
+GEMINI = re.compile(r"gemini[-_ ]?3[-_.]8", re.I)
+
+
+def pick_gemini(ids):
+    """Gemini 3.8 from the AnyModel catalog: Pro before Flash, never Lite, an id with its provider prefix first."""
+    found = [i for i in ids if GEMINI.search(i) and "lite" not in i.lower() and "image" not in i.lower()
+             and "tts" not in i.lower()]
+    found.sort(key=lambda i: ("pro" not in i.lower(), "flash" in i.lower(), "/" not in i, "preview" in i.lower(), i))
+    return found[0] if found else None
+
+
 def chat_provider(model):
     return next((prefix for prefix in CHAT_PROVIDERS if model.startswith(prefix)), None)
 
@@ -882,6 +893,10 @@ def model_identity(model):
         return (f" You run on {pretty} {version}".rstrip() + ", a model made by Anthropic. If someone asks which model you "
                 "are or who created you, say plainly that you are " + f"{pretty} {version}".strip() + " by Anthropic, "
                 "working inside the Secret AI Telegram bot.")
+    if "gemini" in name:
+        pretty = " ".join(p.capitalize() if not p[0].isdigit() else p for p in name.replace("gemini-", "gemini ").replace("-", " ").split())
+        return (f" You run on {pretty}, a model made by Google. If someone asks which model you are or who created you, "
+                f"say plainly that you are {pretty} by Google, working inside the Secret AI Telegram bot.")
     if name.startswith("gpt") or name.startswith("o"):
         pretty = name.upper().replace("GPT-", "GPT-").replace("-SOL", " Sol").replace("-LUNA", " Luna").replace("-TERRA", " Terra")
         return (f" You run on {pretty}, a model made by OpenAI. If someone asks which model you are or who created you, "
@@ -992,8 +1007,21 @@ async def discover_models(app):
     if not gpt:
         LOG.warning("%s is not on the OpenAI key or RouteLLM; offering %s instead", GPT_PICK, data["model"])
         gpt = data["model"]
-    data["models"] = [m for m in (data.get("chat_default") if data.get("anymodel_chat") else None, gpt) if m]
-    data["chat_default"] = data["models"][0]
+    gemini = None
+    if data.get("anymodel_chat"):
+        try:
+            gemini = pick_gemini([m.id for m in (await data["anymodel_chat"].models.list()).data])
+        except Exception as exc:
+            LOG.warning("AnyModel model list unavailable: %s", type(exc).__name__)
+        if gemini:
+            gemini = ANYMODEL_PREFIX + gemini
+            LOG.info("Gemini on AnyModel: %s", gemini)
+        else:
+            LOG.warning("Gemini 3.8 is not in the AnyModel catalog; Claude Opus stays the default")
+    claude = OPUS if data.get("anymodel_chat") else None
+    data["models"] = [m for m in (gemini, claude, gpt) if m]
+    chosen = data.get("chat_override")
+    data["chat_default"] = chosen if chosen in data["models"] else data["models"][0]
 
 
 NANO = re.compile(r"nano[-_ ]?banana", re.I)
@@ -3502,7 +3530,7 @@ def main():
         fish_voice=fish_voice_id(os.environ.get("FISH_VOICE", "") or FISH_VOICE),
         fish_model=os.environ.get("FISH_MODEL", "").strip(),
         fish_via_anymodel=os.environ.get("FISH_VIA_ANYMODEL", "1").strip() != "0",
-        chat_default=os.environ.get("CHAT_MODEL", "").strip() or OPUS,
+        chat_default=OPUS, chat_override=os.environ.get("CHAT_MODEL", "").strip(),
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
