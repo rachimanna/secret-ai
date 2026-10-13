@@ -1581,7 +1581,7 @@ async def group_surprise(context, message, user):
 def group_model(data, chat_id):
     """The model a group talks with: its own choice from the Mini App if still offered, else the bot's default."""
     chosen = data["groups"].model(chat_id)
-    return chosen if chosen in data["models"] else data["model"]
+    return chosen if chosen and chosen in data.get("models", ()) else data["model"]
 
 
 async def quick_answer(data, model, instructions, text, max_tokens=2000):
