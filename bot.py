@@ -29,7 +29,7 @@ from openai import (
 from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
                       MessageEntity, ReplyParameters, Update, User, WebAppInfo)
 from codefiles import extract_files, site_file
-from fun import GroupStore, MemeError, demotivator, quote_card, tiktok_meme
+from fun import LEVELS, GroupStore, MemeError, demotivator, quote_card, tiktok_meme
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
@@ -90,7 +90,7 @@ INTERJECT = (
     "generic commentary about 'the chat'. If nothing sharp comes to mind, answer exactly SKIP."
 )
 GROUP_TYPES = ("group", "supergroup")
-GROUP_RANDOM_CHANCE = 0.1  # chance to do something on a message nobody addressed to the bot
+GROUP_RANDOM_CHANCE = 0.1  # scales fun.LEVELS (each group's own setting); 0.1 keeps them as listed
 GROUP_RANDOM_PAUSE = 180  # seconds between such surprises in one chat
 USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
@@ -1132,11 +1132,13 @@ async def group_chat(update, context):
     if not user or user.is_bot or (data["allowed"] and user.id not in data["allowed"]):
         return
     chat_id, store, name = message.chat_id, data["groups"], speaker(user)
+    store.touch(chat_id, message.chat.title, user.id)
     lock = data["locks"][chat_id]
     if not addressed_to_bot(message, context.bot, data):
         remember_group_message(store, message, name)
         quiet = time.monotonic() - data["group_spoke"].get(chat_id, float("-inf"))
-        if lock.locked() or quiet < GROUP_RANDOM_PAUSE or random.random() >= GROUP_RANDOM_CHANCE:
+        chance = LEVELS[store.level(chat_id)] * GROUP_RANDOM_CHANCE / 0.1
+        if lock.locked() or quiet < GROUP_RANDOM_PAUSE or random.random() >= chance:
             return
         data["group_spoke"][chat_id] = time.monotonic()
         async with lock:
@@ -1541,6 +1543,7 @@ async def secretary_answer(context, message):
         return
     await send_signed(context, chat_id, text[:3500], conn_id, message.message_id)
     activity.log(chat_id, f"AI secretary: {text}")
+    activity.remember(conn["user_id"], name, said, text)
     if current.get("notify", True):
         try:
             await context.bot.send_message(conn["chat_id"], f"🤖 {name}: «{said[:200]}»\n↳ {text[:500]}")
@@ -2313,6 +2316,55 @@ class Bridge:
                          else f"Secret AI credits: photo — {COST['photo']}, video — from {COST['video']}"),
             payload=f"gen:{pack}:{tg_user['id']}", currency="XTR",
             prices=[LabeledPrice(f"{credits} credits", stars)]))
+
+    def secretary(self, user_id):
+        async def read():
+            data, store = self.app.bot_data, self.app.bot_data["connections"]
+            conn_id = store.get_meta(f"biz:{user_id}")
+            conn = sec.connection(store, conn_id) if conn_id else None
+            current = sec.settings(store, user_id)
+            return {"connected": bool(conn and conn["enabled"]), "can_reply": bool(conn and conn["can_reply"]),
+                    "enabled": current["enabled"], "rules": current["rules"], "notify": current.get("notify", True),
+                    "recent": data["biz_activity"].recent.get(user_id, [])}
+        return self._run(read())
+
+    def set_secretary(self, user_id, enabled=None, rules=None, notify=None):
+        async def write():
+            store = self.app.bot_data["connections"]
+            current = sec.settings(store, user_id)
+            if rules is not None:
+                current["rules"] = str(rules).strip()[:1000]
+            if notify is not None:
+                current["notify"] = bool(notify)
+            if enabled is not None:
+                current["enabled"] = bool(enabled)
+                if current["enabled"]:
+                    self.app.bot_data["biz_activity"].owner_seen.pop(user_id, None)
+            if current["enabled"] and not current["rules"]:
+                current["rules"] = "Привет! Я сейчас занят и отвечу позже. Это ИИ-помощник."
+            sec.save_settings(store, user_id, current)
+        self._run(write())
+        return self.secretary(user_id)
+
+    def groups(self, user_id):
+        async def read():
+            return self.app.bot_data["groups"].groups_for(user_id)
+        return self._run(read())
+
+    def set_group_level(self, user_id, chat_id, level):
+        """Only the group's admins change how often the bot speaks up there. Returns False if not allowed."""
+        async def write():
+            if level not in LEVELS:
+                return False
+            try:
+                member = await self.app.bot.get_chat_member(chat_id, user_id)
+            except TelegramError:
+                return False
+            if member.status not in ("administrator", "creator"):
+                return False
+            self.app.bot_data["groups"].set_level(chat_id, level)
+            return True
+        return self._run(write())
 
     def reset(self, user_id):
         async def clear():

@@ -82,6 +82,12 @@ class Activity:
         # owner_seen: owner user id -> when they last wrote (in any chat or to the bot); Telegram doesn't show bots
         # whether someone is online, so writing is the sign that the owner is here.
         self.owner_seen, self.answered, self.lines = {}, {}, {}
+        self.recent = {}  # owner id -> last answers for the Mini App
+
+    def remember(self, owner_id, name, said, reply):
+        items = self.recent.setdefault(owner_id, [])
+        items.insert(0, {"name": name[:40], "said": said[:200], "reply": reply[:400], "at": int(time.time())})
+        del items[10:]
 
     def log(self, chat_id, line):
         lines = self.lines.setdefault(chat_id, [])

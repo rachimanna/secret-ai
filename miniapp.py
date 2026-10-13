@@ -120,6 +120,9 @@ def make_handler(config):
                 "apps": self._apps(uid, fresh),
                 "settings": config["bridge"].settings(uid),
                 "gen": config["bridge"].gen_state(uid),
+                "secretary": config["bridge"].secretary(uid),
+                "groups": config["bridge"].groups(uid),
+                "bot": config["bot_name"](),
             }
 
         def do_HEAD(self):
@@ -279,6 +282,23 @@ def make_handler(config):
                     return
                 store.set_meta("fal_models", {k: v for k, v in models.items() if v})
                 self._send(200, {"gen": bridge.gen_state(uid)})
+            elif path == "/api/secretary":
+                rules = data.get("rules")
+                if rules is not None and len(str(rules)) > 1000:
+                    self._send(400, {"error": "bad request"})
+                    return
+                self._send(200, {"secretary": bridge.set_secretary(
+                    uid, enabled=data.get("enabled"), rules=rules, notify=data.get("notify"))})
+            elif path == "/api/groups/level":
+                try:
+                    chat_id = int(data.get("chat_id"))
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "bad request"})
+                    return
+                if not bridge.set_group_level(uid, chat_id, str(data.get("level") or "")):
+                    self._send(403, {"error": "group_admin"})
+                    return
+                self._send(200, {"groups": bridge.groups(uid)})
             elif path == "/api/settings":
                 bridge.update(uid, persona=data.get("persona"), model=data.get("model"))
                 self._send(200, {"settings": bridge.settings(uid)})

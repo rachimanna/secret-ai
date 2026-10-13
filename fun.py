@@ -17,6 +17,8 @@ GROUP_MESSAGES = 500  # kept per chat; the model sees the last GROUP_CONTEXT of 
 GROUP_CONTEXT = 300
 MEDIA_PER_KIND = 150
 PHRASES_PER_CHAT = 400
+# How often the bot does something on its own in a group ("Сглыпа-режим"): chance per message nobody addressed to it.
+LEVELS = {"off": 0.0, "rare": 0.04, "normal": 0.1, "often": 0.2}
 
 
 class GroupStore:
@@ -34,6 +36,10 @@ class GroupStore:
             self.db.execute("CREATE TABLE IF NOT EXISTS group_media (chat_id INTEGER NOT NULL, kind TEXT NOT NULL, "
                             "unique_id TEXT NOT NULL, file_id TEXT NOT NULL, seen INTEGER NOT NULL, added INTEGER NOT NULL, "
                             "PRIMARY KEY (chat_id, unique_id))")
+            self.db.execute("CREATE TABLE IF NOT EXISTS group_info (chat_id INTEGER PRIMARY KEY, title TEXT NOT NULL DEFAULT '', "
+                            "level TEXT NOT NULL DEFAULT 'normal')")
+            self.db.execute("CREATE TABLE IF NOT EXISTS group_members (chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
+                            "last INTEGER NOT NULL, PRIMARY KEY (chat_id, user_id))")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_sent (chat_id INTEGER NOT NULL, key TEXT NOT NULL, "
                             "created INTEGER NOT NULL, PRIMARY KEY (chat_id, key))")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_phrases (chat_id INTEGER NOT NULL, key TEXT NOT NULL, "
@@ -123,6 +129,43 @@ class GroupStore:
             self.db.execute("INSERT OR IGNORE INTO group_sent(chat_id, key, created) VALUES (?, ?, ?)", (chat_id, key, int(time.time())))
             self.db.execute("DELETE FROM group_sent WHERE chat_id=? AND key NOT IN (SELECT key FROM group_sent WHERE chat_id=? "
                             "ORDER BY created DESC LIMIT 500)", (chat_id, chat_id))
+
+    # ----- groups in the Mini App -----
+
+    def touch(self, chat_id, title, user_id):
+        """Remember the group's title and that this member writes there (the Mini App lists a member's groups)."""
+        now = int(time.time())
+        with self.db:
+            self.db.execute("INSERT INTO group_info(chat_id, title) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET "
+                            "title=excluded.title", (chat_id, (title or "")[:120]))
+            if user_id:
+                self.db.execute("INSERT INTO group_members(chat_id, user_id, last) VALUES (?, ?, ?) "
+                                "ON CONFLICT(chat_id, user_id) DO UPDATE SET last=excluded.last", (chat_id, user_id, now))
+
+    def level(self, chat_id):
+        row = self.db.execute("SELECT level FROM group_info WHERE chat_id=?", (chat_id,)).fetchone()
+        return row[0] if row and row[0] in LEVELS else "normal"
+
+    def set_level(self, chat_id, level):
+        with self.db:
+            self.db.execute("INSERT INTO group_info(chat_id, level) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET "
+                            "level=excluded.level", (chat_id, level))
+
+    def groups_for(self, user_id):
+        rows = self.db.execute("SELECT i.chat_id, i.title, i.level FROM group_members m JOIN group_info i USING(chat_id) "
+                               "WHERE m.user_id=? ORDER BY m.last DESC LIMIT 30", (user_id,)).fetchall()
+        groups = []
+        for chat_id, title, level in rows:
+            count = lambda sql: self.db.execute(sql, (chat_id,)).fetchone()[0]
+            groups.append({
+                "id": chat_id, "title": title or "Группа", "level": level if level in LEVELS else "normal",
+                "messages": count("SELECT COUNT(*) FROM group_messages WHERE chat_id=?"),
+                "stickers": count("SELECT COUNT(*) FROM group_media WHERE chat_id=? AND kind IN ('sticker', 'gif')"),
+                "photos": count("SELECT COUNT(*) FROM group_media WHERE chat_id=? AND kind='photo'"),
+                "memes": count("SELECT COUNT(*) FROM group_sent WHERE chat_id=?"),
+                "phrases": [r[0] for r in self.db.execute("SELECT phrase FROM group_phrases WHERE chat_id=? AND count >= 2 "
+                                                          "ORDER BY count DESC LIMIT 6", (chat_id,))]})
+        return groups
 
     def close(self):
         self.db.close()

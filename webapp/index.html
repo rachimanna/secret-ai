@@ -281,6 +281,25 @@
   .seg { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 4px 0 14px; }
   .seg button { height: 44px; border-radius: 16px; font-weight: 600; font-size: 15px; background: rgba(255,255,255,.07); border: 1px solid var(--line);
                 transition: background .25s, color .25s, transform .35s var(--spring); }
+  .seg.four { grid-template-columns: repeat(4, 1fr); }
+  .seg.four button { font-size: 13.5px; height: 40px; }
+  .switch { width: 50px; height: 30px; border-radius: 15px; background: rgba(255,255,255,.14); position: relative; flex: none;
+            transition: background .3s; }
+  .switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff;
+                   box-shadow: 0 2px 6px rgba(0,0,0,.3); transition: transform .4s var(--spring); }
+  .switch.on { background: #34c759; }
+  .switch.on::after { transform: translateX(20px); }
+  .phrases { display: flex; flex-wrap: wrap; gap: 8px; margin: 4px 0 16px; }
+  .phrases span { padding: 6px 12px; border-radius: 14px; background: rgba(143,128,255,.12); color: #cfc8ff; font-size: 13.5px; }
+  .recent-item { padding: 12px 14px; }
+  .recent-item + .recent-item { border-top: 1px solid var(--line); }
+  .recent-item .who { font-size: 13px; color: var(--hint); }
+  .recent-item .said { font-size: 14px; margin: 2px 0 4px; }
+  .recent-item .ans { font-size: 14px; color: #cfc8ff; }
+  .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 0 0 16px; }
+  .stat-row div { background: rgba(255,255,255,.05); border: 1px solid var(--line); border-radius: 16px; padding: 10px; text-align: center; }
+  .stat-row b { display: block; font-size: 20px; }
+  .stat-row span { font-size: 12px; color: var(--hint); }
   .seg button.on { background: var(--accent); color: #fff; border-color: transparent; box-shadow: 0 6px 16px rgba(79,140,255,.35); }
   .cost { text-align: center; color: var(--hint); font-size: 14px; margin: 2px 0 12px; }
   .packs { display: grid; gap: 10px; margin-bottom: 8px; }
@@ -320,6 +339,16 @@
       <p data-t="heroSub"></p>
     </div>
     <div class="list quick stagger" id="quick"></div>
+
+    <div class="section">
+      <h2 data-t="secTitle"></h2>
+      <div class="list" id="home-secretary"></div>
+    </div>
+    <div class="section">
+      <h2 data-t="groupsTitle"></h2>
+      <p class="sub" data-t="groupsSub"></p>
+      <div class="list" id="home-groups"></div>
+    </div>
 
     <div class="section">
       <h2 data-t="connections"></h2>
@@ -387,6 +416,17 @@ const lang = (tg?.initDataUnsafe?.user?.language_code || navigator.language || "
 const T = {
   ru: {
     hello: n => n ? `Привет, ${n}!` : "Привет!", heroSub: "Ваш личный ИИ-агент. Подключите приложения — и просто пишите, что сделать.",
+    secTitle: "ИИ-секретарь", secOn: "Отвечает за тебя", secOff: "Выключен", secNotConnected: "Не подключён — нажми, чтобы настроить",
+    secLead: "Отвечает людям в твоей личке, пока ты занят. Внизу каждого ответа — подпись «ИИ-ассистент». Как только ты сам кому-то пишешь, он замолкает на 10 минут.",
+    secRules: "Как отвечать", secRulesPh: "Например: привет, я занят или сплю, отвечу позже, это ИИ", secNotify: "Присылать мне, кому и что ответил",
+    secRecent: "Последние ответы", secNone: "Пока никому не отвечал", secSave: "Сохранить", secHow: "Как подключить (один раз, нужен Telegram Premium)",
+    secSteps: ["@BotFather → бот → Bot Settings → Business Mode → включить", "Telegram → Настройки → Telegram для бизнеса → Чат-боты", "Выбрать этого бота и разрешить «Отвечать на сообщения»"],
+    groupsTitle: "Мои группы", groupsSub: "Где я шучу, кидаю мемы и делаю цитаты", groupsEmpty: "Добавь меня в группу с друзьями",
+    groupsEmptySub: "Буду подкалывать, кидать мемы из TikTok, делать цитаты и демотиваторы", addToGroup: "Добавить в группу",
+    gStats: (m, s) => `${m} сообщ. в памяти · ${s} стикеров и гифок`, levelTitle: "Сглыпа-режим: как часто я вбрасываю сам",
+    levels: { off: "Выкл", rare: "Редко", normal: "Обычно", often: "Часто" }, adminOnly: "Менять могут только админы группы.",
+    phrasesTitle: "Любимые фразы чата", gMemory: "в памяти", gStickers: "стикеров", gMemes: "мемов", errGroupAdmin: "Это могут менять только админы группы",
+    groupCmds: "В группе: /q — цитата (ответом на сообщение), /dem — демотиватор, /meme — мем из TikTok.",
     connections: "Подключения", connectionsSub: "Подключайте приложения, чтобы Secret AI работал с вашими данными и автоматизировал работу",
     apps: "Приложения", appsSub: n => n ? `${n.toLocaleString("ru")}+ приложений — нажмите «Подключить», и всё` : "Нажмите «Подключить» — без ссылок и ключей",
     search: "Поиск: Notion, Gmail, Slack…", more: "Больше приложений", connected: "Подключено", connect: "Подключить", connectApp: n => `Подключить ${n}`,
@@ -432,6 +472,17 @@ const T = {
   },
   en: {
     hello: n => n ? `Hi, ${n}!` : "Hi!", heroSub: "Your personal AI agent. Connect apps — then just tell it what to do.",
+    secTitle: "AI secretary", secOn: "Answering for you", secOff: "Off", secNotConnected: "Not connected — tap to set up",
+    secLead: "Answers people in your personal chats while you're busy, signed “AI assistant”. As soon as you write to someone yourself, it goes quiet for 10 minutes.",
+    secRules: "How to answer", secRulesPh: "E.g.: hi, I'm busy or asleep, will answer later, this is an AI", secNotify: "Tell me whom it answered and what",
+    secRecent: "Recent answers", secNone: "No answers yet", secSave: "Save", secHow: "How to connect (once, Telegram Premium needed)",
+    secSteps: ["@BotFather → bot → Bot Settings → Business Mode → turn on", "Telegram → Settings → Telegram Business → Chatbots", "Pick this bot and allow it to reply to messages"],
+    groupsTitle: "My groups", groupsSub: "Where I joke, post memes and make quotes", groupsEmpty: "Add me to a group with friends",
+    groupsEmptySub: "I'll tease, post TikTok memes, make quotes and demotivators", addToGroup: "Add to a group",
+    gStats: (m, s) => `${m} messages remembered · ${s} stickers and gifs`, levelTitle: "How often I chime in on my own",
+    levels: { off: "Off", rare: "Rare", normal: "Normal", often: "Often" }, adminOnly: "Only group admins can change this.",
+    phrasesTitle: "The chat's catchphrases", gMemory: "remembered", gStickers: "stickers", gMemes: "memes", errGroupAdmin: "Only group admins can change this",
+    groupCmds: "In the group: /q — quote (reply to a message), /dem — demotivator, /meme — a TikTok meme.",
     connections: "Connections", connectionsSub: "Connect apps so Secret AI can work with your data and automate your work",
     apps: "Apps", appsSub: n => n ? `${n.toLocaleString("en")}+ apps — just tap Connect` : "Just tap Connect — no links or keys",
     search: "Search: Notion, Gmail, Slack…", more: "More apps", connected: "Connected", connect: "Connect", connectApp: n => `Connect ${n}`,
@@ -612,7 +663,7 @@ async function api(path, body = {}) {
   return data;
 }
 function errorText(e) {
-  return { gen_no_video_key: T.videoNotReady, gen_no_key: T.genNotReady, gen_no_credits: T.noCredits, gen_bad_key_format: T.err, gen_bad_hf_key: T.errHfKey, github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
+  return { group_admin: T.errGroupAdmin, gen_no_video_key: T.videoNotReady, gen_no_key: T.genNotReady, gen_no_credits: T.noCredits, gen_bad_key_format: T.err, gen_bad_hf_key: T.errHfKey, github_setup: T.ghNotReady, github_token: T.errToken, mcp_label: T.errLabel, mcp_url: T.errUrl, auth: T.errAuth, apps: T.errApps, apps_disabled: T.notReady }[e.code] || T.err;
 }
 function openLink(url) { tg?.openLink ? tg.openLink(url) : window.open(url, "_blank"); }
 function appIcon(app, cls = "ic") {
@@ -655,6 +706,8 @@ function settle() {
 }
 function renderAll() {
   renderHeader();
+  renderSecretary();
+  renderGroups();
   renderHomeApps();
   renderMyApps();
   renderSettings();
@@ -698,6 +751,83 @@ $("model-menu").addEventListener("click", async e => {
   $("model-menu").classList.remove("open"); $("model-btn").setAttribute("aria-expanded", false);
 });
 $("cta-apps").addEventListener("click", () => switchTab("apps"));
+
+
+/* ---------------- AI secretary + groups ---------------- */
+const SEC_ICON = '<svg class="i" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 20 12z"/><path d="M9 10.5h.01M12 10.5h.01M15 10.5h.01"/></svg>';
+const GROUP_ICON = '<svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c.8-3.4 3.2-5 6-5s5.2 1.6 6 5"/><circle cx="17" cy="9" r="2.6"/><path d="M16 14.2c2.6-.3 4.4 1.2 5 4.3"/></svg>';
+function renderSecretary() {
+  const s = state.secretary;
+  if (!s) { $("home-secretary").innerHTML = ""; return; }
+  const ready = s.connected && s.can_reply;
+  const sub = !ready ? T.secNotConnected : s.enabled ? `${T.secOn}: «${esc(s.rules)}»` : T.secOff;
+  $("home-secretary").innerHTML = `<div class="row press" id="sec-row" role="button">
+      <div class="ic line" style="--tint:#34c759">${SEC_ICON}</div>
+      <div class="body"><div class="t">${T.secTitle}</div><div class="d">${sub}</div></div>
+      ${ready ? `<button class="switch ${s.enabled ? "on" : ""}" id="sec-switch" aria-label="${T.secTitle}"></button>` : ICON.chev}</div>`;
+  $("sec-row").onclick = e => { if (!e.target.closest("#sec-switch")) openSecretarySheet(); };
+  $("sec-switch")?.addEventListener("click", async e => {
+    e.stopPropagation();
+    const b = e.currentTarget; b.classList.toggle("on"); haptic("select");
+    try { state.secretary = (await api("/api/secretary", { enabled: b.classList.contains("on") })).secretary; renderSecretary(); }
+    catch (err) { b.classList.toggle("on"); toast(errorText(err)); }
+  });
+}
+function openSecretarySheet() {
+  const s = state.secretary, ready = s.connected && s.can_reply;
+  const ago = t => { const m = Math.max(1, Math.round((Date.now() / 1000 - t) / 60)); return m < 60 ? `${m} ${lang === "ru" ? "мин" : "min"}` : m < 1440 ? `${Math.round(m / 60)} ${lang === "ru" ? "ч" : "h"}` : `${Math.round(m / 1440)} ${lang === "ru" ? "дн" : "d"}`; };
+  openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#1f8f4e,#34c759)">${SEC_ICON.replace('class="i"', 'class="i" style="width:40px;height:40px;stroke:#fff"')}</div>
+      <h3>${T.secTitle}</h3><p class="lead">${T.secLead}</p></div>
+    ${ready ? "" : `<div class="section" style="margin-top:0"><h2>${T.secHow}</h2><div class="list">${T.secSteps.map((t, i) =>
+      `<div class="row compact"><div class="ic line" style="--tint:#8f80ff"><b style="font-size:14px">${i + 1}</b></div><div class="body"><div class="d" style="color:var(--text)">${esc(t)}</div></div></div>`).join("")}</div></div>`}
+    <div class="small">${T.secRules}</div>
+    <textarea class="field" id="sec-rules" placeholder="${T.secRulesPh}">${esc(s.rules || "")}</textarea>
+    <div class="list" style="margin-bottom:14px"><div class="row compact"><div class="body"><div class="t">${T.secNotify}</div></div>
+      <button class="switch ${s.notify ? "on" : ""}" id="sec-notify"></button></div></div>
+    <button class="btn" id="sec-save">${T.secSave}</button>
+    <div class="section"><h2>${T.secRecent}</h2><div class="list">${(s.recent || []).length ? s.recent.map(r => `<div class="recent-item">
+        <div class="who">${esc(r.name)} · ${ago(r.at)}</div><div class="said">«${esc(r.said)}»</div><div class="ans">↳ ${esc(r.reply)}</div></div>`).join("")
+      : `<div class="empty" style="padding:22px">${T.secNone}</div>`}</div></div>`);
+  $("sec-notify").onclick = e => { e.currentTarget.classList.toggle("on"); haptic("select"); };
+  $("sec-save").onclick = async () => {
+    try {
+      state.secretary = (await api("/api/secretary", { rules: $("sec-rules").value, notify: $("sec-notify").classList.contains("on"),
+                                                       enabled: $("sec-rules").value.trim() ? true : undefined })).secretary;
+      renderSecretary(); closeSheet(); toast(T.saved); haptic("success");
+    } catch (e) { toast(errorText(e)); haptic("error"); }
+  };
+}
+function addToGroup() {
+  const url = `https://t.me/${state.bot}?startgroup=1`;
+  tg?.openTelegramLink ? tg.openTelegramLink(url) : openLink(url);
+}
+function renderGroups() {
+  const groups = state.groups || [];
+  $("home-groups").innerHTML = groups.length ? groups.map((g, i) => `<button class="row press" data-group="${i}">
+      <div class="ic line" style="--tint:${TINTS[(i + 4) % TINTS.length]}">${GROUP_ICON}</div>
+      <div class="body"><div class="t">${esc(g.title)}</div><div class="d">${T.gStats(g.messages, g.stickers)}</div></div>
+      <span class="val">${T.levels[g.level]}</span>${ICON.chev}</button>`).join("") + `<button class="row more press" id="add-group"><div class="ic">${ICON.plus}</div><div class="body">${T.addToGroup}</div></button>`
+    : `<button class="row press" id="add-group"><div class="ic line" style="--tint:#f472b6">${GROUP_ICON}</div>
+        <div class="body"><div class="t">${T.groupsEmpty}</div><div class="d">${T.groupsEmptySub}</div></div>${ICON.chev}</button>`;
+  $("add-group").onclick = addToGroup;
+  $("home-groups").querySelectorAll("[data-group]").forEach(b => b.onclick = () => openGroupSheet(groups[+b.dataset.group]));
+}
+function openGroupSheet(g) {
+  openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#3b2f9e,#f472b6)">${esc((g.title || "?")[0])}</div>
+      <h3>${esc(g.title)}</h3></div>
+    <div class="stat-row"><div><b>${g.messages}</b><span>${T.gMemory}</span></div><div><b>${g.stickers}</b><span>${T.gStickers}</span></div><div><b>${g.memes}</b><span>${T.gMemes}</span></div></div>
+    ${g.phrases.length ? `<div class="small">${T.phrasesTitle}</div><div class="phrases">${g.phrases.map(p => `<span>${esc(p)}</span>`).join("")}</div>` : ""}
+    <div class="small">${T.levelTitle}</div>
+    <div class="seg four" id="g-level">${Object.keys(T.levels).map(k => `<button class="${k === g.level ? "on" : ""}" data-level="${k}">${T.levels[k]}</button>`).join("")}</div>
+    <div class="small" style="margin-top:-6px">${T.adminOnly}</div>
+    <div class="small">${T.groupCmds}</div>`);
+  $("g-level").querySelectorAll("[data-level]").forEach(b => b.onclick = async () => {
+    const prev = g.level;
+    $("g-level").querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); haptic("select");
+    try { state.groups = (await api("/api/groups/level", { chat_id: g.id, level: b.dataset.level })).groups; g.level = b.dataset.level; renderGroups(); toast(T.saved); }
+    catch (e) { $("g-level").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.level === prev)); toast(errorText(e)); haptic("error"); }
+  });
+}
 
 /* ---------------- quick + discover ---------------- */
 function renderQuick() {
