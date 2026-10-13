@@ -8,6 +8,8 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
+import re
 import tempfile
 import time
 from pathlib import Path
@@ -15,6 +17,8 @@ from urllib.parse import quote
 
 import httpx
 import imageio_ffmpeg
+
+LOG = logging.getLogger(__name__)
 
 FAL_QUEUE = "https://queue.fal.run"
 # Photos and videos: fal.ai, one key. Video scenes come from Kling without sound; MMAudio then adds real sound effects
@@ -493,6 +497,112 @@ async def living_picture(image, seconds, fmt, index=0):
                       "-frames:v", str(frames), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-g", "60",
                       str(out), timeout=900)
         return out.read_bytes()
+
+
+# ---------- Free real video: open models (Wan 2.2, LTX) on Hugging Face ZeroGPU spaces, with a free HF token ----------
+
+HF_SPACES = ("Wan-AI/Wan-2.2-5B", "Lightricks/ltx-video-distilled")  # tried in order; HF_SPACES env overrides
+SPACE_QUOTA = ("quota", "exceeded", "limit", "too many", "zerogpu", "gpu task aborted", "pro ")
+
+
+def _space_call(space, token, prompt, fmt):
+    """Blocking: one clip from a Gradio space; finds its text-to-video endpoint and fills only the prompt and orientation."""
+    from gradio_client import Client  # imported here: only the free video path needs it
+
+    client = Client(space, token=token or None, verbose=False, download_files=tempfile.gettempdir())
+    endpoints = (client.view_api(print_info=False, return_format="dict") or {}).get("named_endpoints") or {}
+
+    def score(item):
+        name, info = item
+        params = [p.get("parameter_name") or "" for p in info.get("parameters", [])]
+        returns = " ".join(str(r.get("component", "")) for r in info.get("returns", []))
+        if not any("prompt" == p or p.endswith("prompt") and "negative" not in p for p in params) or "Video" not in returns:
+            return -1
+        return 3 if "text_to_video" in name or "t2v" in name else 2 if "generate" in name else 1
+
+    ranked = sorted(endpoints.items(), key=score, reverse=True)
+    if not ranked or score(ranked[0]) < 0:
+        raise MediaError("model", space)
+    name, info = ranked[0]
+    kwargs, sizes = {}, {}
+    for param in info.get("parameters", []):
+        key = param.get("parameter_name")
+        if not key:
+            continue
+        if key == "prompt" or key.endswith("prompt") and "negative" not in key:
+            kwargs[key] = prompt
+        elif key in ("mode", "generation_mode") and "text" in str(param.get("parameter_default", "")).lower() + str(param.get("type", "")).lower():
+            kwargs[key] = "text-to-video"
+        elif any(word in key for word in ("height", "width")) and isinstance(param.get("parameter_default"), (int, float)):
+            sizes[key] = param["parameter_default"]
+        elif not param.get("parameter_has_default"):
+            kwargs[key] = None  # an optional image or video input left empty
+    heights = [k for k in sizes if "height" in k]
+    widths = [k for k in sizes if "width" in k]
+    if heights and widths:  # keep the space's size, turned to the asked orientation
+        h, w = sizes[heights[0]], sizes[widths[0]]
+        tall = fmt == "portrait"
+        if (h > w) != tall and fmt != "square":
+            h, w = w, h
+        if fmt == "square":
+            h = w = min(h, w)
+        kwargs[heights[0]], kwargs[widths[0]] = h, w
+    result = client.predict(api_name=name, **kwargs)
+    path = _video_path(result)
+    if not path:
+        raise MediaError("failed", "no video in the result")
+    return Path(path).read_bytes()
+
+
+def _video_path(result):
+    if isinstance(result, str):
+        return result if Path(result).suffix.lower() in (".mp4", ".webm", ".mov", ".mkv") and Path(result).exists() else ""
+    if isinstance(result, dict):
+        return _video_path(result.get("video")) or _video_path(result.get("path")) or _video_path(result.get("value"))
+    if isinstance(result, (list, tuple)):
+        return next((p for p in map(_video_path, result) if p), "")
+    return ""
+
+
+async def space_video(prompt, fmt, token, spaces=HF_SPACES):
+    """A real AI clip (about 5 s) from the first free space that answers; MediaError("video_billing") when the daily
+    free GPU quota is used up everywhere."""
+    quota = False
+    for space in spaces:
+        try:
+            return await asyncio.wait_for(asyncio.to_thread(_space_call, space, token, prompt, fmt), 420)
+        except Exception as exc:  # next space: this one is busy, out of quota, changed or down
+            text = str(exc).lower()
+            quota = quota or any(word in text for word in SPACE_QUOTA)
+            LOG.warning("Free video space %s failed: %s %s", space, type(exc).__name__, str(exc)[:160])
+    raise MediaError("video_billing" if quota else "failed", "free spaces")
+
+
+async def fit_clip(video, seconds, fmt):
+    """Re-encode a clip to the living_picture format (size, 30 fps, no sound) and exactly seconds long: a short clip
+    plays in gentle slow motion (up to 2x) and holds its last frame for the rest."""
+    width, height = FRAME.get(fmt, FRAME["square"])
+    with tempfile.TemporaryDirectory(prefix="secret-ai-fit-") as folder:
+        folder = Path(folder)
+        (folder / "in.mp4").write_bytes(video)
+        length = await _duration(folder / "in.mp4") or seconds
+        slow = min(2.0, max(1.0, seconds / length))
+        out = folder / "clip.mp4"
+        await _ffmpeg("-i", str(folder / "in.mp4"), "-an", "-vf",
+                      f"setpts={slow:.3f}*PTS,fps=30,scale={width}:{height}:force_original_aspect_ratio=increase,"
+                      f"crop={width}:{height},tpad=stop_mode=clone:stop_duration={seconds},format=yuv420p",
+                      "-t", f"{seconds:.2f}", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-g", "60",
+                      str(out), timeout=600)
+        return out.read_bytes()
+
+
+async def _duration(path):
+    """Seconds of a media file (from ffmpeg's banner), 0 when unknown."""
+    process = await asyncio.create_subprocess_exec(imageio_ffmpeg.get_ffmpeg_exe(), "-hide_banner", "-i", str(path),
+                                                   stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+    _, err = await process.communicate()
+    match = re.search(rb"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)", err or b"")
+    return int(match[1]) * 3600 + int(match[2]) * 60 + float(match[3]) if match else 0
 
 
 async def join_with_voice(clips, seconds, voice=None):

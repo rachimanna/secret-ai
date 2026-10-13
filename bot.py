@@ -41,7 +41,7 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
@@ -2099,6 +2099,9 @@ MEDIA_ERRORS = {
 }
 
 
+SPACES_REST = 3 * 3600  # after the free GPU quota runs out, use pictures for a while before asking again
+
+
 def kling_env_key():
     """KLING_API_KEY (the console's API Key), or the legacy KLING_ACCESS_KEY + KLING_SECRET_KEY pair."""
     key = os.environ.get("KLING_API_KEY", "").strip()
@@ -2140,7 +2143,7 @@ def gen_state(bot_data, user_id):
     key, models = gen_settings(bot_data)
     free, credits = bot_data["memory"].gen_info(user_id)
     owner = bot_data["connections"].get_meta("owner") == user_id
-    state = {"ready": bool(key) or models["photo"] in ("free", OPENAI_IMAGE), "video_ready": bool(video_key(bot_data, models["video"])), "video_on": models["video"] != "free", "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
+    state = {"ready": bool(key) or models["photo"] in ("free", OPENAI_IMAGE), "video_ready": bool(video_key(bot_data, models["video"])), "video_on": models["video"] != "free" or bool(bot_data.get("hf_token")), "video_free": models["video"] == "free", "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
              "credits": credits, "cost": COST, "video_prices": VIDEO_PRICES, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
     if owner:
         state["models"] = models
@@ -2305,11 +2308,22 @@ async def make_kling_video(data, job):
 
 
 async def make_free_video(data, job):
-    """Free video: a picture per scene (Cloudflare/Pollinations), each brought to life, plus the Russian voice-over."""
+    """Free video: real AI clips from free Hugging Face spaces (Wan 2.2, LTX) while the daily free GPU quota lasts,
+    otherwise a picture per scene (Cloudflare/Pollinations) brought to life; plus the voice-over in the user's language."""
     scenes = await plan_scenes(data, job)
     seconds = max(5, job["seconds"] // max(1, len(scenes)))
     clips = []
-    for index, scene in enumerate(scenes):  # one by one: the free picture service takes about one request at a time
+    for index, scene in enumerate(scenes):  # one by one: the free services take about one request at a time
+        if data.get("hf_token") and time.monotonic() >= data.get("spaces_rest_until", float("-inf")):
+            try:
+                clip = await space_video(scene["visual"].rstrip(". ") + ". Cinematic, smooth motion, nobody talks.",
+                                         job["fmt"], data["hf_token"], data.get("hf_spaces") or HF_SPACES)
+                clips.append(await fit_clip(clip, seconds, job["fmt"]))
+                continue
+            except MediaError as exc:
+                if exc.code == "video_billing":  # today's free GPU minutes are spent: pictures until they come back
+                    data["spaces_rest_until"] = time.monotonic() + SPACES_REST
+                LOG.warning("Free AI clip failed (%s); using a living picture", exc.code)
         image = await free_image(data["http"], scene["visual"] + ", cinematic still, highly detailed", job["fmt"],
                                  data.get("cloudflare"))
         clips.append(await living_picture(image, seconds, job["fmt"], index))
@@ -3007,6 +3021,8 @@ def main():
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
         kling_env_key=kling_env_key(),
+        hf_token=os.environ.get("HF_TOKEN", "").strip(),
+        hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
         abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
