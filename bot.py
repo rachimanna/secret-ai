@@ -49,7 +49,7 @@ from integrations import (Connections, GitHubError, Toolbox, apply_change, delet
 LOG = logging.getLogger("secret_ai")
 SYSTEM = (
     "You are Secret AI, a brilliant, knowledgeable and friendly assistant. "
-    "Introduce yourself as Secret AI when asked. Reply in the user's language. "
+    "Your name here is Secret AI (say so when asked your name). Reply in the user's language. "
     "Use the language of their latest message, caption or voice transcription; "
     "if none is available, use their Telegram language. "
     "Get facts, numbers and code right. Give complete, practical answers: concrete steps, examples and working "
@@ -728,11 +728,45 @@ def drop_unsupported(context, request, error):
 # ----- models through Abacus.AI RouteLLM (OpenAI-compatible chat completions), e.g. Claude Sonnet -----
 ABACUS_URL = "https://routellm.abacus.ai/v1"
 ABACUS_PREFIX = "abacus:"
-SONNET = re.compile(r"sonnet[-._ ]?5[-._ ]?5", re.I)
 
 
 def is_abacus(model):
     return model.startswith(ABACUS_PREFIX)
+
+
+# Chat-completions gateways: model prefix -> the bot_data key of its client. AnyModel models also get function tools.
+CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat"}
+OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-8"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
+GPT_PICK = "gpt-6.1-sol"  # the second model in the picker
+
+
+def chat_provider(model):
+    return next((prefix for prefix in CHAT_PROVIDERS if model.startswith(prefix)), None)
+
+
+def chat_tools(toolbox):
+    """The toolbox's function tools in chat-completions form (built-in ones like web search stay with OpenAI)."""
+    if not toolbox:
+        return []
+    return [{"type": "function", "function": {"name": d["name"], "description": d.get("description", ""),
+                                              "parameters": d.get("parameters") or {"type": "object", "properties": {}}}}
+            for d in toolbox.definitions() if d.get("type") == "function" and d.get("name")]
+
+
+def model_identity(model):
+    """Who the model is, so it answers "who are you / who made you" truthfully."""
+    name = model.split(":", 1)[-1].split("/")[-1].lower()
+    if "claude" in name:
+        pretty = "Claude " + " ".join(p.capitalize() for p in re.sub(r"^claude-", "", name).split("-") if not p.isdigit())
+        version = ".".join(re.findall(r"-(\d+)(?=-|$)", name)[:2])
+        return (f" You run on {pretty} {version}".rstrip() + ", a model made by Anthropic. If someone asks which model you "
+                "are or who created you, say plainly that you are " + f"{pretty} {version}".strip() + " by Anthropic, "
+                "working inside the Secret AI Telegram bot.")
+    if name.startswith("gpt") or name.startswith("o"):
+        pretty = name.upper().replace("GPT-", "GPT-").replace("-SOL", " Sol").replace("-LUNA", " Luna").replace("-TERRA", " Terra")
+        return (f" You run on {pretty}, a model made by OpenAI. If someone asks which model you are or who created you, "
+                f"say plainly that you are {pretty} by OpenAI, working inside the Secret AI Telegram bot.")
+    return ""
 
 
 def chat_messages(instructions, items):
@@ -754,26 +788,59 @@ def chat_messages(instructions, items):
     return messages
 
 
-async def abacus_answer(context, live, request, prefix=""):
-    """One streamed answer from a RouteLLM model (no tools there: apps, GitHub and search stay with GPT)."""
-    client = context.bot_data["abacus"]
-    stream = await client.chat.completions.create(
-        model=request["model"][len(ABACUS_PREFIX):], stream=True, max_tokens=min(request.get("max_output_tokens", 8000), 16000),
-        messages=chat_messages(request.get("instructions"), request["input"]))
-    text, status = "", "completed"
-    async for chunk in stream:
-        if not chunk.choices:
-            continue
-        delta = chunk.choices[0].delta.content or ""
-        if delta:
-            text += delta
-            await live.update(prefix + text)
-        if chunk.choices[0].finish_reason == "length":
-            status = "incomplete"
-    return (text if prefix else text.strip()), status == "incomplete"
-
-
-EXTRA_MODELS = ("gpt-6.1-sol",)  # offered when the OpenAI key (or, failing that, RouteLLM) has them
+async def chat_answer(context, live, request, toolbox=None, prefix=""):
+    """A streamed answer from a chat-completions gateway (RouteLLM, AnyModel), running function tools on AnyModel."""
+    model = request["model"]
+    provider = chat_provider(model)
+    client = context.bot_data.get(CHAT_PROVIDERS[provider])
+    if not client:
+        env = "ABACUS_API_KEY" if provider == ABACUS_PREFIX else "ANYMODEL_API_KEY"
+        raise AuthenticationError(f"{env} is not set", body=None,
+                                  response=httpx.Response(401, request=httpx.Request("POST", ABACUS_URL)))
+    messages = chat_messages(request.get("instructions"), request["input"])
+    tools = chat_tools(toolbox) if provider == ANYMODEL_PREFIX else []
+    text, incomplete = "", False
+    for _ in range(MAX_TOOL_ROUNDS):
+        options = {"model": model[len(provider):], "stream": True, "messages": messages,
+                   "max_tokens": min(request.get("max_output_tokens", 8000), 32000)}
+        if tools:
+            options["tools"] = tools
+        stream = await client.chat.completions.create(**options)
+        said, calls, finish = "", {}, None
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            choice = chunk.choices[0]
+            if choice.delta.content:
+                said += choice.delta.content
+                await live.update(prefix + text + said)
+            for call in choice.delta.tool_calls or []:
+                slot = calls.setdefault(call.index or 0, {"id": "", "name": "", "arguments": ""})
+                slot["id"] = call.id or slot["id"]
+                if call.function:
+                    slot["name"] += call.function.name or ""
+                    slot["arguments"] += call.function.arguments or ""
+            finish = choice.finish_reason or finish
+        text += said
+        incomplete = finish == "length"
+        if not calls or not toolbox:
+            break
+        ordered = [dict(calls[i], id=calls[i]["id"] or f"call_{i}") for i in sorted(calls)]
+        messages.append({"role": "assistant", "content": said or None, "tool_calls": [
+            {"id": c["id"], "type": "function", "function": {"name": c["name"], "arguments": c["arguments"] or "{}"}}
+            for c in ordered]})
+        for call in ordered:
+            try:
+                args = json.loads(call["arguments"] or "{}")
+            except ValueError:
+                args = {}
+            live.status(toolbox.status(call["name"], args))
+            output = await toolbox.run(call["name"], args)
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(output)})
+        if said.strip():
+            text += "\n\n"
+    live.status(None)
+    return (text if prefix else text.strip()), incomplete
 
 
 async def discover_models(app):
@@ -793,10 +860,12 @@ async def discover_models(app):
     images = sorted(i for i in openai_ids if i.startswith("gpt-image") and "mini" not in i)
     if not data.get("image_model"):
         data["image_model"] = images[-1] if images else "gpt-image-1"
-    for name in EXTRA_MODELS:
-        model = name if name in openai_ids else ABACUS_PREFIX + name if name in abacus_ids else None
-        if model and model not in data["models"]:
-            data["models"].append(model)
+    gpt = GPT_PICK if GPT_PICK in openai_ids else ABACUS_PREFIX + GPT_PICK if GPT_PICK in abacus_ids else None
+    if not gpt:
+        LOG.warning("%s is not on the OpenAI key or RouteLLM; offering %s instead", GPT_PICK, data["model"])
+        gpt = data["model"]
+    data["models"] = [m for m in (data.get("chat_default") if data.get("anymodel_chat") else None, gpt) if m]
+    data["chat_default"] = data["models"][0]
 
 
 NANO = re.compile(r"nano[-_ ]?banana", re.I)
@@ -819,19 +888,14 @@ async def resolve_abacus_model(app):
     except Exception as exc:  # the list is a convenience; the usual ids still work
         LOG.warning("RouteLLM model list unavailable: %s", type(exc).__name__)
         ids = []
-    chat = data.get("abacus_model") or next((i for i in ids if SONNET.search(i)), "") or "claude-sonnet-5-5"
-    if ABACUS_PREFIX + chat not in data["models"]:
-        data["models"].append(ABACUS_PREFIX + chat)
     data["abacus_image"] = data.get("abacus_image") or pick_nano(ids)
 
 
 async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
-    if is_abacus(request["model"]):
-        if not context.bot_data.get("abacus"):
-            raise AuthenticationError("ABACUS_API_KEY is not set", body=None,
-                                      response=httpx.Response(401, request=httpx.Request("POST", ABACUS_URL)))
-        answer, incomplete = await abacus_answer(context, live, request)
+    request["instructions"] = (request.get("instructions") or "") + model_identity(request["model"])
+    if chat_provider(request["model"]):
+        answer, incomplete = await chat_answer(context, live, request, toolbox)
         return await continue_answer(context, live, request, answer, incomplete)
     tools = list(toolbox.definitions()) if toolbox else []
     if context.bot_data.get("web_search"):
@@ -885,8 +949,8 @@ async def continue_answer(context, live, request, answer, incomplete):
             break
         follow = {key: value for key, value in request.items() if key not in ("tools", "include", "input")}
         follow["input"] = base + [{"role": "assistant", "content": answer}, {"role": "user", "content": CONTINUE}]
-        if is_abacus(follow["model"]):
-            more, incomplete = await abacus_answer(context, live, follow, prefix=answer)
+        if chat_provider(follow["model"]):
+            more, incomplete = await chat_answer(context, live, follow, prefix=answer)
         else:
             response = await model_round(context, live, answer, follow)
             more, incomplete = response.output_text or "", response.status == "incomplete"
@@ -1280,7 +1344,7 @@ async def read_question(update, context):
 
 def user_model(bot_data, user_id):
     chosen = bot_data["memory"].model(user_id)
-    return chosen if chosen in bot_data["models"] else bot_data["model"]
+    return chosen if chosen in bot_data["models"] else bot_data.get("chat_default") or bot_data["model"]
 
 
 async def app_tools(bot_data, user_id, taken):
@@ -1690,17 +1754,18 @@ async def group_surprise(context, message, user):
 def group_model(data, chat_id):
     """The model a group talks with: its own choice from the Mini App if still offered, else the bot's default."""
     chosen = data["groups"].model(chat_id)
-    return chosen if chosen and chosen in data.get("models", ()) else data["model"]
+    return chosen if chosen and chosen in data.get("models", ()) else data.get("chat_default") or data["model"]
 
 
 async def quick_answer(data, model, instructions, text, max_tokens=2000):
     """A short non-streamed answer from either an OpenAI model or a RouteLLM one."""
-    if is_abacus(model) and data.get("abacus"):
-        response = await data["abacus"].chat.completions.create(
-            model=model[len(ABACUS_PREFIX):], max_tokens=max_tokens,
-            messages=[{"role": "system", "content": instructions}, {"role": "user", "content": text}])
+    provider = chat_provider(model)
+    if provider and data.get(CHAT_PROVIDERS[provider]):
+        response = await data[CHAT_PROVIDERS[provider]].chat.completions.create(
+            model=model[len(provider):], max_tokens=max_tokens,
+            messages=[{"role": "system", "content": instructions + model_identity(model)}, {"role": "user", "content": text}])
         return response.choices[0].message.content or ""
-    response = await data["client"].responses.create(model=data["model"] if is_abacus(model) else model, store=False,
+    response = await data["client"].responses.create(model=data["model"] if provider else model, store=False,
                                                      instructions=instructions, max_output_tokens=max_tokens, input=text)
     return response.output_text or ""
 
@@ -3195,11 +3260,15 @@ def main():
         anymodel_api=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
         anymodel_video=os.environ.get("ANYMODEL_VIDEO_MODEL", "").strip() or ANYMODEL_VIDEO,
         anymodel_voice=os.environ.get("ANYMODEL_VOICE", ANYMODEL_VOICE).strip(),
+        chat_default=os.environ.get("CHAT_MODEL", "").strip() or OPUS,
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
         abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
         if os.environ.get("ABACUS_API_KEY", "").strip() else None,
+        anymodel_chat=AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
+                                  base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
+                                  timeout=180, max_retries=2) if os.environ.get("ANYMODEL_API_KEY", "").strip() else None,
         abacus_model=os.environ.get("ABACUS_MODEL", "").strip(),
         abacus_image=os.environ.get("ABACUS_IMAGE_MODEL", "").strip(),
         image_model=os.environ.get("OPENAI_IMAGE_MODEL", "").strip(),
