@@ -95,10 +95,11 @@ GROUP_RANDOM_CHANCE = 0.1  # scales fun.LEVELS (each group's own setting); 0.1 k
 GROUP_RANDOM_PAUSE = 180  # seconds between such surprises in one chat
 USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
-HISTORY_LIMIT = 300
+HISTORY_LIMIT = 1000
 # What the model sees of the history: older long answers are shortened and the whole history fits a budget,
 # so 300 messages stay affordable and inside the model's context.
-HISTORY_CHARS = 90_000
+HISTORY_CHARS = 180_000
+MAX_FACTS = 80  # lasting facts kept per person
 HISTORY_ITEM_CHARS = 2_500
 
 # id: (emoji, Russian name, English name, extra instructions)
@@ -156,6 +157,9 @@ class Memory:
         if "model" not in [row[1] for row in self.db.execute("PRAGMA table_info(settings)")]:
             self.db.execute("ALTER TABLE settings ADD COLUMN model TEXT")
         # Generation: free photos per day, bought credits, and paid Stars charges (each counted once).
+        # Lasting facts about a person (name, city, likes, plans…), shared by the private chat and every group.
+        self.db.execute("CREATE TABLE IF NOT EXISTS facts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, fact TEXT NOT NULL)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS facts_by_user ON facts(user_id, id)")
         self.db.execute("CREATE TABLE IF NOT EXISTS gen_daily (user_id INTEGER NOT NULL, day TEXT NOT NULL, photos INTEGER NOT NULL, "
                         "PRIMARY KEY (user_id, day))")
         self.db.execute("CREATE TABLE IF NOT EXISTS gen_credits (user_id INTEGER PRIMARY KEY, credits INTEGER NOT NULL)")
@@ -190,6 +194,25 @@ class Memory:
         with self.db:
             self.db.execute("DELETE FROM messages WHERE id IN (?, ?)", (rows[0][0], rows[1][0]))
         return rows[1][2]
+
+    def facts(self, user_id):
+        return [row[0] for row in self.db.execute("SELECT fact FROM facts WHERE user_id=? ORDER BY id", (user_id,))]
+
+    def remember(self, user_id, add=(), forget=()):
+        """Add facts (no duplicates) and drop the ones containing any of the forget phrases; keeps the newest MAX_FACTS."""
+        known = {f.casefold() for f in self.facts(user_id)}
+        with self.db:
+            for phrase in forget:
+                if phrase.strip():
+                    self.db.execute("DELETE FROM facts WHERE user_id=? AND instr(lower(fact), lower(?)) > 0",
+                                    (user_id, phrase.strip()))
+            for fact in add:
+                fact = " ".join(fact.split())[:300]
+                if fact and fact.casefold() not in known:
+                    self.db.execute("INSERT INTO facts(user_id, fact) VALUES (?, ?)", (user_id, fact))
+                    known.add(fact.casefold())
+            self.db.execute("DELETE FROM facts WHERE user_id=? AND id NOT IN (SELECT id FROM facts WHERE user_id=? "
+                            "ORDER BY id DESC LIMIT ?)", (user_id, user_id, MAX_FACTS))
 
     def reset(self, user_id):
         with self.db:
@@ -1503,7 +1526,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
             return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
         return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
-                      apps=apps, media=media, extra=[secretary_tool(context, user_id, lang(update) == "ru"),
+                      apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
                                                      edit_tool(context, user_id, lang(update))])
     instructions = (SYSTEM + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
@@ -1643,7 +1666,7 @@ def remember_group_message(store, message, name):
     chat_id = message.chat_id
     said = describe_message(message)
     if said:
-        store.add_line(chat_id, f"{name}: {said}", message.message_id)
+        store.add_line(chat_id, f"{name}: {said}", message.message_id, message.from_user.id if message.from_user else None)
     if message.sticker:
         store.add_media(chat_id, "sticker", message.sticker.file_unique_id, message.sticker.file_id)
     elif message.animation:
@@ -1690,7 +1713,7 @@ async def group_chat(update, context):
         else:  # a sticker, gif or video in reply to the bot
             question = content = describe_message(message) or "…"
         before = "\n".join(store.lines(chat_id))
-        store.add_line(chat_id, f"{name}: {question}", message.message_id)
+        store.add_line(chat_id, f"{name}: {question}", message.message_id, user.id)
         head = (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:"
         content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
         data["group_spoke"][chat_id] = time.monotonic()
@@ -1731,12 +1754,16 @@ class GroupTools:
         self.update, self.context, self.message = update, context, message
 
     def definitions(self):
-        return [GROUP_MEDIA_TOOL]
+        return [GROUP_MEDIA_TOOL, MEMORY_TOOL]
 
     def status(self, name, args):
         return None
 
     async def run(self, name, args):
+        if name == "remember":  # about the person who wrote to the bot
+            self.context.bot_data["memory"].remember(self.update.effective_user.id, args.get("add") or [],
+                                                     args.get("forget") or [])
+            return "Saved."
         if name != "make_media":
             return "Unknown tool."
         kind = "video" if args.get("kind") == "video" else "photo"
@@ -1764,7 +1791,9 @@ async def group_respond(update, context, message, content, voice=False):
         if is_abacus(model) and MEDIA_TALK.search(str(content)):
             model = data["model"]  # the media tool needs function calls, which the Abacus path doesn't do
         answer, _ = await generate(context, live, GroupTools(update, context, message), model=model,
-                                   instructions=group_instructions(update) + (
+                                   instructions=group_instructions(update)
+                                   + memory_notes(data, update.effective_user.id, speaker(update.effective_user))
+                                   + " Save lasting facts about the person writing with the remember tool." + (
                                        " This person sent a voice message: your answer will be read aloud, so talk like "
                                        "in a live chat, 1-3 short sentences, no lists, no links, no emoji." if voice else ""),
                                    input=[{"role": "user", "content": content}], store=False, max_output_tokens=32000)
@@ -2162,6 +2191,42 @@ async def answer_album(updates, context):
 
 
 # ----- AI secretary (Telegram Business) -----
+
+MEMORY_TOOL = {"type": "function", "name": "remember",
+               "description": ("Your long-term memory about a person, shared between the private chat and all groups. "
+                               "Save lasting facts the moment you learn them: name, age, city, job or school, family, "
+                               "friends, pets, likes and dislikes, goals, plans and dates, how they want to be addressed. "
+                               "Also drop facts that changed or that they ask you to forget. Don't save small talk."),
+               "parameters": {"type": "object", "properties": {
+                   "add": {"type": "array", "items": {"type": "string"},
+                           "description": "short facts in the third person, e.g. 'Lives in Kazan', 'Birthday on May 3'"},
+                   "forget": {"type": "array", "items": {"type": "string"},
+                              "description": "words from facts to delete"}},
+                   "required": ["add"], "additionalProperties": False}}
+
+
+def memory_notes(data, user_id, name="", with_groups=False):
+    """What the bot remembers about a person (and, for the private chat, what they said in groups lately)."""
+    facts = data["memory"].facts(user_id) if data.get("memory") else []
+    notes = (f" What you remember about {name or 'this person'} (use it naturally, don't list it): "
+             + "; ".join(facts) + ".") if facts else ""
+    if with_groups:
+        lines = data["groups"].user_lines(user_id, 40)
+        if lines:
+            notes += (" What they said in group chats lately (you were there too): "
+                      + " | ".join(f"[{title or 'group'}] {line}" for title, line in lines)[:6000])
+    return notes
+
+
+def memory_tool(context, user_id):
+    """The remember tool for the private chat, with what the bot already knows about the user as a hint."""
+    async def run(args):
+        context.bot_data["memory"].remember(user_id, args.get("add") or [], args.get("forget") or [])
+        return "Saved."
+
+    return {"definition": MEMORY_TOOL, "run": run, "status": ("Запоминаю", "Remembering"),
+            "hint": memory_notes(context.bot_data, user_id, with_groups=True).strip()}
+
 
 def secretary_tool(context, user_id, ru):
     """The secretary_settings tool for the private chat: the owner turns the secretary on and tells it how to answer."""

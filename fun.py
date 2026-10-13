@@ -13,8 +13,9 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 ASSETS = Path(__file__).with_name("assets")
-GROUP_MESSAGES = 500  # kept per chat; the model sees the last GROUP_CONTEXT of them
-GROUP_CONTEXT = 300
+GROUP_MESSAGES = 2000  # kept per chat; the model sees the last GROUP_CONTEXT of them
+GROUP_CONTEXT = 600
+GROUP_CONTEXT_CHARS = 120_000  # and at most this much text of them, newest first
 MEDIA_PER_KIND = 150
 PHRASES_PER_CHAT = 400
 # How often the bot does something on its own in a group ("Сглыпа-режим"): chance per message nobody addressed to it.
@@ -31,8 +32,12 @@ class GroupStore:
             self.db.execute("CREATE TABLE IF NOT EXISTS group_messages (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, "
                             "line TEXT NOT NULL, created INTEGER NOT NULL)")
             self.db.execute("CREATE INDEX IF NOT EXISTS group_messages_chat ON group_messages(chat_id, id)")
-            if "message_id" not in [row[1] for row in self.db.execute("PRAGMA table_info(group_messages)")]:
+            columns = [row[1] for row in self.db.execute("PRAGMA table_info(group_messages)")]
+            if "message_id" not in columns:
                 self.db.execute("ALTER TABLE group_messages ADD COLUMN message_id INTEGER")
+            if "user_id" not in columns:  # who said it: the private chat remembers what a person said in groups
+                self.db.execute("ALTER TABLE group_messages ADD COLUMN user_id INTEGER")
+            self.db.execute("CREATE INDEX IF NOT EXISTS group_messages_user ON group_messages(user_id, id)")
             self.db.execute("CREATE TABLE IF NOT EXISTS group_media (chat_id INTEGER NOT NULL, kind TEXT NOT NULL, "
                             "unique_id TEXT NOT NULL, file_id TEXT NOT NULL, seen INTEGER NOT NULL, added INTEGER NOT NULL, "
                             "PRIMARY KEY (chat_id, unique_id))")
@@ -49,18 +54,31 @@ class GroupStore:
 
     # ----- conversation -----
 
-    def add_line(self, chat_id, line, message_id=None):
+    def add_line(self, chat_id, line, message_id=None, user_id=None):
         with self.db:
-            self.db.execute("INSERT INTO group_messages(chat_id, line, created, message_id) VALUES (?, ?, ?, ?)",
-                            (chat_id, line[:1500], int(time.time()), message_id))
+            self.db.execute("INSERT INTO group_messages(chat_id, line, created, message_id, user_id) VALUES (?, ?, ?, ?, ?)",
+                            (chat_id, line[:1500], int(time.time()), message_id, user_id))
             self.db.execute("DELETE FROM group_messages WHERE chat_id=? AND id NOT IN "
                             "(SELECT id FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?)",
                             (chat_id, chat_id, GROUP_MESSAGES))
 
-    def lines(self, chat_id, limit=GROUP_CONTEXT):
-        rows = self.db.execute("SELECT line FROM (SELECT id, line FROM group_messages WHERE chat_id=? ORDER BY id DESC "
-                               "LIMIT ?) ORDER BY id", (chat_id, limit)).fetchall()
-        return [row[0] for row in rows]
+    def lines(self, chat_id, limit=GROUP_CONTEXT, chars=GROUP_CONTEXT_CHARS):
+        rows = self.db.execute("SELECT line FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?",
+                               (chat_id, limit)).fetchall()
+        kept, total = [], 0
+        for (line,) in rows:  # newest first, until the text budget is spent
+            total += len(line) + 1
+            if total > chars:
+                break
+            kept.append(line)
+        return kept[::-1]
+
+    def user_lines(self, user_id, limit=40):
+        """What this person said in groups lately, oldest first: [(group title, line)]."""
+        rows = self.db.execute("SELECT COALESCE(i.title, ''), m.line FROM group_messages m LEFT JOIN group_info i "
+                               "ON i.chat_id = m.chat_id WHERE m.user_id=? ORDER BY m.id DESC LIMIT ?",
+                               (user_id, limit)).fetchall()
+        return rows[::-1]
 
     def recent_messages(self, chat_id, limit=15):
         """Recent members' messages that can be replied to: [(message_id, line)], newest first."""
