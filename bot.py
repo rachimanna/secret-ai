@@ -902,8 +902,13 @@ async def restore_welcome(app):
         LOG.warning("Could not read the pinned welcome note: %s", type(exc).__name__)
         return False
     if pinned and pinned.video_note and pinned.from_user and pinned.from_user.id == app.bot.id:
-        store.set_meta("welcome_note", {"file_id": pinned.video_note.file_id, "version": "pinned"})
-        return True
+        if pinned.date.timestamp() >= welcome.VERSION_SINCE:
+            store.set_meta("welcome_note", {"file_id": pinned.video_note.file_id, "version": "pinned"})
+            return True
+        try:  # an earlier design: make the new one instead
+            await app.bot.unpin_chat_message(owner, pinned.message_id)
+        except TelegramError:
+            pass
     return False
 
 

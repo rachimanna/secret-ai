@@ -15,6 +15,8 @@ from media import MediaError, fal_run
 
 ASSETS = Path(__file__).with_name("assets")
 VERSION = "v2"
+# Pinned welcome notes older than this are an earlier design: the bot unpins them and makes a new one.
+VERSION_SINCE = 1791883200  # 2026-10-13 09:20 UTC
 TEXT = {
     "ru": "Привет! Я Secret AI, твой личный ИИ. Пиши что хочешь: вопросы, тексты, код, сайты, картинки и видео. "
           "Можно голосом, отвечу голосом. Погнали!",
