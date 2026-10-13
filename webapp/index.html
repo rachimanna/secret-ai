@@ -824,8 +824,8 @@ function openGroupSheet(g) {
     <div class="small">${T.levelTitle}</div>
     <div class="seg four" id="g-level">${Object.keys(T.levels).map(k => `<button class="${k === g.level ? "on" : ""}" data-level="${k}">${T.levels[k]}</button>`).join("")}</div>
     <div class="small">${T.gModelTitle}</div>
-    <div class="list" id="g-model" style="margin-bottom:6px">${["", ...state.settings.models].map(m => `<button class="row compact press" data-model="${esc(m)}">
-        <div class="body"><div class="t">${m ? esc(prettyModel(m)) : `${T.gModelDefault} · ${esc(prettyModel(state.settings.models[0]))}`}</div></div>
+    <div class="list" id="g-model" style="margin-bottom:6px">${["", ...state.settings.models.slice(1)].map(m => `<button class="row compact press" data-model="${esc(m)}">
+        <div class="body"><div class="t">${m ? esc(prettyModel(m)) : `${esc(prettyModel(state.settings.models[0]))} <span style="color:var(--hint)">· ${T.gModelDefault.toLowerCase()}</span>`}</div></div>
         <span class="check" style="color:var(--accent);opacity:${(g.model || "") === m ? 1 : 0}">${ICON.check}</span></button>`).join("")}</div>
     <div class="small">${T.adminOnly}</div>
     <div class="small">${T.groupCmds}</div>`);
