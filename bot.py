@@ -3443,6 +3443,8 @@ class Bridge:
 
 def main():
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    for name in (LOG.name, "persist", "media"):  # our own notes (voice used, database restored…) are worth seeing
+        logging.getLogger(name).setLevel(logging.INFO)
     token, key = os.environ.get("TELEGRAM_TOKEN", "").strip(), os.environ.get("OPENAI_API_KEY", "").strip()
     if not token or not key:
         raise SystemExit("Set TELEGRAM_TOKEN and OPENAI_API_KEY environment variables.")
