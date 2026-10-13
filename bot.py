@@ -716,8 +716,78 @@ def drop_unsupported(context, request, error):
     return False
 
 
+# ----- models through Abacus.AI RouteLLM (OpenAI-compatible chat completions), e.g. Claude Sonnet -----
+ABACUS_URL = "https://routellm.abacus.ai/v1"
+ABACUS_PREFIX = "abacus:"
+SONNET = re.compile(r"sonnet[-._ ]?5[-._ ]?5", re.I)
+
+
+def is_abacus(model):
+    return model.startswith(ABACUS_PREFIX)
+
+
+def chat_messages(instructions, items):
+    """Responses-style input (text and images) as chat-completions messages."""
+    messages = [{"role": "system", "content": instructions}] if instructions else []
+    for item in items:
+        if "role" not in item:
+            continue
+        content = item["content"]
+        if isinstance(content, list):
+            parts = []
+            for part in content:
+                if part.get("type") == "input_text":
+                    parts.append({"type": "text", "text": part["text"]})
+                elif part.get("type") == "input_image":
+                    parts.append({"type": "image_url", "image_url": {"url": part["image_url"]}})
+            content = parts
+        messages.append({"role": item["role"], "content": content})
+    return messages
+
+
+async def abacus_answer(context, live, request):
+    """One streamed answer from a RouteLLM model (no tools there: apps, GitHub and search stay with GPT)."""
+    client = context.bot_data["abacus"]
+    stream = await client.chat.completions.create(
+        model=request["model"][len(ABACUS_PREFIX):], stream=True, max_tokens=min(request.get("max_output_tokens", 8000), 16000),
+        messages=chat_messages(request.get("instructions"), request["input"]))
+    text, status = "", "completed"
+    async for chunk in stream:
+        if not chunk.choices:
+            continue
+        delta = chunk.choices[0].delta.content or ""
+        if delta:
+            text += delta
+            await live.update(text)
+        if chunk.choices[0].finish_reason == "length":
+            status = "incomplete"
+    return text.strip(), status == "incomplete"
+
+
+async def resolve_abacus_model(app):
+    """Find the account's Sonnet 5.5 id in RouteLLM's model list and offer it in the model picker."""
+    data = app.bot_data
+    if not data.get("abacus"):
+        return
+    wanted = data.get("abacus_model") or ""
+    try:
+        ids = [m.id for m in (await data["abacus"].models.list()).data] if not wanted else []
+        wanted = wanted or next((i for i in ids if SONNET.search(i)), "") or "claude-sonnet-5-5"
+    except Exception as exc:  # the list is a convenience; the usual id still works
+        LOG.warning("RouteLLM model list unavailable: %s", type(exc).__name__)
+        wanted = wanted or "claude-sonnet-5-5"
+    model = ABACUS_PREFIX + wanted
+    if model not in data["models"]:
+        data["models"].append(model)
+
+
 async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
+    if is_abacus(request["model"]):
+        if not context.bot_data.get("abacus"):
+            raise AuthenticationError("ABACUS_API_KEY is not set", body=None,
+                                      response=httpx.Response(401, request=httpx.Request("POST", ABACUS_URL)))
+        return await abacus_answer(context, live, request)
     tools = list(toolbox.definitions()) if toolbox else []
     if context.bot_data.get("web_search"):
         tools.append({"type": "web_search"})
@@ -2465,6 +2535,7 @@ async def post_init(app):
     app.bot_data["bot_name"] = app.bot.username
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
+    await resolve_abacus_model(app)
     if not app.bot_data.get("logo_id"):
         # The application is not running yet inside post_init, so start a plain task and keep a reference.
         app.bot_data["logo_task"] = asyncio.create_task(ensure_logo(app))
@@ -2680,6 +2751,9 @@ def main():
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
+        abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
+        if os.environ.get("ABACUS_API_KEY", "").strip() else None,
+        abacus_model=os.environ.get("ABACUS_MODEL", "").strip(),
         web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
         # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),
