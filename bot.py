@@ -127,7 +127,6 @@ TYPING_INTERVAL = 4.5
 DRAFT_INTERVAL = 0.3
 # A draft disappears after 30 seconds without updates.
 DRAFT_KEEPALIVE = 10
-GROUP_FRAME_INTERVAL = 3  # groups allow ~20 edits a minute
 REVEAL_MIN_STEP = 24
 MAX_TOOL_ROUNDS = 12
 DIFF_INLINE_LIMIT = 2500
@@ -1567,38 +1566,20 @@ async def send_files(update, context, target, files):
 
 
 class GroupReply:
-    """In groups: the same "Думаю · 5с" frame as in private chats (edited every few seconds: groups allow fewer
-    edits), then the answer in its place."""
+    """In groups: just the animated logo and "…" until the answer is ready, then the answer in its place
+    (Telegram's see-through thinking block exists only in private chats)."""
 
     def __init__(self, target, config):
         self.target, self.config = target, config
         self.text, self.message, self.typing = "", None, None
-        self.started, self.note, self.done, self.shown = time.monotonic(), None, [], ""
 
     def status(self, note):
-        track_step(self, note)
-
-    def frame(self):
-        return thinking_frame("ru", self.config["logo"], self.started, note=self.note, done=self.done)
+        pass
 
     async def start(self):
-        frame = self.shown = self.frame()
+        frame = f"{self.config['logo']} …"
         self.message = await with_logo(self.config, lambda entities: reply(self.target, frame, entities=entities))
-        self.typing = asyncio.gather(typing_loop(self.target, ChatAction.TYPING), self._animate())
-
-    async def _animate(self):
-        while True:
-            await asyncio.sleep(GROUP_FRAME_INTERVAL)
-            frame = self.frame()
-            if frame == self.shown:
-                continue
-            try:
-                await with_logo(self.config, lambda entities: self.message.edit_text(frame, parse_mode=None, entities=entities))
-                self.shown = frame
-            except RetryAfter as exc:
-                await asyncio.sleep(seconds(exc.retry_after))
-            except TelegramError:
-                pass
+        self.typing = asyncio.create_task(typing_loop(self.target, ChatAction.TYPING))
 
     async def update(self, text):
         self.text = text
