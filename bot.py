@@ -545,17 +545,11 @@ class DraftReply:
         self.shown, self.pushed = text, time.monotonic()
 
     def frame(self):
-        """Telegram's native thinking placeholder, or our status while the bot is busy (searching, starting a video…)."""
-        if not self.note and not self.done:
-            return ""
+        """"✨ Думаю · 5с" with the steps done; a plain emoji: custom emoji can make Telegram refuse the draft."""
         return thinking_frame(self.language, self.config["logo"], self.started, note=self.note, done=self.done)
 
     async def _show_frame(self):
-        frame = self.frame()
-        if frame:
-            await with_logo(self.config, lambda entities: self._push(frame, entities), "draft")
-        else:
-            await self._push("")
+        await self._push(self.frame())
 
     async def start(self):
         await self._show_frame()
@@ -686,6 +680,9 @@ async def open_reply(target, language, config):
         draft = DraftReply(target, language, config)
         try:
             await draft.start()
+            if not config.get("draft_logged"):
+                config["draft_logged"] = True
+                LOG.info("Replies stream as see-through Telegram drafts")
             return draft
         except (RetryAfter, NetworkError):
             pass
