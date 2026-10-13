@@ -42,7 +42,7 @@ from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, free_image, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
+                   VIDEO_PRICES, MediaError, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -2026,7 +2026,7 @@ async def make_free_video(data, job):
             voice = speech.content
         except Exception as exc:  # a video without voice is still a result
             LOG.warning("Voice-over failed: %s", type(exc).__name__)
-    return await montage(clips, job["fmt"], voice)
+    return await join_with_voice(clips, seconds * len(clips), voice)
 
 
 async def make_video(data, job):

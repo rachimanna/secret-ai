@@ -41,23 +41,17 @@ async def _ffmpeg(*args, timeout=180):
 
 
 async def mascot_note(voice_mp3):
-    """The mascot on a dark glow, bobbing while it speaks: a square MP4 for send_video_note."""
+    """The mascot bobbing while it speaks: the pre-rendered loop (assets/welcome-loop.mp4) with the voice laid over it.
+
+    No re-encoding of the picture, so it takes a fraction of a second even on a tiny server.
+    """
     with tempfile.TemporaryDirectory(prefix="secret-ai-welcome-") as folder:
         folder = Path(folder)
         (folder / "voice.mp3").write_bytes(voice_mp3)
         out = folder / "note.mp4"
-        await _ffmpeg(
-            "-f", "lavfi", "-i", f"color=c=0x120d2b:s={SIZE}x{SIZE}:r=30",
-            "-loop", "1", "-i", str(ASSETS / "mascot.png"), "-i", str(folder / "voice.mp3"),
-            "-filter_complex",
-            # a soft violet glow behind, the mascot bobbing and gently scaling as if talking
-            f"[0]geq=r='18+40*exp(-((X-{SIZE}/2)^2+(Y-{SIZE}/2)^2)/26000)':g='13+28*exp(-((X-{SIZE}/2)^2+(Y-{SIZE}/2)^2)/26000)':"
-            f"b='43+90*exp(-((X-{SIZE}/2)^2+(Y-{SIZE}/2)^2)/26000)'[bg];"
-            "[1]scale=380:380,format=rgba[m0];"
-            "[m0]scale=w='380*(1+0.035*sin(2*PI*t*3.2))':h='380*(1+0.035*sin(2*PI*t*3.2))':eval=frame[m];"
-            "[bg][m]overlay=x='(W-w)/2':y='(H-h)/2+10*sin(2*PI*t*0.8)':shortest=1,format=yuv420p[v]",
-            "-map", "[v]", "-map", "2:a", "-shortest", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
-            "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out))
+        await _ffmpeg("-stream_loop", "-1", "-i", str(ASSETS / "welcome-loop.mp4"), "-i", str(folder / "voice.mp3"),
+                      "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "96k", "-shortest",
+                      "-movflags", "+faststart", str(out), timeout=120)
         return out.read_bytes()
 
 

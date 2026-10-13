@@ -395,8 +395,30 @@ async def living_picture(image, seconds, fmt, index=0):
         folder = Path(folder)
         (folder / "in.img").write_bytes(image)
         out = folder / "clip.mp4"
+        # Light enough for a tiny server: a 1.3x working canvas and the fastest x264 preset.
+        work_w, work_h = int(width * 1.3) // 2 * 2, int(height * 1.3) // 2 * 2
         await _ffmpeg("-i", str(folder / "in.img"), "-vf",
-                      f"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,crop={width * 2}:{height * 2},"
+                      f"scale={work_w}:{work_h}:force_original_aspect_ratio=increase,crop={work_w}:{work_h},"
                       f"zoompan=z='min(zoom+0.0009,1.18)':{move}:d={frames}:s={width}x{height}:fps=30,format=yuv420p",
-                      "-frames:v", str(frames), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", str(out))
+                      "-frames:v", str(frames), "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-g", "60",
+                      str(out), timeout=900)
+        return out.read_bytes()
+
+
+async def join_with_voice(clips, seconds, voice=None):
+    """Join same-format silent clips (seconds long in total) without re-encoding the picture; voice (or silence) over them."""
+    with tempfile.TemporaryDirectory(prefix="secret-ai-join-") as folder:
+        folder = Path(folder)
+        names = []
+        for index, data in enumerate(clips):
+            (folder / f"c{index}.mp4").write_bytes(data)
+            names.append(f"c{index}.mp4")
+        (folder / "list.txt").write_text("".join(f"file '{name}'\n" for name in names))
+        audio = ["-i", str(folder / "voice.mp3")] if voice else ["-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo"]
+        if voice:
+            (folder / "voice.mp3").write_bytes(voice)
+        out = folder / "video.mp4"
+        await _ffmpeg("-f", "concat", "-safe", "0", "-i", str(folder / "list.txt"), *audio,
+                      "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                      "-af", "apad", "-t", f"{seconds:.2f}", "-movflags", "+faststart", str(out), timeout=300)
         return out.read_bytes()
