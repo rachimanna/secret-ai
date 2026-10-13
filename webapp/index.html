@@ -439,7 +439,7 @@ const T = {
     search: "Поиск: Notion, Gmail, Slack…", more: "Больше приложений", connected: "Подключено", connect: "Подключить", connectApp: n => `Подключить ${n}`,
     yours: "Мои подключения", none: "Ничего не нашлось", loadingMore: "Загружаю…",
     tabAgent: "Агент", tabDiscover: "Открытия", tabGen: "Генерация", tabApps: "Приложения", tabSettings: "Настройки",
-    gen: "Генерация", genSub: "Фото по описанию и редактирование твоих фото — результат придёт в чат", myGen: "Мои генерации",
+    gen: "Генерация", genSub: "Фото, видео и редактирование твоих фото — результат придёт в чат", myGen: "Мои генерации",
     freeToday: (n, max) => `${n} из ${max} фото бесплатно сегодня`, credits: n => `${n} кредитов`, unlimited: "Без ограничений · вы владелец",
     topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны",
     photoSub: "Картинка по описанию — Nano Banana",
@@ -500,7 +500,7 @@ const T = {
     search: "Search: Notion, Gmail, Slack…", more: "More apps", connected: "Connected", connect: "Connect", connectApp: n => `Connect ${n}`,
     yours: "My connections", none: "Nothing found", loadingMore: "Loading…",
     tabAgent: "Agent", tabDiscover: "Discover", tabGen: "Create", tabApps: "Apps", tabSettings: "Settings",
-    gen: "Create", genSub: "Pictures from a description and edits of your photos — the result arrives in the chat", myGen: "My generations",
+    gen: "Create", genSub: "Pictures, videos and edits of your photos — the result arrives in the chat", myGen: "My generations",
     freeToday: (n, max) => `${n} of ${max} free photos today`, credits: n => `${n} credits`, unlimited: "Unlimited · you're the owner",
     topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates",
     photoSub: "A picture from a description — Nano Banana",
@@ -1235,11 +1235,11 @@ function renderGen() {
   $("gen").innerHTML = setup + wallet + `
     <div class="list">
       <button class="row press" data-gen="photo"><div class="ic sym">${GEN_ICON.photo}</div><div class="body"><div class="t">${T.makePhoto}</div><div class="d">${T.photoSub}</div></div>${ICON.chev}</button>
-      ${state.gen.video_on ? `<button class="row press" data-gen="video"><div class="ic sym">${GEN_ICON.video}</div><div class="body"><div class="t">${T.makeVideo}</div><div class="d">${state.gen.video_free ? T.videoSubFree : T.videoSub}</div></div>${ICON.chev}</button>` : ""}
+      <button class="row press" data-gen="video"><div class="ic sym">${GEN_ICON.video}</div><div class="body"><div class="t">${T.makeVideo}</div><div class="d">${state.gen.video_free ? T.videoSubFree : T.videoSub}</div></div>${ICON.chev}</button>
       <button class="row press" data-edit="1"><div class="ic sym">${EDIT_ICON}</div><div class="body"><div class="t">${T.makeEdit}</div><div class="d">${T.editSub}</div></div>${ICON.chev}</button>
     </div>
     <div class="section"><h2>${T.templates}</h2><div class="tpl-grid" style="margin-top:12px">
-      ${GEN_TEMPLATES.map(([kind, e, t, d, , c1, c2], i) => kind === "video" && !state.gen.video_on ? "" : `<button class="tpl press" data-tpl="${i}" style="--c1:${c1};--c2:${c2}">
+      ${GEN_TEMPLATES.map(([kind, e, t, d, , c1, c2], i) => `<button class="tpl press" data-tpl="${i}" style="--c1:${c1};--c2:${c2}">
         <span class="kind">${kind === "video" ? T.kindVideo : T.kindPhoto}</span><span class="e">${lineIcon(e)}</span><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}
     </div></div>`;
   $("gen-buy")?.addEventListener("click", openBuySheet);

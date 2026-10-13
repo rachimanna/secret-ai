@@ -1518,6 +1518,8 @@ async def group_chat(update, context):
                 LOG.warning("Group surprise failed: %s", type(exc).__name__)
         return
     async with lock:
+        if await group_generation(update, context):
+            return
         if await meme_request(update, context):
             return
         readable = (message.text or message.caption or message.voice or message.audio or message.video_note or message.photo
@@ -1776,6 +1778,45 @@ async def send_demotivator(context, chat_id, photo, hint="", reply_id=None):
     picture = await asyncio.to_thread(demotivator, data, title, subtitle)
     await context.bot.send_photo(chat_id, picture, reply_parameters=reply_to(reply_id))
     store.add_line(chat_id, f"Secret AI: [демотиватор «{title}. {subtitle}»]")
+    return True
+
+
+GEN_ASK = re.compile(r"\b(созда|сдела|сгенер|сним|запил|замут|нарису|генер|make|create|generate|draw)\w*\b.{0,40}?"
+                     r"\b(?P<kind>видео|видос|ролик|клип|video|clip|фото|картин|изображ|рисун|арт|picture|image|photo|art)", re.I | re.S)
+GEN_SECONDS = re.compile(r"(\d{1,3})\s*(с\b|сек|s\b|sec)|(минут|minute)", re.I)
+
+
+def gen_seconds(text):
+    """"на 20 секунд" -> 32, "минуту" -> 64: the shortest video length that fits, 8 s by default."""
+    match = GEN_SECONDS.search(text or "")
+    asked = 60 if match and match[3] else int(match[1]) if match else SCENE_SECONDS
+    return next((s for s in sorted(VIDEO_PRICES) if s >= asked), max(VIDEO_PRICES))
+
+
+async def group_generation(update, context):
+    """"@bot создай видео …" or "сделай видео …" in reply to the bot: generate it in the group; the asker pays. True if handled."""
+    message, user = update.effective_message, update.effective_user
+    text = message.text or message.caption or ""
+    match = GEN_ASK.search(text)
+    if not match or message.photo:  # a photo with the request is an edit: the normal answer handles it
+        return False
+    kind = "video" if match["kind"].lower() in ("видео", "видос", "ролик", "клип", "video", "clip") else "photo"
+    prompt = " ".join(re.sub(r"@\w+", " ", text).split())
+    ru = lang(update) == "ru"
+    error = await start_generation(context.application, user.id, lang(update), kind, prompt, "portrait",
+                                   gen_seconds(text) if kind == "video" else 5, True, chat_id=message.chat_id,
+                                   reply_id=message.message_id)
+    if error == "no_credits":
+        note = ("Бесплатные генерации на сегодня кончились — пополни кредиты в мини-аппе бота (Генерация → Пополнить)"
+                if ru else "Out of free generations today: top up credits in the bot's Mini App (Create → Top up)")
+    elif error in ("no_key", "no_video_key"):
+        note = "Генерация видео пока не настроена" if ru else "Video generation isn't set up yet"
+    elif error:
+        note = "Не получилось запустить, попробуй описать по-другому" if ru else "Couldn't start it, try describing it differently"
+    else:
+        context.bot_data["groups"].add_line(message.chat_id, f"Secret AI: [{'видео' if kind == 'video' else 'фото'} по запросу]")
+        return True
+    await message.reply_text(note)
     return True
 
 
@@ -2155,8 +2196,10 @@ def gen_state(bot_data, user_id):
     return state
 
 
-async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5, voice=True, images=None):
-    """Check the key and quota, take the generation and run it in the background. Returns None or an error code."""
+async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5, voice=True, images=None, chat_id=None,
+                           reply_id=None):
+    """Check the key and quota, take the generation and run it in the background. Returns None or an error code.
+    The user pays; the result goes to chat_id (a group) in reply to reply_id, or to the user's private chat."""
     data = app.bot_data
     prompt = (prompt or "").strip()[:MAX_PROMPT]
     if kind not in COST or not prompt or (kind == "video" and seconds not in VIDEO_PRICES):
@@ -2176,7 +2219,7 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
         return "no_credits"
     job = {"user_id": user_id, "language": language, "kind": kind, "prompt": prompt, "fmt": fmt if fmt in FORMATS else "portrait",
            "seconds": seconds, "voice": bool(voice), "key": key, "model": models[kind], "how": how, "cost": cost,
-           "images": list(images or [])[:4]}
+           "images": list(images or [])[:4], "chat_id": chat_id or user_id, "reply_id": reply_id}
     task = asyncio.create_task(generation_job(app, job))
     jobs = data.setdefault("gen_tasks", set())
     jobs.add(task)
@@ -2402,9 +2445,10 @@ async def photo_bytes(bot, photos):
 async def generation_job(app, job):
     bot, data = app.bot, app.bot_data
     user_id, ru, kind = job["user_id"], job["language"] == "ru", job["kind"]
+    chat, answer = job.get("chat_id") or user_id, {"reply_parameters": reply_to(job.get("reply_id"))}
     status = None
     try:
-        status = await bot.send_message(user_id, waiting_text(job))
+        status = await bot.send_message(chat, waiting_text(job), **answer)
     except TelegramError:
         pass
     try:
@@ -2417,21 +2461,21 @@ async def generation_job(app, job):
                 if images:
                     raise  # an edit can't fall back to drawing from scratch
                 image = await free_image(data["http"], await english_prompt(data, job["prompt"]), job["fmt"], data.get("cloudflare"))
-            await bot.send_photo(user_id, InputFile(image, filename="secret-ai.jpg"), caption=caption)
+            await bot.send_photo(chat, InputFile(image, filename="secret-ai.jpg"), caption=caption, **answer)
         elif kind == "photo":
             prompt = await english_prompt(data, job["prompt"])
             if job["model"] == "free":
                 image = await free_image(data["http"], prompt, job["fmt"], data.get("cloudflare"))
-                await bot.send_photo(user_id, InputFile(image, filename="secret-ai.jpg"), caption=caption)
+                await bot.send_photo(chat, InputFile(image, filename="secret-ai.jpg"), caption=caption, **answer)
             else:
                 url = await fal_generate(data["http"], job["key"], job["model"], "photo", prompt, job["fmt"])
-                await send_media(bot, data["http"], user_id, "photo", url, caption)
+                await send_media(bot, data["http"], chat, "photo", url, caption)
         else:
             provider = video_provider(job["model"])
             video = await (make_free_video(data, job) if provider == "free" else make_video(data, job) if provider == "fal"
                            else make_kling_video(data, job) if provider in ("kling", "anymodel") else make_veo_video(data, job))
-            await bot.send_video(user_id, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
-                                 write_timeout=180, read_timeout=180)
+            await bot.send_video(chat, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
+                                 write_timeout=180, read_timeout=180, **answer)
     except Exception as exc:  # any failure: give the generation back and explain
         if job["how"] != "owner":
             data["memory"].gen_refund(user_id, job["how"], job["cost"])
@@ -2442,7 +2486,7 @@ async def generation_job(app, job):
         if job["how"] in ("free", "credits"):
             text += " " + ("Генерация не списана." if ru else "Nothing was charged.")
         try:
-            await bot.send_message(user_id, "⚠️ " + text)
+            await bot.send_message(chat, "⚠️ " + text, **answer)
         except TelegramError:
             pass
     finally:
