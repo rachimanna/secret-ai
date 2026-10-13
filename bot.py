@@ -846,7 +846,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     store, user_id = context.bot_data["connections"], update.effective_user.id
     if not store.get_meta(f"welcomed:{user_id}"):
         await send_welcome(context, update.effective_message, user_id)
-    await send(update.effective_message, ui(update, "Привет! ", "Hi! ") + ui(update, HELP_RU, HELP_EN))
+    # The video note already says hi; the full list of features is one command away.
+    await send(update.effective_message, ui(update, "Если хотите ознакомиться с моими функциями, напишите /help",
+                                            "To see what I can do, send /help"))
 
 
 async def prepare_welcome(app):
