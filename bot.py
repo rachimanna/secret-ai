@@ -549,7 +549,20 @@ class DraftReply:
         return thinking_frame(self.language, self.config["logo"], self.started, note=self.note, done=self.done)
 
     async def _show_frame(self):
-        await self._push(self.frame())
+        frame = self.frame()
+        if self.config.get("rich_drafts", True):
+            # Telegram's own see-through "thinking" block (Bot API 10.2 rich drafts), without our emoji.
+            status = frame.split(" ", 1)[1] if frame.startswith(self.config["logo"] + " ") else frame
+            try:
+                await self.bot.do_api_request("sendRichMessageDraft", api_kwargs={
+                    "chat_id": self.chat_id, "draft_id": self.draft_id,
+                    "rich_message": {"blocks": [{"type": "thinking", "text": status}], "skip_entity_detection": True}})
+                self.shown, self.pushed = frame, time.monotonic()
+                return
+            except BadRequest as exc:
+                self.config["rich_drafts"] = False  # this Telegram has no rich drafts: the plain text frame from now on
+                LOG.warning("Rich thinking drafts are unavailable (%s); using plain drafts", str(exc)[:120])
+        await self._push(frame)
 
     async def start(self):
         await self._show_frame()
