@@ -242,7 +242,10 @@ KLING_SECONDS = 10  # Kling makes 5- or 10-second clips
 
 
 def kling_token(key, now=None):
-    """Short-lived HS256 JWT from "ACCESS_KEY:SECRET_KEY", as Kling's API expects."""
+    """The Bearer token: a new-style API key ("bearer:KEY") as is, or a short-lived HS256 JWT from the legacy
+    "ACCESS_KEY:SECRET_KEY" pair."""
+    if key.startswith("bearer:"):
+        return key[len("bearer:"):]
     access, _, secret = key.partition(":")
     now = int(now or time.time())
 

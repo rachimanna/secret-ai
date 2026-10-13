@@ -2099,6 +2099,15 @@ MEDIA_ERRORS = {
 }
 
 
+def kling_env_key():
+    """KLING_API_KEY (the console's API Key), or the legacy KLING_ACCESS_KEY + KLING_SECRET_KEY pair."""
+    key = os.environ.get("KLING_API_KEY", "").strip()
+    if key:
+        return "bearer:" + key.removeprefix("Bearer ").strip()
+    access, secret = os.environ.get("KLING_ACCESS_KEY", "").strip(), os.environ.get("KLING_SECRET_KEY", "").strip()
+    return f"{access}:{secret}" if access and secret else ""
+
+
 def gen_settings(bot_data):
     """fal key (Mini App, or FAL_KEY env) and the photo/video models."""
     store = bot_data["connections"]
@@ -2997,8 +3006,7 @@ def main():
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
-        kling_env_key=(f"{os.environ['KLING_ACCESS_KEY'].strip()}:{os.environ['KLING_SECRET_KEY'].strip()}"
-                       if os.environ.get("KLING_ACCESS_KEY", "").strip() and os.environ.get("KLING_SECRET_KEY", "").strip() else ""),
+        kling_env_key=kling_env_key(),
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
         abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
