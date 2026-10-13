@@ -127,6 +127,7 @@ STREAM_EDIT_INTERVAL = 1.2
 TYPING_INTERVAL = 4.5
 # Native drafts (sendMessageDraft) animate smoothly and are not limited like edits.
 DRAFT_INTERVAL = 0.3
+REVEAL_CATCH_UP = 3.0  # at most this long typing out an answer that arrived all at once
 # A draft disappears after 30 seconds without updates.
 DRAFT_KEEPALIVE = 10
 REVEAL_MIN_STEP = 24
@@ -631,7 +632,7 @@ class DraftReply:
         # Typewriter: reveal the backlog in steps so the text flows instead of jumping.
         backlog = len(pending) - self.revealed
         if backlog > 0:
-            self.revealed = min(len(pending), self.revealed + max(REVEAL_MIN_STEP, backlog // 2))
+            self.revealed = min(len(pending), self.revealed + max(REVEAL_MIN_STEP, backlog // 3))
             space = pending.find(" ", self.revealed)
             if 0 <= space - self.revealed <= 8:
                 self.revealed = space
@@ -663,7 +664,17 @@ class DraftReply:
         await asyncio.gather(*self.tasks, return_exceptions=True)
         self.tasks = []
 
+    async def _catch_up(self, text):
+        """The answer may arrive in one piece (some gateways don't stream): type it out in the draft first."""
+        if "```" in text or self.closed:
+            return
+        self.text = text
+        deadline = time.monotonic() + REVEAL_CATCH_UP
+        while time.monotonic() < deadline and self.revealed < len(self.text[self.offset:]) - REVEAL_MIN_STEP:
+            await asyncio.sleep(DRAFT_INTERVAL)
+
     async def finish(self, text, reply_markup=None):
+        await self._catch_up(text)
         await self.stop()
         # Parts already sent stay; the final text may differ after them (code moved to files).
         rest = text[self.offset:] if text[:self.offset] == self.text[:self.offset] else text
