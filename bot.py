@@ -1551,13 +1551,60 @@ def humanize(text):
     return text
 
 
+GROUP_MEDIA_TOOL = {"type": "function", "name": "make_media",
+                    "description": ("Actually make a video or a picture and post it in this group. Call it whenever someone "
+                                    "asks for a video/picture or agrees to one you offered (\"ну кинь\", \"давай\", \"го\"). "
+                                    "You CAN make videos and pictures: never say you can't. The result arrives in the chat by "
+                                    "itself in a few minutes; just say briefly that it's coming."),
+                    "parameters": {"type": "object", "properties": {
+                        "kind": {"type": "string", "enum": ["video", "photo"]},
+                        "description": {"type": "string", "description": "what to show, detailed, as agreed in the chat (any language)"},
+                        "seconds": {"type": "integer", "description": "video length asked for, 8 if not said"}},
+                        "required": ["kind", "description"], "additionalProperties": False}}
+
+
+MEDIA_TALK = re.compile(r"видео|видос|ролик|клип|картин|фотк|нарису|video|picture|image", re.I)
+
+
+class GroupTools:
+    """The only tool in a group: make a video or picture for the person who asked (they pay, the owner doesn't)."""
+
+    def __init__(self, update, context, message):
+        self.update, self.context, self.message = update, context, message
+
+    def definitions(self):
+        return [GROUP_MEDIA_TOOL]
+
+    def status(self, name, args):
+        return None
+
+    async def run(self, name, args):
+        if name != "make_media":
+            return "Unknown tool."
+        kind = "video" if args.get("kind") == "video" else "photo"
+        seconds = next((s for s in sorted(VIDEO_PRICES) if s >= int(args.get("seconds") or SCENE_SECONDS)), max(VIDEO_PRICES))
+        error = await start_generation(self.context.application, self.update.effective_user.id, lang(self.update), kind,
+                                       str(args.get("description") or ""), "portrait", seconds if kind == "video" else 5, True,
+                                       chat_id=self.message.chat_id, reply_id=self.message.message_id)
+        if error == "no_credits":
+            return ("Not started: this person has no free generations or credits left. Tell them to top up in the bot's "
+                    "Mini App (Генерация → Пополнить).")
+        if error:
+            return f"Not started ({error}). Say briefly that it doesn't work right now."
+        return "Started. It will be posted in reply in a few minutes; say so in a few words."
+
+
 async def group_respond(update, context, message, content):
     data = context.bot_data
     live = GroupReply(message, data)
     await live.start()
     try:
-        # No personal tools in groups: someone else's apps, repos and money must not be reachable from a shared chat.
-        answer, _ = await generate(context, live, None, model=group_model(data, message.chat_id), instructions=group_instructions(update),
+        # Only the media tool in groups: someone else's apps, repos and money must not be reachable from a shared chat.
+        model = group_model(data, message.chat_id)
+        if is_abacus(model) and MEDIA_TALK.search(str(content)):
+            model = data["model"]  # the media tool needs function calls, which the Abacus path doesn't do
+        answer, _ = await generate(context, live, GroupTools(update, context, message), model=model,
+                                   instructions=group_instructions(update),
                                    input=[{"role": "user", "content": content}], store=False, max_output_tokens=32000)
     except BaseException:
         await live.abort(None)
