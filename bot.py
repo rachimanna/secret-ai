@@ -41,8 +41,8 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+                   VIDEO_PRICES, MediaError, free_image, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
 
@@ -1168,7 +1168,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
     media = None
-    if gen_settings(context.bot_data)[0]:
+    if gen_settings(context.bot_data)[0] or "free" in gen_settings(context.bot_data)[1].values():
         async def media(kind, prompt, fmt, seconds=5, voice=True):
             error = await start_generation(context.application, user_id, lang(update), kind, prompt, fmt, seconds, voice)
             if error == "no_credits":
@@ -1851,13 +1851,17 @@ def gen_settings(bot_data):
     key = store.get_meta("fal_key", secret=True) or bot_data.get("fal_env_key") or ""
     models = store.get_meta("fal_models") or {}
     if models.get("video") in OLD_VIDEO_DEFAULTS:
-        models["video"] = ""  # an old default saved from the form: use the current one (Veo)
+        models["video"] = ""  # an old default saved from the form: use the current one (free)
+    if models.get("photo") in OLD_PHOTO_DEFAULTS:
+        models["photo"] = ""
     return key, {kind: models.get(kind) or default for kind, default in DEFAULT_MODELS.items()}
 
 
 def video_key(bot_data, model):
-    """Key for the video model: Higgsfield, Google AI Studio for Veo, or fal."""
+    """Key for the video model: none needed for free, Higgsfield, Google AI Studio for Veo, or fal."""
     provider = video_provider(model)
+    if provider == "free":
+        return "free"
     if provider == "veo":
         return bot_data["connections"].get_meta("gemini_key", secret=True) or bot_data.get("gemini_env_key") or ""
     if provider == "higgsfield":
@@ -1869,7 +1873,7 @@ def gen_state(bot_data, user_id):
     key, models = gen_settings(bot_data)
     free, credits = bot_data["memory"].gen_info(user_id)
     owner = bot_data["connections"].get_meta("owner") == user_id
-    state = {"ready": bool(key), "video_ready": bool(video_key(bot_data, models["video"])), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
+    state = {"ready": bool(key) or models["photo"] == "free", "video_ready": bool(video_key(bot_data, models["video"])), "owner": owner, "unlimited": owner, "free_left": free, "free_per_day": FREE_PHOTOS_PER_DAY,
              "credits": credits, "cost": COST, "video_prices": VIDEO_PRICES, "packs": [{"id": pid, "credits": c, "stars": s} for pid, (c, s) in PACKS.items()]}
     if owner:
         state["models"] = models
@@ -1889,6 +1893,8 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
         key = video_key(data, models["video"])
         if not key:
             return "no_key" if video_provider(models["video"]) == "fal" else "no_video_key"
+    elif models["photo"] == "free":
+        key = "free"
     elif not key:
         return "no_key"
     cost = price(kind, seconds)
@@ -2002,6 +2008,27 @@ async def make_veo_video(data, job):
     return await montage(list(clips), job["fmt"], keep_sound=True)
 
 
+async def make_free_video(data, job):
+    """Free video: a picture per scene (Cloudflare/Pollinations), each brought to life, plus the Russian voice-over."""
+    scenes = await plan_scenes(data, job)
+    seconds = max(5, job["seconds"] // max(1, len(scenes)))
+    clips = []
+    for index, scene in enumerate(scenes):  # one by one: the free picture service takes about one request at a time
+        image = await free_image(data["http"], scene["visual"] + ", cinematic still, highly detailed", job["fmt"],
+                                 data.get("cloudflare"))
+        clips.append(await living_picture(image, seconds, job["fmt"], index))
+    narration = " ".join(scene["voice"] for scene in scenes if scene["voice"])
+    voice = None
+    if job["voice"] and narration and data.get("tts_model"):
+        try:
+            speech = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"],
+                                                              input=narration[:4000], response_format="mp3")
+            voice = speech.content
+        except Exception as exc:  # a video without voice is still a result
+            LOG.warning("Voice-over failed: %s", type(exc).__name__)
+    return await montage(clips, job["fmt"], voice)
+
+
 async def make_video(data, job):
     """Generate the scenes in parallel, voice them and edit them into one MP4. Returns the video bytes."""
     scenes = await plan_scenes(data, job)
@@ -2050,10 +2077,16 @@ async def generation_job(app, job):
         caption = job["prompt"][:900]
         if kind == "photo":
             prompt = await english_prompt(data, job["prompt"])
-            url = await fal_generate(data["http"], job["key"], job["model"], "photo", prompt, job["fmt"])
-            await send_media(bot, data["http"], user_id, "photo", url, caption)
+            if job["model"] == "free":
+                image = await free_image(data["http"], prompt, job["fmt"], data.get("cloudflare"))
+                await bot.send_photo(user_id, InputFile(image, filename="secret-ai.jpg"), caption=caption)
+            else:
+                url = await fal_generate(data["http"], job["key"], job["model"], "photo", prompt, job["fmt"])
+                await send_media(bot, data["http"], user_id, "photo", url, caption)
         else:
-            video = await (make_video(data, job) if video_provider(job["model"]) == "fal" else make_veo_video(data, job))
+            provider = video_provider(job["model"])
+            video = await (make_free_video(data, job) if provider == "free" else make_video(data, job) if provider == "fal"
+                           else make_veo_video(data, job))
             await bot.send_video(user_id, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
                                  write_timeout=180, read_timeout=180)
     except Exception as exc:  # any failure: give the generation back and explain
@@ -2618,6 +2651,7 @@ def main():
         tts_voice=os.environ.get("OPENAI_TTS_VOICE", "alloy").strip() or "alloy",
         fal_env_key=os.environ.get("FAL_KEY", "").strip(), gemini_env_key=os.environ.get("GEMINI_API_KEY", "").strip(),
         hf_env_key=os.environ.get("HF_KEY", "").strip(),
+        cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
         web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
         # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),

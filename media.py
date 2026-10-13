@@ -4,9 +4,11 @@ Requests go through fal's queue API: submit, poll the status, fetch the result.
 The bot owner pastes the fal key in the Mini App; it is stored encrypted.
 """
 import asyncio
+import base64
 import tempfile
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import httpx
 import imageio_ffmpeg
@@ -15,8 +17,12 @@ FAL_QUEUE = "https://queue.fal.run"
 # Photos and videos: fal.ai, one key. Video scenes come from Kling without sound; MMAudio then adds real sound effects
 # (steps, nature, city) and the bot lays a Russian voice-over on top. A Higgsfield id ("bytedance/...") or a Google Veo id
 # ("veo-...") can be set instead; they need their own keys.
-DEFAULT_MODELS = {"photo": "fal-ai/flux/schnell", "video": "fal-ai/kling-video/v2.6/pro/text-to-video"}
-OLD_VIDEO_DEFAULTS = ("veo-3.1-fast-generate-preview", "bytedance/seedance-2.5/text-to-video")
+# "free": photos from Cloudflare Workers AI (if CF_ACCOUNT_ID/CF_API_TOKEN are set) or Pollinations (no key), and videos
+# made of those pictures brought to life (slow zoom and pan) with a voice-over. Paid models stay available by id.
+DEFAULT_MODELS = {"photo": "free", "video": "free"}
+OLD_VIDEO_DEFAULTS = ("veo-3.1-fast-generate-preview", "bytedance/seedance-2.5/text-to-video",
+                      "fal-ai/kling-video/v2.6/pro/text-to-video")
+OLD_PHOTO_DEFAULTS = ("fal-ai/flux/schnell",)
 SOUND_MODEL = "fal-ai/mmaudio-v2"  # video-to-audio: sound effects that match the picture, about $0.001 per second
 FAL_SCENE_SECONDS = 10  # Kling makes 5- or 10-second clips
 TIMEOUTS = {"photo": 180, "video": 1800, "sound": 300}
@@ -218,8 +224,8 @@ def is_fal(model):
 
 
 def video_provider(model):
-    """'veo', 'fal' or 'higgsfield' (anything else, e.g. bytedance/seedance-2.5/text-to-video)."""
-    return "veo" if is_veo(model) else "fal" if is_fal(model) else "higgsfield"
+    """'free', 'veo', 'fal' or 'higgsfield' (anything else, e.g. bytedance/seedance-2.5/text-to-video)."""
+    return "free" if model == "free" else "veo" if is_veo(model) else "fal" if is_fal(model) else "higgsfield"
 
 
 async def veo_generate(http, key, model, prompt, fmt):
@@ -334,3 +340,63 @@ def _hf_error(response):
     if not isinstance(data, dict):
         return ""
     return str(data.get("detail") or data.get("message") or data.get("error") or "")[:200]
+
+
+# ---------- free: Cloudflare Workers AI / Pollinations pictures, videos from pictures ----------
+
+POLLINATIONS = "https://image.pollinations.ai/prompt/"
+FREE_SIZES = {"square": (1024, 1024), "portrait": (768, 1344), "landscape": (1344, 768)}
+
+
+async def free_image(http, prompt, fmt, cloudflare=None):
+    """A Flux picture for free: Cloudflare Workers AI when its account id and token are given, else Pollinations."""
+    if cloudflare and all(cloudflare):
+        account, token = cloudflare
+        try:
+            response = await http.post(
+                f"https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/black-forest-labs/flux-1-schnell",
+                headers={"Authorization": f"Bearer {token}"}, json={"prompt": prompt[:2000], "steps": 6}, timeout=90)
+            image = (response.json().get("result") or {}).get("image") if response.status_code == 200 else None
+            if image:
+                return base64.b64decode(image)
+        except (httpx.HTTPError, ValueError):
+            pass  # Pollinations below
+    width, height = FREE_SIZES.get(fmt, FREE_SIZES["square"])
+    params = {"width": width, "height": height, "model": "flux", "nologo": "true", "private": "true",
+              "seed": str(int(time.time() * 1000) % 1_000_000)}
+    for attempt in range(4):
+        try:
+            response = await http.get(POLLINATIONS + quote(prompt[:1500], safe=""), params=params, timeout=150,
+                                      follow_redirects=True)
+        except httpx.HTTPError as exc:
+            if attempt == 3:
+                raise MediaError("failed", type(exc).__name__) from None
+            await asyncio.sleep(5)
+            continue
+        if response.status_code == 200 and response.headers.get("content-type", "").startswith("image/"):
+            return response.content
+        if response.status_code in (429, 502, 503, 504) and attempt < 3:
+            await asyncio.sleep(16)  # anonymous use: about one picture per 15 seconds
+            continue
+        raise MediaError("failed", f"pollinations {response.status_code}")
+    raise MediaError("failed", "pollinations busy")
+
+
+async def living_picture(image, seconds, fmt, index=0):
+    """A picture brought to life: a slow zoom with a gentle pan (alternating direction). Returns silent MP4 bytes."""
+    width, height = FRAME.get(fmt, FRAME["square"])
+    frames = int(seconds * 30)
+    moves = ["x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'",
+             "x='(iw-iw/zoom)*on/{f}':y='ih/2-(ih/zoom/2)'",
+             "x='(iw-iw/zoom)*(1-on/{f})':y='ih/2-(ih/zoom/2)'",
+             "x='iw/2-(iw/zoom/2)':y='(ih-ih/zoom)*on/{f}'"]
+    move = moves[index % len(moves)].format(f=frames)
+    with tempfile.TemporaryDirectory(prefix="secret-ai-pic-") as folder:
+        folder = Path(folder)
+        (folder / "in.img").write_bytes(image)
+        out = folder / "clip.mp4"
+        await _ffmpeg("-i", str(folder / "in.img"), "-vf",
+                      f"scale={width * 2}:{height * 2}:force_original_aspect_ratio=increase,crop={width * 2}:{height * 2},"
+                      f"zoompan=z='min(zoom+0.0009,1.18)':{move}:d={frames}:s={width}x{height}:fps=30,format=yuv420p",
+                      "-frames:v", str(frames), "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", str(out))
+        return out.read_bytes()
