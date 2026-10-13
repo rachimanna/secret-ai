@@ -41,7 +41,7 @@ import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
-from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, ANYMODEL_VOICE, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
+from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
                           prune_pending)
@@ -2155,6 +2155,38 @@ async def secretary_switch(update, context, text):
     return True
 
 
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/voice: which AnyModel voice answers voice messages; /voice <name or id> picks one, /voice off — the usual voice."""
+    if not await authorized(update, context):
+        return
+    data, message = context.bot_data, update.effective_message
+    if data["connections"].get_meta("owner") != update.effective_user.id:
+        await send(message, "Голос бота меняет только владелец.")
+        return
+    if not data.get("anymodel_key"):
+        await send(message, "Нужен ключ AnyModel: переменная ANYMODEL_API_KEY в Render.")
+        return
+    base, query = data.get("anymodel_api") or ANYMODEL_API, " ".join(context.args or []).strip()
+    voices = await anymodel_voices(data["http"], data["anymodel_key"], base)
+    if query:
+        found = await anymodel_voice_id(data["http"], data["anymodel_key"], query, base) if query.lower() != "off" else ""
+        if query.lower() != "off" and not found:
+            await send(message, f"Голос «{query}» через API не нашёлся. Напиши /voice — покажу, какие есть.")
+            return
+        data["connections"].set_meta("anymodel_voice", query)
+        data["anymodel_voice_id"] = found
+        await send(message, f"🎙 Теперь голосовые отвечаю голосом: {found}" if found else "🎙 Вернул обычный голос.")
+        return
+    current = data.get("anymodel_voice_id")
+    head = f"🎙 Сейчас: {current or 'обычный голос (OpenAI)'}\n\n"
+    if not voices:
+        await send(message, head + "AnyModel не отдал список голосов — проверь ключ и баланс.")
+        return
+    lines = [f"• {model}" + (f" — {label}" if label else "") for model, label in voices[:60]]
+    await send(message, head + f"Голоса, доступные через API ({len(voices)}):\n" + "\n".join(lines)
+               + "\n\nВыбрать: /voice <имя или id>, например /voice " + voices[0][0] + "\nОбычный голос: /voice off")
+
+
 async def secretary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/secretary: status and how to connect."""
     if not await authorized(update, context):
@@ -2643,8 +2675,9 @@ async def speech_audio(data, text):
     if data.get("anymodel_key") and data.get("anymodel_voice"):
         try:
             base = data.get("anymodel_api") or ANYMODEL_API
-            if "anymodel_voice_id" not in data:  # looked up once per run
-                data["anymodel_voice_id"] = await anymodel_voice_id(data["http"], data["anymodel_key"], data["anymodel_voice"], base)
+            if "anymodel_voice_id" not in data:  # looked up once per run; /voice changes it
+                wanted = data["connections"].get_meta("anymodel_voice") or data["anymodel_voice"]
+                data["anymodel_voice_id"] = await anymodel_voice_id(data["http"], data["anymodel_key"], wanted, base)
                 LOG.info("AnyModel voice: %s", data["anymodel_voice_id"] or "not found, using the usual voice")
             if data["anymodel_voice_id"]:
                 return await anymodel_speech(data["http"], data["anymodel_key"], data["anymodel_voice_id"], text, base)
@@ -3173,6 +3206,7 @@ def main():
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGES, business_message))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler(["secretary", "sekretar"], secretary_command))
+    app.add_handler(CommandHandler(["voice", "golos"], voice_command))
     app.add_handler(CommandHandler("welcome", welcome_command))
     app.add_handler(CommandHandler("setwelcome", set_welcome))
     app.add_handler(CommandHandler("help", help_command))

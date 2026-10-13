@@ -396,27 +396,34 @@ async def anymodel_generate(http, key, model, prompt, fmt, seconds=ANYMODEL_SECO
     raise MediaError("timeout")
 
 
+async def anymodel_voices(http, key, base=ANYMODEL_API):
+    """Voices the API can speak with: (model id, label) from the TTS catalog, then the Russian edge-tts voices."""
+    voices = []
+    for path in ("/models/tts", "/audio/voices?provider=edge-tts&lang=ru"):
+        try:
+            response = await http.get(base + path, headers={"Authorization": f"Bearer {key}"}, timeout=30)
+            entries = (response.json().get("data") or []) if response.status_code < 400 else []
+        except (httpx.HTTPError, ValueError, AttributeError):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and (entry.get("model") or entry.get("id")):
+                label = " · ".join(str(entry[k]) for k in ("name", "title", "gender") if entry.get(k))
+                voices.append((str(entry.get("model") or entry.get("id")), label))
+    return voices
+
+
 async def anymodel_voice_id(http, key, wanted, base=ANYMODEL_API):
     """The speech model id for a voice: an id as is ("fish-farm/…", "edge-tts/ru-RU-…"), or the first voice whose id or
-    name holds one of the names in "a|b|c" (the TTS catalog first, then the Russian edge-tts voices). "" if none."""
+    name holds one of the names in "a|b|c". "" if none."""
     wanted = (wanted or "").strip()
     if not wanted or wanted.lower() in ("off", "none", "no"):
         return ""
     if "/" in wanted and "|" not in wanted:
         return wanted
     names = [n.strip().casefold() for n in wanted.split("|") if n.strip()]
-    for path in ("/models/tts", "/audio/voices?provider=edge-tts&lang=ru"):
-        try:
-            response = await http.get(base + path, headers={"Authorization": f"Bearer {key}"}, timeout=30)
-            entries = response.json().get("data") or [] if response.status_code < 400 else []
-        except (httpx.HTTPError, ValueError, AttributeError):
-            continue
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            text = " ".join(str(entry.get(k) or "") for k in ("id", "name", "model", "title", "description")).casefold()
-            if any(name in text for name in names):
-                return str(entry.get("model") or entry.get("id"))
+    for model, label in await anymodel_voices(http, key, base):
+        if any(name in f"{model} {label}".casefold() for name in names):
+            return model
     return ""
 
 
