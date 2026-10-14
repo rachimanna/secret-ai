@@ -1070,7 +1070,7 @@ async def discover_models(app):
             LOG.info("Gemini on AnyModel: %s", gemini)
         else:
             LOG.warning("Gemini 3.8 is not in the AnyModel catalog")
-    deepseek = pick_deepseek(any_ids) if os.environ.get("DEEPSEEK_CHAT", "1").strip() != "0" else None
+    deepseek = pick_deepseek(any_ids) if os.environ.get("DEEPSEEK_CHAT", "").strip() == "1" else None
     if deepseek:
         deepseek = ANYMODEL_PREFIX + deepseek
         LOG.info("DeepSeek on AnyModel: %s", deepseek)
@@ -1079,7 +1079,7 @@ async def discover_models(app):
         found = sorted((i for i in abacus_ids if OPUS_55.search(i)), key=lambda i: ("thinking" in i.lower(), len(i)))
         opus_new = ABACUS_PREFIX + (found[0] if found else "claude-opus-5-5")
         LOG.info("Claude Opus 5.5 on Abacus: %s%s", opus_new, "" if found else " (not in the list, trying the usual id)")
-    data["models"] = [m for m in (gemini, claude, opus_new, gpt, deepseek) if m]
+    data["models"] = [m for m in (gemini, opus_new, claude, gpt, deepseek) if m]  # the first one is the default
     chosen = data.get("chat_override")
     data["chat_default"] = chosen if chosen in data["models"] else data["models"][0]
 
