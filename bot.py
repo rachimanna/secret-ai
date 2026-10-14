@@ -1863,7 +1863,7 @@ async def group_chat(update, context):
         if await meme_request(update, context):
             return
         if game.GAME_ASK.search(message.text or "") and len(message.text or "") < 120:
-            await quiz(context).open_lobby(context.bot, message, user, name, InlineKeyboardButton, InlineKeyboardMarkup)
+            await quiz(context).open_lobby(context.bot, message, user, name)
             return
         readable = (message.text or message.caption or message.voice or message.audio or message.video_note or message.photo
                     or (message.document and (message.document.mime_type or "").startswith("image/")))
@@ -2137,15 +2137,15 @@ def quiz(context):
 
 
 async def game_command(update, context):
-    """/game: a quiz for the whole group."""
+    """/sgame: a quiz for the whole group."""
     message, user = update.effective_message, update.effective_user
     if not message or not user:
         return
     if message.chat.type == "private":
-        await reply(message, ui(update, "Викторина — игра для групп 🎮 Добавь меня в группу и напиши там /game",
-                                "The quiz is for groups 🎮 Add me to a group and send /game there"))
+        await reply(message, ui(update, f"Викторина — игра для групп 🎮 Добавь меня в группу и напиши там /{game.START}",
+                                f"The quiz is for groups 🎮 Add me to a group and send /{game.START} there"))
         return
-    await quiz(context).open_lobby(context.bot, message, user, speaker(user), InlineKeyboardButton, InlineKeyboardMarkup)
+    await quiz(context).open_lobby(context.bot, message, user, speaker(user))
 
 
 async def top_command(update, context):
@@ -2154,8 +2154,8 @@ async def top_command(update, context):
     if not message:
         return
     if message.chat.type == "private":
-        await reply(message, ui(update, "Рейтинг есть только в группах — там, где играют в /game.",
-                                "The leaderboard lives in groups, where /game is played."))
+        await reply(message, ui(update, f"Рейтинг есть только в группах — там, где играют в /{game.START}.",
+                                f"The leaderboard lives in groups, where /{game.START} is played."))
         return
     await quiz(context).top(context.bot, message.chat_id, message.chat.title or "Группа")
 
@@ -3198,7 +3198,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if (query.data or "").startswith("g:"):  # the group quiz: anyone in the group may press
         user = update.effective_user
-        await quiz(context).on_button(query, user, speaker(user), context.bot, InlineKeyboardButton, InlineKeyboardMarkup)
+        await quiz(context).on_button(query, user, speaker(user), context.bot)
         return
     if not await authorized(update, context):
         await query.answer()
@@ -3460,11 +3460,13 @@ async def post_init(app):
     try:
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
-        group = [BotCommand("game", "🧠 Викторина для всей группы"), BotCommand("top", "🏆 Рейтинг игроков"),
+        group = [BotCommand(game.START, "🧠 Викторина Secret AI для всей группы"),
+                 BotCommand(game.RATING, "🏆 Рейтинг викторины"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
-        await app.bot.set_my_commands([BotCommand("game", "🧠 A quiz for the whole group"), BotCommand("top", "🏆 Leaderboard"),
+        await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
+                                       BotCommand(game.RATING, "🏆 Quiz leaderboard"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
                                        BotCommand("meme", "A TikTok meme")],
                                       scope=BotCommandScopeAllGroupChats())
@@ -3751,8 +3753,9 @@ def main():
     app.add_handler(CommandHandler(["q", "quote"], quote_command))
     app.add_handler(CommandHandler(["dem", "demotivator"], demotivator_command))
     app.add_handler(CommandHandler(["meme", "mem"], meme_command))
-    app.add_handler(CommandHandler(["game", "quiz", "igra"], game_command))
-    app.add_handler(CommandHandler(["top", "rating"], top_command))
+    # Unusual names on purpose: other bots in a group react to /game, /quiz and /top too.
+    app.add_handler(CommandHandler([game.START, "svik"], game_command))
+    app.add_handler(CommandHandler([game.RATING, "stop10"], top_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
