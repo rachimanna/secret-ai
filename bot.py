@@ -683,14 +683,15 @@ class DraftReply:
         if not parts:
             await self.sent[-1].edit_reply_markup(reply_markup=reply_markup)
             return self.sent[-1]
+        await self._clear()
         for index, part in enumerate(parts):
             self.sent.append(await reply(self.target, part, reply_markup if index == len(parts) - 1 else None))
-        await self._clear()
         return self.sent[-1]
 
     async def _clear(self):
-        """Wipe the draft once the real message is there: Telegram keeps a draft ~30 s and replays its typing
-        animation when the chat is reopened, which looked like the answer being written a second time."""
+        """Empty the draft just before the real message goes out (the message then dismisses it): Telegram keeps a
+        draft ~30 s and replayed its typing when the chat was reopened. Cleared after the message, an empty bubble
+        stayed below it instead."""
         if not self.config.get("clear_drafts", True):
             return
         try:
@@ -702,9 +703,9 @@ class DraftReply:
         await self.stop()
         try:
             rest = self.text[self.offset:].rstrip()
+            await self._clear()
             if rest:
                 await send(self.target, rest + "\n\n" + note)
-            await self._clear()
         except TelegramError:
             LOG.warning("Could not clean up an interrupted reply")
 
