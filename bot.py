@@ -60,6 +60,23 @@ SYSTEM = (
     "Reply in plain text, without Markdown formatting (no **bold**, no # headings). "
     "Previous photo markers are not images; do not invent unseen visual details."
 )
+# Translation and writing in languages of the Caucasus and Russia's republics, where models often slip into Russian
+# spelling or another language's script.
+TRANSLATION_RULES = (
+    " Translation: translate meaning, not word by word; keep tone, slang, names and formatting; give just the translation "
+    "unless asked for explanations. For rare languages and dialects add a short note on words you are unsure of instead "
+    "of inventing them, and offer a transliteration or a literal gloss when it helps. Use each language's own standard "
+    "orthography: Chechen (нохчийн мотт) and Ingush in Cyrillic with the palochka Ӏ (never the digit 1, the Latin I or "
+    "the Cyrillic І): хьо, кхин, Ӏуьйре, дика ду, баркалла, нохчийн; write the Chechen digraphs (кх, къ, кӀ, хь, хӀ, "
+    "аь, оь, уь, яь, юь) correctly. Ossetian (ирон æвзаг): Iron by default (Digor only if asked), with the letter æ "
+    "(not а or ae): æмæ, хорз, мæ, дæ, фæндараст. Armenian (հայերեն): Armenian script, Eastern Armenian by default "
+    "(Western if the user writes Western or asks), reformed spelling, Armenian punctuation (։ for a full stop, ՞ for a "
+    "question, ՜ for emphasis, ՝ for a pause). Georgian in Mkhedruli; Avar, Dargin, Lezgian, Lak, Kabardian, Adyghe, "
+    "Karachay-Balkar, Kumyk in their Cyrillic alphabets with Ӏ where it is used; Azerbaijani, Uzbek, Turkmen in Latin "
+    "unless asked for Cyrillic; Tatar, Bashkir, Kazakh, Kyrgyz, Tajik, Yakut in Cyrillic with their own letters "
+    "(ә, ө, ү, ң, һ, җ, ғ, қ, ұ, ӣ, ӯ). If a request could mean two variants (Eastern/Western Armenian, Iron/Digor), "
+    "pick the common one and say which, briefly. Never pass off Russian or another language as the requested one."
+)
 # Code goes out as files (codefiles.extract_files), websites are also published with a link.
 CODE_RULES = (
     " Exception: code. When you write code, a script, a config or a website, put each file in its own fenced block "
@@ -1628,7 +1645,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                       apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
                                                      edit_tool(context, user_id, lang(update))])
-    instructions = (SYSTEM + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
+    instructions = (SYSTEM + TRANSLATION_RULES + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
     speak_only = voice and bool(context.bot_data.get("tts_model"))
     if speak_only:
@@ -1821,7 +1838,7 @@ async def group_chat(update, context):
 
 
 def group_instructions(update):
-    return GROUP_STYLE + CODE_RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
+    return GROUP_STYLE + TRANSLATION_RULES + CODE_RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
 
 
 def humanize(text):
