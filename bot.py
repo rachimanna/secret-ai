@@ -876,7 +876,7 @@ def pick_gemini(ids):
     return found[0] if found else None
 
 
-OPUS_55 = re.compile(r"opus[-._ ]?5[-._ ]?5", re.I)
+SONNET_55 = re.compile(r"sonnet[-._ ]?5[-._ ]?5", re.I)
 
 
 def pick_deepseek(ids):
@@ -1092,12 +1092,12 @@ async def discover_models(app):
     if deepseek:
         deepseek = ANYMODEL_PREFIX + deepseek
         LOG.info("DeepSeek on AnyModel: %s", deepseek)
-    opus_new = None
+    sonnet = None
     if data.get("abacus"):
-        found = sorted((i for i in abacus_ids if OPUS_55.search(i)), key=lambda i: ("thinking" in i.lower(), len(i)))
-        opus_new = ABACUS_PREFIX + (found[0] if found else "claude-opus-5-5")
-        LOG.info("Claude Opus 5.5 on Abacus: %s%s", opus_new, "" if found else " (not in the list, trying the usual id)")
-    data["models"] = [m for m in (gemini, opus_new, claude, gpt, deepseek) if m]  # the first one is the default
+        found = sorted((i for i in abacus_ids if SONNET_55.search(i)), key=lambda i: ("thinking" in i.lower(), len(i)))
+        sonnet = ABACUS_PREFIX + (found[0] if found else "claude-sonnet-5-5")
+        LOG.info("Claude Sonnet 5.5 on Abacus: %s%s", sonnet, "" if found else " (not in the list, trying the usual id)")
+    data["models"] = [m for m in (gemini, sonnet, claude, gpt, deepseek) if m]  # the first one is the default
     chosen = data.get("chat_override")
     data["chat_default"] = chosen if chosen in data["models"] else data["models"][0]
 
