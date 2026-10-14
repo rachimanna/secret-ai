@@ -685,7 +685,18 @@ class DraftReply:
             return self.sent[-1]
         for index, part in enumerate(parts):
             self.sent.append(await reply(self.target, part, reply_markup if index == len(parts) - 1 else None))
+        await self._clear()
         return self.sent[-1]
+
+    async def _clear(self):
+        """Wipe the draft once the real message is there: Telegram keeps a draft ~30 s and replays its typing
+        animation when the chat is reopened, which looked like the answer being written a second time."""
+        if not self.config.get("clear_drafts", True):
+            return
+        try:
+            await self.bot.send_message_draft(self.chat_id, self.draft_id, "")
+        except TelegramError as exc:
+            LOG.warning("Could not clear the draft: %s", type(exc).__name__)
 
     async def abort(self, note):
         await self.stop()
@@ -693,6 +704,7 @@ class DraftReply:
             rest = self.text[self.offset:].rstrip()
             if rest:
                 await send(self.target, rest + "\n\n" + note)
+            await self._clear()
         except TelegramError:
             LOG.warning("Could not clean up an interrupted reply")
 
@@ -3525,6 +3537,7 @@ def main():
         model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
+        clear_drafts=os.environ.get("CLEAR_DRAFTS", "1").strip() != "0",
         logo=os.environ.get("BRAND_EMOJI", "✨").strip() or "✨",
         logo_id=os.environ.get("BRAND_EMOJI_ID", "").strip(),
         tts_model=os.environ.get("OPENAI_TTS_MODEL", "gpt-4o-mini-tts").strip(),
