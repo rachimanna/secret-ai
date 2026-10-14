@@ -10,7 +10,7 @@ import random
 import re
 import time
 
-from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard, InputMediaAnimation
+from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard, InputFile, InputMediaAnimation
 
 import quizart
 
@@ -73,6 +73,11 @@ FALLBACK = [
 ]
 
 GAME_ASK = re.compile(r"(поигра|сыграем|давай\s+(?:в\s+)?игр|викторин|квиз|\bquiz\b|let'?s play)", re.I)
+
+
+def mp4(data, name="quiz"):
+    """Raw bytes arrive as a nameless file ("application/octet-stream"); a .mp4 name makes them a GIF in the chat."""
+    return InputFile(data, filename=f"{name}.mp4")
 
 
 def esc(text):
@@ -145,7 +150,7 @@ class Quiz:
         caption, keyboard = self.lobby_text(game), self.lobby_keyboard(game)
         try:
             clip = await asyncio.to_thread(quizart.banner_clip)
-            game.lobby_message = await bot.send_animation(chat_id, clip, caption=caption, parse_mode="HTML",
+            game.lobby_message = await bot.send_animation(chat_id, mp4(clip, "lobby"), caption=caption, parse_mode="HTML",
                                                           reply_markup=keyboard, width=800, height=400)
         except Exception as exc:
             LOG.warning("Quiz banner animation failed: %s", type(exc).__name__)
@@ -306,7 +311,7 @@ class Quiz:
         message = None
         if clips:
             try:
-                message = await bot.send_animation(game.chat_id, clips[0], caption=waiting(), parse_mode="HTML",
+                message = await bot.send_animation(game.chat_id, mp4(clips[0], "question"), caption=waiting(), parse_mode="HTML",
                                                    reply_markup=keyboard, width=quizart.W, height=quizart.H)
             except Exception as exc:
                 LOG.warning("Quiz animation failed: %s", type(exc).__name__)
@@ -354,7 +359,7 @@ class Quiz:
             result += f"\n💤 не ответили: {silent}"
         try:
             if clips:
-                await message.edit_media(InputMediaAnimation(clips[1], caption=head + result, parse_mode="HTML",
+                await message.edit_media(InputMediaAnimation(mp4(clips[1], "answer"), caption=head + result, parse_mode="HTML",
                                                              width=quizart.W, height=quizart.H))
             else:
                 lines = [f"{'✅' if i == correct else '▫️'} {LETTERS[i]}. {esc(opt)}" for i, opt in enumerate(options)]
@@ -385,7 +390,7 @@ class Quiz:
         topic = TOPICS[game.topic][1]
         try:
             clip = await asyncio.to_thread(quizart.podium_clip, rows, len(game.questions), topic)
-            await bot.send_animation(game.chat_id, clip, caption=caption, parse_mode="HTML", width=720, height=900)
+            await bot.send_animation(game.chat_id, mp4(clip, "results"), caption=caption, parse_mode="HTML", width=720, height=900)
         except Exception as exc:
             LOG.warning("Quiz podium animation failed: %s", type(exc).__name__)
             await bot.send_photo(game.chat_id, quizart.podium(rows, len(game.questions), topic), caption=caption,
