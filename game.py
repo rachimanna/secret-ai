@@ -80,6 +80,10 @@ def mp4(data, name="quiz"):
     return InputFile(data, filename=f"{name}.mp4")
 
 
+def jpg(data):
+    return InputFile(data, filename="preview.jpg")
+
+
 def esc(text):
     return html.escape(str(text or ""), quote=False)
 
@@ -145,9 +149,10 @@ class Quiz:
         game = self.games[chat_id] = Game(chat_id, user.id, name)
         caption, keyboard = self.lobby_text(game), self.lobby_keyboard(game)
         try:
-            clip = await asyncio.to_thread(quizart.banner_clip)
+            clip, preview = await asyncio.to_thread(lambda: (quizart.banner_clip(), quizart.banner_thumb()))
             game.lobby_message = await bot.send_animation(chat_id, mp4(clip, "lobby"), caption=caption, parse_mode="HTML",
-                                                          reply_markup=keyboard, width=800, height=400)
+                                                          reply_markup=keyboard, width=800, height=400,
+                                                          thumbnail=jpg(preview))
         except Exception as exc:
             LOG.warning("Quiz banner animation failed: %s", type(exc).__name__)
             game.lobby_message = await bot.send_photo(chat_id, quizart.banner(), caption=caption, parse_mode="HTML",
@@ -270,12 +275,14 @@ class Quiz:
                 game.render.cancel()
 
     async def _render(self, game):
-        """Draw the clips ahead of the game: (question clip, reveal clip), or None where drawing failed."""
+        """Draw the clips ahead of the game: (question clip, its preview, reveal clip, its preview), or None where
+        drawing failed."""
         title = TOPICS[game.topic][1]
         for number, (question, options, correct, _) in enumerate(game.questions):
             try:
                 art = quizart.QuestionArt(number + 1, len(game.questions), title, question, options, ANSWER_SECONDS)
-                clips = (await asyncio.to_thread(art.question_clip), await asyncio.to_thread(art.reveal_clip, correct))
+                clips = await asyncio.to_thread(lambda: (art.question_clip(), art.question_thumb(),
+                                                         art.reveal_clip(correct), art.reveal_thumb(correct)))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -293,8 +300,8 @@ class Quiz:
 
         def waiting(seconds_left=None):
             count = f"ответили {len(game.answers)}/{len(game.players)}"
-            if seconds_left is None:  # the animation shows the question and the timer itself
-                return f"{number}/{total} · {count}"
+            if seconds_left is None:  # the animation has the timer; the question stays here too, readable without playing
+                return f"<b>{number}/{total}. {esc(question)}</b>\n{count}"
             filled = round(10 * seconds_left / ANSWER_SECONDS)
             return head + f"⏱ {'▰' * filled}{'▱' * (10 - filled)} {seconds_left} с · {count}"
 
@@ -308,7 +315,8 @@ class Quiz:
         if clips:
             try:
                 message = await bot.send_animation(game.chat_id, mp4(clips[0], "question"), caption=waiting(), parse_mode="HTML",
-                                                   reply_markup=keyboard, width=quizart.W, height=quizart.H)
+                                                   reply_markup=keyboard, width=quizart.W, height=quizart.H,
+                                                   thumbnail=jpg(clips[1]))
             except Exception as exc:
                 LOG.warning("Quiz animation failed: %s", type(exc).__name__)
                 clips = None
@@ -346,21 +354,20 @@ class Quiz:
             else:
                 game.streak[user_id] = 0
                 missed.append(esc(game.players[user_id]))
-        result = f"✅ <b>{esc(options[correct])}</b>" + (f"\n💡 {esc(fact)}" if fact else "")
+        result = f"<b>{number}/{total}. {esc(question)}</b>\n✅ <b>{esc(options[correct])}</b>" + (f"\n💡 {esc(fact)}" if fact else "")
         result += ("\n🏅 " + ", ".join(gained)) if gained else "\n😶 Никто не угадал"
         if missed:
             result += "\n❌ " + ", ".join(missed)
         try:
             if clips:
-                await message.edit_media(InputMediaAnimation(mp4(clips[1], "answer"), caption=result, parse_mode="HTML",
-                                                             width=quizart.W, height=quizart.H))
+                await message.edit_media(InputMediaAnimation(mp4(clips[2], "answer"), caption=result, parse_mode="HTML",
+                                                             width=quizart.W, height=quizart.H, thumbnail=jpg(clips[3])))
             else:
-                lines = [f"{'✅' if i == correct else '▫️'} {LETTERS[i]}. {esc(opt)}" for i, opt in enumerate(options)]
-                await message.edit_text(head + "\n".join(lines) + "\n\n" + result, parse_mode="HTML")
+                await message.edit_text(result, parse_mode="HTML")
         except Exception as exc:
             LOG.warning("Quiz reveal failed: %s", type(exc).__name__)
             try:
-                await bot.send_message(game.chat_id, head + result, parse_mode="HTML")
+                await bot.send_message(game.chat_id, result, parse_mode="HTML")
             except Exception:
                 pass
         game.state = "question"
@@ -382,8 +389,10 @@ class Quiz:
                   f"\n\nЕщё раз — /{START} · рейтинг группы — /{RATING}"
         topic = TOPICS[game.topic][1]
         try:
-            clip = await asyncio.to_thread(quizart.podium_clip, rows, len(game.questions), topic)
-            await bot.send_animation(game.chat_id, mp4(clip, "results"), caption=caption, parse_mode="HTML", width=720, height=900)
+            clip, preview = await asyncio.to_thread(lambda: (quizart.podium_clip(rows, len(game.questions), topic),
+                                                             quizart.podium_thumb(rows, len(game.questions), topic)))
+            await bot.send_animation(game.chat_id, mp4(clip, "results"), caption=caption, parse_mode="HTML", width=720,
+                                     height=900, thumbnail=jpg(preview))
         except Exception as exc:
             LOG.warning("Quiz podium animation failed: %s", type(exc).__name__)
             await bot.send_photo(game.chat_id, quizart.podium(rows, len(game.questions), topic), caption=caption,

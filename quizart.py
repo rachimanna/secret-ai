@@ -160,6 +160,15 @@ def encode(frames):
         return (folder / "out.mp4").read_bytes()
 
 
+def thumb(image):
+    """The preview Telegram shows before (or instead of) playing: the finished card, at most 320 px."""
+    small = image.convert("RGB")
+    small.thumbnail((320, 320), Image.LANCZOS)
+    out = io.BytesIO()
+    small.save(out, "JPEG", quality=85)
+    return out.getvalue()
+
+
 def jpeg(image):
     out = io.BytesIO()
     image.convert("RGB").save(out, "JPEG", quality=92)
@@ -279,10 +288,17 @@ class QuestionArt:
         still = self._scene(length + 1)
         for s in range(self.seconds * 2):
             yield self._timer(still.copy(), self.seconds - s / 2), 0.5
-        yield self._timer(still.copy(), 0), 30.0
+        yield self._timer(still.copy(), 0), 2.0
 
     def reveal_clip(self, correct):
         return encode(self._reveal_frames(correct))
+
+    def question_thumb(self):
+        return thumb(self._timer(self._scene(99), self.seconds))
+
+    def reveal_thumb(self, correct):
+        *_, (last, _) = self._reveal_frames(correct)
+        return thumb(last)
 
     def _reveal_frames(self, correct):
         right = self._tile(correct, GREEN, mark="right")
@@ -300,7 +316,7 @@ class QuestionArt:
                 else:
                     put(card, grey[i], x, y, alpha=ease_out(t / 0.4))
             yield card, 1 / FPS
-        yield card, 90.0
+        yield card, 3.0
 
 
 # ---------- the lobby ----------
@@ -337,7 +353,7 @@ def banner_frames():
 
     for f in range(int(1.6 * FPS) + 1):
         yield frame(f / FPS), 1 / FPS
-    yield frame(9), 300.0
+    yield frame(9), 4.0
 
 
 def banner_clip():
@@ -347,6 +363,11 @@ def banner_clip():
 def banner():
     *_, (last, _) = banner_frames()
     return jpeg(last)
+
+
+def banner_thumb():
+    *_, (last, _) = banner_frames()
+    return thumb(last)
 
 
 # ---------- the end ----------
@@ -409,8 +430,12 @@ def podium_clip(rows, questions, topic):
     def frames():
         for f in range(int(2.4 * FPS) + 1):
             yield podium_frame(rows, questions, topic, f / FPS), 1 / FPS
-        yield podium_frame(rows, questions, topic, 9), 600.0
+        yield podium_frame(rows, questions, topic, 9), 5.0
     return encode(frames())
+
+
+def podium_thumb(rows, questions, topic):
+    return thumb(podium_frame(rows, questions, topic, 10))
 
 
 def podium(rows, questions, topic):
