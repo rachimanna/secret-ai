@@ -858,6 +858,16 @@ def pick_gemini(ids):
     return found[0] if found else None
 
 
+def pick_deepseek(ids):
+    """The newest DeepSeek chat model in the catalog (a reasoner only if nothing else), provider-prefixed ids first."""
+    found = [i for i in ids if "deepseek" in i.lower() and not any(w in i.lower() for w in ("coder", "distill", "ocr", "vl"))]
+    def version(i):
+        return [int(n) for n in re.findall(r"\d+", i.lower().split("deepseek", 1)[1])][:3]
+    found.sort(key=lambda i: ("reason" in i.lower() or "r1" in i.lower(), not version(i), [-n for n in version(i)],
+                              "/" not in i, i))
+    return found[0] if found else None
+
+
 def chat_provider(model):
     return next((prefix for prefix in CHAT_PROVIDERS if model.startswith(prefix)), None)
 
@@ -906,6 +916,10 @@ def model_identity(model):
         return (f" You run on {pretty} {version}".rstrip() + ", a model made by Anthropic. If someone asks which model you "
                 "are or who created you, say plainly that you are " + f"{pretty} {version}".strip() + " by Anthropic, "
                 "working inside the Secret AI Telegram bot.")
+    if "deepseek" in name:
+        pretty = "DeepSeek " + name.split("deepseek", 1)[1].strip("-").replace("-", " ").upper()
+        return (f" You run on {pretty.strip()}, a model made by DeepSeek. If someone asks which model you are or who created "
+                f"you, say plainly that you are {pretty.strip()} by DeepSeek, working inside the Secret AI Telegram bot.")
     if "gemini" in name:
         pretty = " ".join(p.capitalize() if not p[0].isdigit() else p for p in name.replace("gemini-", "gemini ").replace("-", " ").split())
         return (f" You run on {pretty}, a model made by Google. If someone asks which model you are or who created you, "
@@ -1043,7 +1057,11 @@ async def discover_models(app):
             LOG.info("Gemini on AnyModel: %s", gemini)
         else:
             LOG.warning("Gemini 3.8 is not in the AnyModel catalog")
-    data["models"] = [m for m in (gemini, claude, gpt) if m]
+    deepseek = pick_deepseek(any_ids) if os.environ.get("DEEPSEEK_CHAT", "1").strip() != "0" else None
+    if deepseek:
+        deepseek = ANYMODEL_PREFIX + deepseek
+        LOG.info("DeepSeek on AnyModel: %s", deepseek)
+    data["models"] = [m for m in (gemini, claude, gpt, deepseek) if m]
     chosen = data.get("chat_override")
     data["chat_default"] = chosen if chosen in data["models"] else data["models"][0]
 
