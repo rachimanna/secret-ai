@@ -36,6 +36,7 @@ from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           PreCheckoutQueryHandler, filters)
 
+import digest
 import game
 import hosting
 import links
@@ -2230,6 +2231,42 @@ def quiz(context):
     return data["quiz"]
 
 
+def day_digest(data):
+    """The groups' daily summary, created on first use (it shares the groups' database)."""
+    if "digest" not in data:
+        async def ask(chat_id, instructions, text):
+            return await quick_answer(data, group_model(data, chat_id), instructions, text, max_tokens=1500)
+        data["digest"] = digest.Digest(data["groups"], ask)
+    return data["digest"]
+
+
+async def day_command(update, context):
+    """/sday: the day's summary now; "/sday off" / "/sday on" (admins) turn the evening post off and on."""
+    message, user = update.effective_message, update.effective_user
+    if not message or not user:
+        return
+    if message.chat.type == "private":
+        await reply(message, "«Итоги дня» — для групп: добавь меня в группу и напиши там /sday")
+        return
+    summary, arg = day_digest(context.bot_data), (context.args[0].lower() if context.args else "")
+    if arg in ("off", "on", "выкл", "вкл"):
+        try:
+            member = await context.bot.get_chat_member(message.chat_id, user.id)
+            is_admin = member.status in ("administrator", "creator")
+        except TelegramError:
+            is_admin = False
+        if not is_admin:
+            await message.reply_text("Включать и выключать итоги дня может только админ группы")
+            return
+        on = arg in ("on", "вкл")
+        summary.set_enabled(message.chat_id, on)
+        await message.reply_text(f"Итоги дня по вечерам ({digest.HOUR}:00 мск) " + ("включены ✅" if on else "выключены ⏸")
+                                 + f". Получить сейчас: /{digest.COMMAND}")
+        return
+    await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
+    await summary.post(context.bot, message.chat_id, message.chat.title, manual=True)
+
+
 async def game_command(update, context):
     """/sgame: a quiz for the whole group."""
     message, user = update.effective_message, update.effective_user
@@ -3632,6 +3669,7 @@ async def post_init(app):
     app.bot_data["bot_name"] = app.bot.username
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
+    app.bot_data["digest_task"] = asyncio.create_task(day_digest(app.bot_data).run(app))  # 22:00 Moscow, every group
     if app.bot_data.get("snapshots"):
         app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
     if hosting.updates_enabled():  # not Render: pull new commits from GitHub and restart by itself
@@ -3652,11 +3690,13 @@ async def post_init(app):
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
         group = [BotCommand(game.START, "🧠 Викторина Secret AI для всей группы"),
                  BotCommand(game.RATING, "🏆 Рейтинг викторины"), BotCommand(game.STOP, "⏹ Остановить викторину"),
+                 BotCommand(digest.COMMAND, "📊 Итоги дня"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
         await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
                                        BotCommand(game.RATING, "🏆 Quiz leaderboard"), BotCommand(game.STOP, "⏹ Stop the quiz"),
+                                       BotCommand(digest.COMMAND, "📊 Day summary"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
                                        BotCommand("meme", "A TikTok meme")],
                                       scope=BotCommandScopeAllGroupChats())
@@ -3950,6 +3990,7 @@ def main():
     app.add_handler(CommandHandler([game.START, "svik"], game_command))
     app.add_handler(CommandHandler([game.RATING, "stop10"], top_command))
     app.add_handler(CommandHandler(game.STOP, stop_game_command))
+    app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
