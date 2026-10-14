@@ -36,6 +36,7 @@ from telegram.ext import (Application, BusinessConnectionHandler, CallbackContex
                           PreCheckoutQueryHandler, filters)
 
 import game
+import links
 import miniapp
 import persist
 import secretary as sec
@@ -1607,7 +1608,30 @@ async def read_question(update, context):
         encoded = base64.b64encode(raw).decode("ascii")
         content = [{"type": "input_text", "text": question}, {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}"}]
         return question, content, PHOTO_MARKER + question
+    url = links.find(question)
+    if url:  # a TikTok link: watch it first, then answer about it
+        return await read_tiktok(update, context, question, url)
     return question, question, question
+
+
+async def read_tiktok(update, context, question, url):
+    message = update.effective_message
+    status = await reply(message, ui(update, "🎬 Смотрю видео…", "🎬 Watching the video…"))
+    try:
+        text, frames, label = await links.watch(context.bot_data["http"], context.bot_data["client"], url,
+                                                 (update.effective_user.language_code or "ru")[:2])
+    except Exception as exc:  # a removed video, a private account or tikwm being down
+        LOG.warning("TikTok link failed: %s %s", type(exc).__name__, str(exc)[:120])
+        note = (f"{question}\n\n[The bot could not open this TikTok link (deleted, private or the service is down). "
+                "Say so briefly and ask to send the video itself as a file instead.]")
+        return question, note, question
+    finally:
+        try:
+            await status.delete()
+        except TelegramError:
+            pass
+    LOG.info("Watched a TikTok: %d frames, %d chars", len(frames), len(text))
+    return question, links.content(text, question, frames), f"{question} {label}"
 
 
 def user_model(bot_data, user_id):
