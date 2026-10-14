@@ -16,7 +16,7 @@ import quizart
 
 LOG = logging.getLogger(__name__)
 
-START, RATING = "sgame", "srating"  # unusual names: other bots in the group answer /game and /top too
+START, RATING, STOP = "sgame", "srating", "sstop"  # unusual names: other bots in the group answer /game and /top too
 TOPICS = {
     "mix": ("🎲", "Всё подряд"), "chat": ("💬", "Про наш чат"), "movies": ("🎬", "Кино и сериалы"),
     "music": ("🎧", "Музыка"), "sport": ("⚽", "Спорт"), "science": ("🧪", "Наука и мир"),
@@ -130,14 +130,14 @@ class Quiz:
     def lobby_text(self, game):
         emoji, title = TOPICS[game.topic]
         people = ", ".join(esc(name) for name in game.players.values())
-        return f"<b>🧠 Викторина</b> · {emoji} {esc(title)}\n👥 {people}"
+        return f"<b>🧠 Викторина</b> · {emoji} {esc(title)}\n👥 {people}\nОстановить — /{STOP}"
 
     def lobby_keyboard(self, game):
         topics = [Button(f"{'✅ ' if key == game.topic else ''}{emoji} {title}", callback_data=f"g:t:{key}")
                   for key, (emoji, title) in TOPICS.items()]
         rows = [[Button("✋ Я играю", callback_data="g:j")]]
         rows += [topics[i:i + 2] for i in range(0, len(topics), 2)]
-        rows.append([Button("▶️ Начать", callback_data="g:s"), Button("✖️ Отмена", callback_data="g:x")])
+        rows.append([Button("▶️ Начать", callback_data="g:s")])
         return Keyboard(rows)
 
     async def open_lobby(self, bot, message, user, name):
@@ -168,6 +168,26 @@ class Quiz:
             except Exception:
                 pass
 
+    async def stop(self, bot, chat_id, user_id, is_admin):
+        """/sstop: end the game in this chat — its host or a group admin. Returns the reply text."""
+        game = self.games.get(chat_id)
+        if not game or game.state == "done":
+            return f"Сейчас игры нет. Начать: /{START}"
+        if user_id != game.host_id and not is_admin:
+            return "Остановить игру может ведущий или админ группы"
+        started = game.state != "lobby"
+        game.state = "done"
+        if game.task:
+            game.task.cancel()
+        if game.render:
+            game.render.cancel()
+        if not started:
+            try:
+                await game.lobby_message.edit_caption("Викторина отменена.")
+            except Exception:
+                pass
+        return "⏹ Викторина остановлена" + (" — очки этой игры не считаются." if started else ".")
+
     # ---------- buttons ----------
 
     async def on_button(self, query, user, name, bot):
@@ -196,14 +216,6 @@ class Quiz:
                     return
                 game.topic = parts[2]
                 await query.answer(TOPICS[game.topic][1])
-            elif action == "x":
-                if user.id != game.host_id:
-                    await query.answer("Отменить может только ведущий")
-                    return
-                game.state = "done"
-                await query.answer("Отменено")
-                await game.lobby_message.edit_caption("Викторина отменена.")
-                return
             elif action == "s":
                 if user.id != game.host_id:
                     await query.answer("Запускает ведущий")

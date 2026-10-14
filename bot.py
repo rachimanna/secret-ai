@@ -2148,6 +2148,19 @@ async def game_command(update, context):
     await quiz(context).open_lobby(context.bot, message, user, speaker(user))
 
 
+async def stop_game_command(update, context):
+    """/sstop: stop the group's quiz (its host or an admin)."""
+    message, user = update.effective_message, update.effective_user
+    if not message or not user or message.chat.type == "private":
+        return
+    try:
+        member = await context.bot.get_chat_member(message.chat_id, user.id)
+        is_admin = member.status in ("administrator", "creator")
+    except TelegramError:
+        is_admin = False
+    await message.reply_text(await quiz(context).stop(context.bot, message.chat_id, user.id, is_admin))
+
+
 async def top_command(update, context):
     """/top: the group's all-time quiz leaderboard."""
     message = update.effective_message
@@ -3461,12 +3474,12 @@ async def post_init(app):
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
         group = [BotCommand(game.START, "🧠 Викторина Secret AI для всей группы"),
-                 BotCommand(game.RATING, "🏆 Рейтинг викторины"),
+                 BotCommand(game.RATING, "🏆 Рейтинг викторины"), BotCommand(game.STOP, "⏹ Остановить викторину"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
         await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
-                                       BotCommand(game.RATING, "🏆 Quiz leaderboard"),
+                                       BotCommand(game.RATING, "🏆 Quiz leaderboard"), BotCommand(game.STOP, "⏹ Stop the quiz"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
                                        BotCommand("meme", "A TikTok meme")],
                                       scope=BotCommandScopeAllGroupChats())
@@ -3756,6 +3769,7 @@ def main():
     # Unusual names on purpose: other bots in a group react to /game, /quiz and /top too.
     app.add_handler(CommandHandler([game.START, "svik"], game_command))
     app.add_handler(CommandHandler([game.RATING, "stop10"], top_command))
+    app.add_handler(CommandHandler(game.STOP, stop_game_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
