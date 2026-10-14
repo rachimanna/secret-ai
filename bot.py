@@ -29,7 +29,7 @@ from openai import (
 from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
                       MessageEntity, ReplyParameters, Update, User, WebAppInfo)
 from codefiles import extract_files, site_file
-from fun import LEVELS, GroupStore, MemeError, demotivator, quote_card, tiktok_meme
+from fun import LEVELS, GroupStore, ago, MemeError, demotivator, quote_card, tiktok_meme
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
@@ -215,9 +215,10 @@ class Memory:
         if not words or not before_id:
             return []
         stems = [w[:max(4, len(w) - 2)] for w in words]  # Russian endings vary: "айлы", "айле" -> "айл"
+        variants = list(dict.fromkeys(v for s in stems for v in (s, s.capitalize())))  # fast LIKE: case only for Latin
         rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? AND id < ? AND ("
-                               + " OR ".join("ulower(content) LIKE ?" for _ in stems) + ") ORDER BY id DESC LIMIT 3000",
-                               (user_id, before_id, *[f"%{s}%" for s in stems])).fetchall()
+                               + " OR ".join("content LIKE ?" for _ in variants) + ") ORDER BY id DESC LIMIT 3000",
+                               (user_id, before_id, *[f"%{v}%" for v in variants])).fetchall()
         best = sorted(rows, key=lambda r: (-sum(s in r[2].lower() for s in stems), -r[0]))[:RECALL_MATCHES]
         ids = sorted({i for id_, role, _ in best for i in (id_, id_ + 1 if role == "user" else id_ - 1)})
         if not ids:
@@ -1684,21 +1685,6 @@ async def app_tools(bot_data, user_id, taken):
     return tools, names
 
 
-def ago(created):
-    if not created:
-        return "давно"
-    days = (time.time() - created) / 86400
-    if days < 1:
-        return "сегодня"
-    if days < 2:
-        return "вчера"
-    if days < 30:
-        return f"{int(days)} дн. назад"
-    if days < 365:
-        return f"{int(days // 30)} мес. назад"
-    return f"{int(days // 365)} г. назад"
-
-
 def recall_note(found):
     """Old parts of the conversation, for the instructions: the bot remembers them like a friend would."""
     if not found:
@@ -1963,9 +1949,9 @@ async def group_chat(update, context):
         else:  # a sticker, gif or video in reply to the bot
             question = content = describe_message(message) or "…"
         before = "\n".join(store.lines(chat_id))
-        older = store.search(chat_id, question)  # from the 10 000 kept: the old messages this one is about
+        older = store.search(chat_id, question)  # from everything kept: the old messages this one is about
         store.add_line(chat_id, f"{name}: {question}", message.message_id, user.id)
-        head = ((f"Older messages from this group that may be relevant (oldest first):\n" + "\n".join(older) + "\n\n"
+        head = ((f"From this group's older history (beyond the recent messages; you remember it — bring it up naturally when it matters, never say you searched), oldest first:\n" + "\n".join(older) + "\n\n"
                  if older else "")
                 + (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:")
         content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
