@@ -1856,7 +1856,10 @@ GROUP_MEDIA_TOOL = {"type": "function", "name": "make_media",
                                     "itself in a few minutes; just say briefly that it's coming."),
                     "parameters": {"type": "object", "properties": {
                         "kind": {"type": "string", "enum": ["video", "photo"]},
-                        "description": {"type": "string", "description": "what to show, detailed, as agreed in the chat (any language)"},
+                        "description": {"type": "string", "description": (
+                            "what to show, detailed, as agreed in the chat (any language). Any words to appear on the "
+                            "picture go in quotes exactly as they must be written, spelled and declined correctly "
+                            "(e.g. «для Айлы»)")},
                         "seconds": {"type": "integer", "description": "video length asked for, 8 if not said"}},
                         "required": ["kind", "description"], "additionalProperties": False}}
 
@@ -2665,7 +2668,10 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
     elif not key:
         return "no_key"
     cost = price(kind, seconds)
-    how = "owner" if data["connections"].get_meta("owner") == user_id else data["memory"].gen_charge(user_id, kind, cost)
+    in_group = bool(chat_id) and chat_id != user_id
+    free_here = in_group and kind == "photo" and os.environ.get("GROUP_PHOTOS_FREE", "1").strip() != "0"
+    how = ("owner" if data["connections"].get_meta("owner") == user_id or free_here
+           else data["memory"].gen_charge(user_id, kind, cost))
     if not how:
         return "no_credits"
     job = {"user_id": user_id, "language": language, "kind": kind, "prompt": prompt, "fmt": fmt if fmt in FORMATS else "portrait",
@@ -2903,7 +2909,8 @@ async def generation_job(app, job):
     except TelegramError:
         pass
     try:
-        caption = job["prompt"][:900]
+        # In groups no caption: the prompt is the model's own (often English) description, not something to show.
+        caption = None if job.get("chat_id") not in (None, user_id) else job["prompt"][:900]
         if kind == "photo" and (job.get("images") or job["model"] == OPENAI_IMAGE):
             images = await photo_bytes(bot, job.get("images"))
             try:
