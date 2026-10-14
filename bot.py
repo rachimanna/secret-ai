@@ -858,6 +858,9 @@ def pick_gemini(ids):
     return found[0] if found else None
 
 
+OPUS_55 = re.compile(r"opus[-._ ]?5[-._ ]?5", re.I)
+
+
 def pick_deepseek(ids):
     """The newest DeepSeek chat model in the catalog (a reasoner only if nothing else), provider-prefixed ids first."""
     found = [i for i in ids if "deepseek" in i.lower() and not any(w in i.lower() for w in ("coder", "distill", "ocr", "vl"))]
@@ -960,8 +963,9 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
         raise AuthenticationError(f"{env} is not set", body=None,
                                   response=httpx.Response(401, request=httpx.Request("POST", ABACUS_URL)))
     messages = chat_messages(request.get("instructions"), request["input"])
-    tools = chat_tools(toolbox) if provider == ANYMODEL_PREFIX else []
-    if provider == ANYMODEL_PREFIX and context.bot_data.get("web_search") and context.bot_data.get("client"):
+    no_tools = context.bot_data.setdefault("no_tools", set())
+    tools = chat_tools(toolbox) if provider not in no_tools else []
+    if provider not in no_tools and context.bot_data.get("web_search") and context.bot_data.get("client"):
         tools.append(WEB_TOOL)
     text, incomplete = "", False
     for _ in range(MAX_TOOL_ROUNDS):
@@ -969,7 +973,16 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
                    "max_tokens": min(request.get("max_output_tokens", 8000), 32000)}
         if tools:
             options["tools"] = tools
-        stream = await client.chat.completions.create(**options)
+        try:
+            stream = await client.chat.completions.create(**options)
+        except BadRequestError as exc:
+            if not tools or "tool" not in str(exc).lower():
+                raise
+            no_tools.add(provider)  # this gateway refuses function tools: plain answers from now on
+            LOG.warning("%s refuses tools; answering without them", provider)
+            tools = []
+            options.pop("tools")
+            stream = await client.chat.completions.create(**options)
         said, calls, finish = "", {}, None
         async for chunk in stream:
             if not chunk.choices:
@@ -1061,7 +1074,12 @@ async def discover_models(app):
     if deepseek:
         deepseek = ANYMODEL_PREFIX + deepseek
         LOG.info("DeepSeek on AnyModel: %s", deepseek)
-    data["models"] = [m for m in (gemini, claude, gpt, deepseek) if m]
+    opus_new = None
+    if data.get("abacus"):
+        found = sorted((i for i in abacus_ids if OPUS_55.search(i)), key=lambda i: ("thinking" in i.lower(), len(i)))
+        opus_new = ABACUS_PREFIX + (found[0] if found else "claude-opus-5-5")
+        LOG.info("Claude Opus 5.5 on Abacus: %s%s", opus_new, "" if found else " (not in the list, trying the usual id)")
+    data["models"] = [m for m in (gemini, claude, opus_new, gpt, deepseek) if m]
     chosen = data.get("chat_override")
     data["chat_default"] = chosen if chosen in data["models"] else data["models"][0]
 
