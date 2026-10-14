@@ -120,6 +120,21 @@ def _git(*args, timeout=120):
     return subprocess.run(["git", *args], cwd=HERE, capture_output=True, text=True, timeout=timeout)
 
 
+STARTED = time.time()
+
+
+def version():
+    """(short commit, its message, its date) of the running code, or Render's commit, or empty strings."""
+    sha = os.environ.get("RENDER_GIT_COMMIT", "")
+    try:
+        found = _git("log", "-1", "--format=%h|%s|%cd", "--date=format:%d.%m %H:%M", timeout=10)
+        if found.returncode == 0 and found.stdout.strip():
+            return tuple(found.stdout.strip().split("|", 2))
+    except Exception:
+        pass
+    return (sha[:7], "", "")
+
+
 def updates_enabled():
     return not on_render() and (HERE / ".git").exists() and os.environ.get("SELF_UPDATE", "1").strip() != "0"
 

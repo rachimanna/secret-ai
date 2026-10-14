@@ -1,6 +1,7 @@
 """Secret AI: Telegram polling bot with a Render HTTP health endpoint."""
 import asyncio
 import base64
+import html
 import io
 import json
 import logging
@@ -1519,6 +1520,19 @@ def wipe_all(data):
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await authorized(update, context):
         await send(update.effective_message, f"Telegram ID: {update.effective_user.id}")
+
+
+async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/version: which update is running and for how long — to see that a new version arrived."""
+    if not await authorized(update, context):
+        return
+    sha, subject, date = await asyncio.to_thread(hosting.version)
+    minutes = int((time.time() - hosting.STARTED) // 60)
+    uptime = f"{minutes // 60} ч {minutes % 60} мин" if minutes >= 60 else f"{minutes} мин"
+    text = (f"🔖 Версия: <code>{sha or '?'}</code>" + (f" от {date}" if date else "")
+            + (f"\n📝 {html.escape(subject[:150])}" if subject else "") + f"\n⏱ Работает: {uptime}"
+            + ("\n🔄 Обновляется с GitHub сам, раз в 5 минут" if hosting.updates_enabled() else ""))
+    await update.effective_message.reply_text(text, parse_mode="HTML")
 
 
 async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3843,6 +3857,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler(["version", "v"], version_command))
     app.add_handler(CommandHandler("emojiid", emojiid))
     app.add_handler(CommandHandler(["app", "connect"], open_app))
     app.add_handler(CommandHandler(["q", "quote"], quote_command))
