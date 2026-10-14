@@ -36,6 +36,7 @@ from telegram.ext import (Application, BusinessConnectionHandler, CallbackContex
                           PreCheckoutQueryHandler, filters)
 
 import game
+import hosting
 import links
 import miniapp
 import persist
@@ -3487,7 +3488,13 @@ async def post_init(app):
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
     if app.bot_data.get("snapshots"):
         app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
-    if app.bot_data.get("public_url") and os.environ.get("KEEP_AWAKE", "1").strip() != "0":
+    if hosting.updates_enabled():  # not Render: pull new commits from GitHub and restart by itself
+        async def before_restart():
+            if app.bot_data.get("snapshots"):
+                await asyncio.wait_for(asyncio.to_thread(app.bot_data["snapshots"].save), 25)
+        app.bot_data["update_task"] = asyncio.create_task(hosting.self_update(before_restart))
+    if (app.bot_data.get("public_url") and hosting.on_render()
+            and os.environ.get("KEEP_AWAKE", "1").strip() != "0"):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     await resolve_abacus_model(app)
     await discover_models(app)
@@ -3696,12 +3703,13 @@ def main():
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     for name in (LOG.name, "persist", "media"):  # our own notes (voice used, database restored…) are worth seeing
         logging.getLogger(name).setLevel(logging.INFO)
+    hosting.load_env()  # bot hosting panels (h1cloud…) have no environment settings: a .env file instead
     token, key = os.environ.get("TELEGRAM_TOKEN", "").strip(), os.environ.get("OPENAI_API_KEY", "").strip()
     if not token or not key:
         raise SystemExit("Set TELEGRAM_TOKEN and OPENAI_API_KEY environment variables.")
     try:
         allowed = parse_allowed(os.environ.get("ALLOWED_USERS", ""))
-        port = int(os.environ.get("PORT", "10000"))
+        port = int(hosting.default_port())
         if not 1 <= port <= 65535:
             raise ValueError()
     except ValueError:
@@ -3714,7 +3722,8 @@ def main():
             snapshots.restore()
         except Exception as exc:  # better to start with an empty memory than not at all
             LOG.error("Could not restore the database from Postgres: %s %s", type(exc).__name__, str(exc)[:200])
-    public_url = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
+    public_url = (hosting.start_tunnel(port) or os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+                  or "").strip().rstrip("/")
     if public_url and not public_url.startswith("https://"):
         raise SystemExit("PUBLIC_URL must start with https:// (Telegram Mini Apps require HTTPS).")
     # Service tokens are encrypted with ENCRYPTION_KEY; without it the key is derived from the bot token.
@@ -3816,6 +3825,7 @@ def main():
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+        hosting.stop_tunnel()
 
 
 if __name__ == "__main__":
