@@ -422,9 +422,9 @@
   .backdrop { position: absolute; height: 640px; }
   .topbar { flex-wrap: nowrap; }
   .pill { height: 40px; padding: 0 14px; font-size: 15.5px; min-width: 0; }
-  #model-btn { flex: 1 1 auto; max-width: 58%; }
+  #model-btn { flex: 0 1 auto; max-width: 55%; }
   .pill .model-name { max-width: 100%; }
-  .pill.cta { flex: 0 1 auto; }
+  .pill.cta { flex: 0 0 auto; }
   .pill.cta span { overflow: hidden; text-overflow: ellipsis; }
   .hero { padding: 18px 0 22px; }
   .hero .logo { width: 108px; height: 108px; }
@@ -911,9 +911,11 @@ function prettyModel(id) {
     .replace(/-(\w)/g, (_, c) => " " + c.toUpperCase()).replace(/ (\d)/g, " $1").replace(/(\d) (\d)/g, "$1.$2")
     .replace(/ \d{8}$/, "").replace(/^Claude (\w)/, (_, c) => "Claude " + c.toUpperCase());
 }
+// The top button is narrow: "Sonnet 5.5", "Opus 4.6", "GPT 6.1 Sol" — the full name stays in the list.
+const shortModel = id => prettyModel(id).replace(/^Claude /, "");
 function renderHeader() {
   const s = state.settings;
-  $("model-name").textContent = prettyModel(s.model);
+  $("model-name").textContent = shortModel(s.model);
   $("hello").textContent = T.hello(state.user.first_name);
   const n = connectedCount();
   $("cta-text").textContent = n ? T.ctaSome(n) : T.ctaNone;

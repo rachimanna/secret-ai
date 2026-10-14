@@ -1452,6 +1452,28 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(update.effective_message, ui(update, "🧹 Память очищена. Начнём новый диалог!", "🧹 Memory cleared. Let's start a new conversation!"))
 
 
+async def wipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/wipe (owner only): forget everything — every private chat, the facts about people and the groups' history."""
+    if not await authorized(update, context):
+        return
+    if context.bot_data["connections"].get_meta("owner") != update.effective_user.id:
+        await send(update.effective_message, "Это может только владелец бота.")
+        return
+    await send(update.effective_message, "⚠️ Стереть ВСЮ память бота: переписки всех людей, факты о людях и историю групп? "
+               "Это нельзя отменить.", InlineKeyboardMarkup([[InlineKeyboardButton("Да, стереть всё", callback_data="wipe:yes"),
+                                                               InlineKeyboardButton("Отмена", callback_data="wipe:no")]]))
+
+
+def wipe_all(data):
+    memory, groups = data["memory"], data["groups"]
+    with memory.db:
+        memory.db.execute("DELETE FROM messages")
+        memory.db.execute("DELETE FROM facts")
+    with groups.db:
+        groups.db.execute("DELETE FROM group_messages")
+        groups.db.execute("DELETE FROM group_phrases")
+
+
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await authorized(update, context):
         await send(update.effective_message, f"Telegram ID: {update.effective_user.id}")
@@ -3138,6 +3160,18 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       reply_markup=persona_keyboard(update, data[5:]))
         return
 
+    if data.startswith("wipe:"):
+        if context.bot_data["connections"].get_meta("owner") != update.effective_user.id:
+            await query.answer()
+            return
+        if data == "wipe:yes":
+            wipe_all(context.bot_data)
+            await query.answer("Готово")
+            await query.edit_message_text("🧹 Вся память бота стёрта. Начинаем с нуля.")
+        else:
+            await query.answer()
+            await query.edit_message_text("Отменено, память на месте.")
+        return
     if data == "reset":
         async with user_lock(context, user_id):
             memory.reset(user_id)
@@ -3649,6 +3683,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler(["secretary", "sekretar"], secretary_command))
     app.add_handler(CommandHandler(["voice", "golos"], voice_command))
+    app.add_handler(CommandHandler("wipe", wipe))
     app.add_handler(CommandHandler("welcome", welcome_command))
     app.add_handler(CommandHandler("setwelcome", set_welcome))
     app.add_handler(CommandHandler("help", help_command))
