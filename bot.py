@@ -1413,6 +1413,17 @@ async def send_welcome(context, target, user_id):
     return False
 
 
+async def added_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """The bot was just added to a group: say hello there with the same round welcome video as after /start."""
+    message = update.effective_message
+    if not any(member.id == context.bot.id for member in message.new_chat_members or []):
+        return
+    try:
+        await send_welcome(context, message, update.effective_user.id if update.effective_user else 0)
+    except TelegramError as exc:  # no right to post video notes, etc.: just stay quiet
+        LOG.warning("Group welcome failed: %s", type(exc).__name__)
+
+
 async def welcome_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/welcome: show the welcome video note again."""
     if not await authorized(update, context):
@@ -3699,6 +3710,7 @@ def main():
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
+    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, added_to_group))
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.PHOTO | filters.Document.IMAGE,
         chat))
