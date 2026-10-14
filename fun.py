@@ -6,6 +6,7 @@ and demotivators from the chat's photos.
 """
 import io
 import random
+import re
 import sqlite3
 import time
 from pathlib import Path
@@ -13,7 +14,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 ASSETS = Path(__file__).with_name("assets")
-GROUP_MESSAGES = 2000  # kept per chat; the model sees the last GROUP_CONTEXT of them
+GROUP_MESSAGES = 10000  # kept per chat; the model sees the last GROUP_CONTEXT of them and searches the rest
 GROUP_CONTEXT = 600
 GROUP_CONTEXT_CHARS = 120_000  # and at most this much text of them, newest first
 MEDIA_PER_KIND = 150
@@ -28,6 +29,7 @@ class GroupStore:
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, timeout=10)
+        self.db.create_function("ulower", 1, lambda text: text.lower() if isinstance(text, str) else text, deterministic=True)
         with self.db:
             self.db.execute("CREATE TABLE IF NOT EXISTS group_messages (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, "
                             "line TEXT NOT NULL, created INTEGER NOT NULL)")
@@ -58,9 +60,9 @@ class GroupStore:
         with self.db:
             self.db.execute("INSERT INTO group_messages(chat_id, line, created, message_id, user_id) VALUES (?, ?, ?, ?, ?)",
                             (chat_id, line[:1500], int(time.time()), message_id, user_id))
-            self.db.execute("DELETE FROM group_messages WHERE chat_id=? AND id NOT IN "
-                            "(SELECT id FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?)",
-                            (chat_id, chat_id, GROUP_MESSAGES))
+            # Everything older than the newest GROUP_MESSAGES goes (one index lookup, cheap with 10 000 kept).
+            self.db.execute("DELETE FROM group_messages WHERE chat_id=? AND id <= (SELECT id FROM group_messages "
+                            "WHERE chat_id=? ORDER BY id DESC LIMIT 1 OFFSET ?)", (chat_id, chat_id, GROUP_MESSAGES))
 
     def lines(self, chat_id, limit=GROUP_CONTEXT, chars=GROUP_CONTEXT_CHARS):
         rows = self.db.execute("SELECT line FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?",
@@ -79,6 +81,19 @@ class GroupStore:
                                "ON i.chat_id = m.chat_id WHERE m.user_id=? ORDER BY m.id DESC LIMIT ?",
                                (user_id, limit)).fetchall()
         return rows[::-1]
+
+    def search(self, chat_id, text, skip_recent=GROUP_CONTEXT, limit=40):
+        """Older lines (beyond the recent window) sharing words with text, best matches first, shown oldest first."""
+        words = list(dict.fromkeys(w for w in re.findall(r"\w{4,}", (text or "").lower()) if not w.isdigit()))[:8]
+        if not words:
+            return []
+        stems = [w[:max(4, len(w) - 2)] for w in words]  # "айлы", "айле" -> "айл…": Russian endings vary
+        rows = self.db.execute("SELECT id, line FROM group_messages WHERE chat_id=? AND id < (SELECT COALESCE(MIN(id), 0) "
+                               "FROM (SELECT id FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?)) AND ("
+                               + " OR ".join("ulower(line) LIKE ?" for _ in stems) + ") ORDER BY id DESC LIMIT 2000",
+                               (chat_id, chat_id, skip_recent, *[f"%{s}%" for s in stems])).fetchall()
+        scored = sorted(rows, key=lambda r: -sum(s in r[1].lower() for s in stems))[:limit]
+        return [line for _, line in sorted(scored)]
 
     def recent_messages(self, chat_id, limit=15):
         """Recent members' messages that can be replied to: [(message_id, line)], newest first."""

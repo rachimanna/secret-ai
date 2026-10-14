@@ -1838,8 +1838,11 @@ async def group_chat(update, context):
         else:  # a sticker, gif or video in reply to the bot
             question = content = describe_message(message) or "…"
         before = "\n".join(store.lines(chat_id))
+        older = store.search(chat_id, question)  # from the 10 000 kept: the old messages this one is about
         store.add_line(chat_id, f"{name}: {question}", message.message_id, user.id)
-        head = (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:"
+        head = ((f"Older messages from this group that may be relevant (oldest first):\n" + "\n".join(older) + "\n\n"
+                 if older else "")
+                + (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:")
         content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
         data["group_spoke"][chat_id] = time.monotonic()
         await group_respond(update, context, message, content, voice=bool(message.voice or message.video_note))
