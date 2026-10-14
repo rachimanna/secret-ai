@@ -117,7 +117,10 @@ GROUP_EVERY = {"rare": (30, 60), "normal": (12, 25), "often": (5, 12)}
 GROUP_RANDOM_PAUSE = 40  # at least this many seconds between two uninvited posts
 USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
-HISTORY_LIMIT = 1000
+HISTORY_LIMIT = 1000  # the newest messages the model reads in full
+KEEP_MESSAGES = 200_000  # kept per person ("forever"); older ones come back by search when the talk touches them
+RECALL_MATCHES = 12
+RECALL_CHARS = 600
 # What the model sees of the history: older long answers are shortened and the whole history fits a budget,
 # so 300 messages stay affordable and inside the model's context.
 HISTORY_CHARS = 180_000
@@ -173,9 +176,12 @@ class Memory:
     def __init__(self, path):
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, timeout=10)
+        self.db.create_function("ulower", 1, lambda text: text.lower() if isinstance(text, str) else text, deterministic=True)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL)")
         self.db.execute("CREATE INDEX IF NOT EXISTS by_user ON messages(user_id, id)")
+        if "created" not in [row[1] for row in self.db.execute("PRAGMA table_info(messages)")]:
+            self.db.execute("ALTER TABLE messages ADD COLUMN created INTEGER")
         self.db.execute("CREATE TABLE IF NOT EXISTS settings (user_id INTEGER PRIMARY KEY, persona TEXT NOT NULL)")
         if "model" not in [row[1] for row in self.db.execute("PRAGMA table_info(settings)")]:
             self.db.execute("ALTER TABLE settings ADD COLUMN model TEXT")
@@ -191,13 +197,34 @@ class Memory:
         self.db.commit()
 
     def history(self, user_id):
-        rows = self.db.execute("SELECT role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, HISTORY_LIMIT)).fetchall()
-        return [{"role": role, "content": content} for role, content in rows]
+        rows = self.db.execute("SELECT id, role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, HISTORY_LIMIT)).fetchall()
+        return [{"id": id_, "role": role, "content": content} for id_, role, content in rows]
 
     def append_turn(self, user_id, question, answer):
+        now = int(time.time())
         with self.db:
-            self.db.executemany("INSERT INTO messages(user_id, role, content) VALUES (?, ?, ?)", [(user_id, "user", question), (user_id, "assistant", answer)])
-            self.db.execute("DELETE FROM messages WHERE user_id=? AND id NOT IN (SELECT id FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?)", (user_id, user_id, HISTORY_LIMIT))
+            self.db.executemany("INSERT INTO messages(user_id, role, content, created) VALUES (?, ?, ?, ?)",
+                                [(user_id, "user", question, now), (user_id, "assistant", answer, now)])
+            self.db.execute("DELETE FROM messages WHERE user_id=? AND id <= (SELECT id FROM messages WHERE user_id=? "
+                            "ORDER BY id DESC LIMIT 1 OFFSET ?)", (user_id, user_id, KEEP_MESSAGES))
+
+    def recall(self, user_id, text, before_id):
+        """Old messages (older than before_id, i.e. no longer in the model's view) about the same things as text:
+        the matching messages with their question/answer partner, oldest first: [(created, role, content)]."""
+        words = list(dict.fromkeys(w for w in re.findall(r"\w{4,}", (text or "").lower()) if not w.isdigit()))[:8]
+        if not words or not before_id:
+            return []
+        stems = [w[:max(4, len(w) - 2)] for w in words]  # Russian endings vary: "айлы", "айле" -> "айл"
+        rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? AND id < ? AND ("
+                               + " OR ".join("ulower(content) LIKE ?" for _ in stems) + ") ORDER BY id DESC LIMIT 3000",
+                               (user_id, before_id, *[f"%{s}%" for s in stems])).fetchall()
+        best = sorted(rows, key=lambda r: (-sum(s in r[2].lower() for s in stems), -r[0]))[:RECALL_MATCHES]
+        ids = sorted({i for id_, role, _ in best for i in (id_, id_ + 1 if role == "user" else id_ - 1)})
+        if not ids:
+            return []
+        found = self.db.execute(f"SELECT id, created, role, content FROM messages WHERE user_id=? AND id < ? AND id IN "
+                                f"({','.join('?' * len(ids))}) ORDER BY id", (user_id, before_id, *ids)).fetchall()
+        return [(created, role, content) for _, created, role, content in found]
 
     def _last_turn(self, user_id):
         rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT 2", (user_id,)).fetchall()
@@ -1657,6 +1684,35 @@ async def app_tools(bot_data, user_id, taken):
     return tools, names
 
 
+def ago(created):
+    if not created:
+        return "давно"
+    days = (time.time() - created) / 86400
+    if days < 1:
+        return "сегодня"
+    if days < 2:
+        return "вчера"
+    if days < 30:
+        return f"{int(days)} дн. назад"
+    if days < 365:
+        return f"{int(days // 30)} мес. назад"
+    return f"{int(days // 365)} г. назад"
+
+
+def recall_note(found):
+    """Old parts of the conversation, for the instructions: the bot remembers them like a friend would."""
+    if not found:
+        return ""
+    lines = []
+    for created, role, content in found:
+        text = " ".join(str(content).split())
+        if len(text) > RECALL_CHARS:
+            text = text[:RECALL_CHARS] + " …"
+        lines.append(f"[{ago(created)}] {'User' if role == 'user' else 'You'}: {text}")
+    return ("\n\nFrom your earlier conversations with this user (older than the chat history you see; you remember "
+            "them — bring them up naturally when they matter, never say you searched):\n" + "\n".join(lines))
+
+
 def fit_history(history):
     """The newest messages in full, older long ones shortened, all within HISTORY_CHARS (oldest dropped first)."""
     kept, total = [], 0
@@ -1713,10 +1769,17 @@ async def respond(update, context, target, content, saved_question, voice=False)
                          "in a live conversation, short (2-5 sentences), no lists, no markdown, no links, no emoji.")
     if toolbox.instructions():
         instructions += " " + toolbox.instructions()
+    history = memory.history(user_id)
+    shown = fit_history(history)
+    if shown:  # everything older than what the model reads comes back by search when the talk touches it
+        oldest = history[len(history) - len(shown)]["id"]
+    else:
+        oldest = history[-1]["id"] + 1 if history else None
+    instructions += recall_note(memory.recall(user_id, saved_question, oldest))
     try:
         answer, incomplete = await generate(
             context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
-            input=fit_history(memory.history(user_id)) + [{"role": "user", "content": content}],
+            input=shown + [{"role": "user", "content": content}],
             store=False, max_output_tokens=32000)
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
