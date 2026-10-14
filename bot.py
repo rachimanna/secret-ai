@@ -1621,7 +1621,7 @@ async def read_tiktok(update, context, question, url):
         text, frames, label = await links.watch(context.bot_data["http"], context.bot_data["client"], url,
                                                  (update.effective_user.language_code or "ru")[:2])
     except Exception as exc:  # a removed video, a private account or tikwm being down
-        LOG.warning("TikTok link failed: %s %s", type(exc).__name__, str(exc)[:120])
+        LOG.warning("TikTok link failed: %s %s", type(exc).__name__, str(exc)[:400])
         note = (f"{question}\n\n[The bot could not open this TikTok link (deleted, private or the service is down). "
                 "Say so briefly and ask to send the video itself as a file instead.]")
         return question, note, question

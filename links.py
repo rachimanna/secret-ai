@@ -7,6 +7,7 @@ heard lyrics are left for the model to recognize otherwise.
 """
 import asyncio
 import base64
+import json
 import logging
 import os
 import re
@@ -34,13 +35,82 @@ def find(text):
     return found.group(0).rstrip(".,!?)»") if found else None
 
 
-async def _info(http, url):
-    response = await http.post(f"{TIKWM}/api/", data={"url": url, "hd": 0}, timeout=25,
-                               headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "ru-RU,ru;q=0.9"})
+BROWSER = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                         "Chrome/126.0 Safari/537.36", "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"}
+PAGE_DATA = re.compile(r'<script[^>]+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>', re.S)
+
+
+async def _resolve(http, url):
+    """vm.tiktok.com / vt.tiktok.com short links -> the full video address."""
+    if re.search(r"/(?:video|photo)/\d+", url):
+        return url
+    try:
+        response = await http.get(url, timeout=20, follow_redirects=True, headers=BROWSER)
+        return str(response.url)
+    except Exception as exc:
+        LOG.info("TikTok short link not resolved: %s", type(exc).__name__)
+        return url
+
+
+async def _tikwm(http, url):
+    response = await http.get(f"{TIKWM}/api/", params={"url": url, "hd": 0}, timeout=25, headers=BROWSER)
     body = response.json() or {}
     if body.get("code") != 0 or not body.get("data"):
-        raise LinkError(str(body.get("msg") or "no data")[:80])
-    return body["data"]
+        raise LinkError(f"tikwm: {str(body.get('msg') or response.status_code)[:80]}")
+    return body["data"], None
+
+
+async def _page(http, url):
+    """TikTok's own page: its embedded JSON has the description, sound and a play address (valid with its cookies)."""
+    import httpx
+
+    session = httpx.AsyncClient(headers=BROWSER, follow_redirects=True, timeout=30)
+    try:
+        response = await session.get(url)
+        found = PAGE_DATA.search(response.text)
+        if not found:
+            raise LinkError(f"page: no data ({response.status_code})")
+        scope = json.loads(found.group(1)).get("__DEFAULT_SCOPE__", {})
+        item = ((scope.get("webapp.video-detail") or {}).get("itemInfo") or {}).get("itemStruct") or {}
+        if not item:
+            raise LinkError("page: no item")
+        video, music, author = item.get("video") or {}, item.get("music") or {}, item.get("author") or {}
+        stats = item.get("stats") or {}
+        data = {"title": item.get("desc") or "", "duration": video.get("duration") or 0,
+                "play": video.get("playAddr") or video.get("downloadAddr") or "",
+                "music_info": {"title": music.get("title"), "author": music.get("authorName"), "original": music.get("original")},
+                "author": {"nickname": author.get("nickname"), "unique_id": author.get("uniqueId")},
+                "play_count": stats.get("playCount"), "digg_count": stats.get("diggCount"),
+                "images": [((i.get("imageURL") or {}).get("urlList") or [None])[0]
+                           for i in ((item.get("imagePost") or {}).get("images") or [])],
+                "cover": video.get("cover") or ""}
+        return data, session  # the session's cookies are needed to download "play"
+    except BaseException:
+        await session.aclose()
+        raise
+
+
+async def _oembed(http, url):
+    """The official oEmbed: only the description, author and cover — no video, no sound."""
+    response = await http.get("https://www.tiktok.com/oembed", params={"url": url}, timeout=20, headers=BROWSER)
+    body = response.json() if response.status_code == 200 else {}
+    if not body.get("title") and not body.get("thumbnail_url"):
+        raise LinkError(f"oembed: {response.status_code}")
+    return {"title": body.get("title") or "", "author": {"nickname": body.get("author_name"),
+                                                          "unique_id": body.get("author_unique_id")},
+            "cover": body.get("thumbnail_url") or "", "only_cover": True}, None
+
+
+async def _info(http, url):
+    """Video data from the first source that works: tikwm, TikTok's page, oEmbed. (data, session to download with)."""
+    full = await _resolve(http, url)
+    problems = []
+    for source in (_tikwm, _page, _oembed):
+        try:
+            return await source(http, full)
+        except Exception as exc:
+            problems.append(f"{source.__name__}: {type(exc).__name__} {str(exc)[:80]}")
+    raise LinkError("; ".join(problems))
 
 
 def _absolute(url):
@@ -107,34 +177,51 @@ async def _recognize(http, audio):
 
 async def watch(http, client, url, language="ru"):
     """What the bot needs to know about a TikTok post: (text for the model, [JPEG frames], short label)."""
-    data = await _info(http, url)
+    data, session = await _info(http, url)
+    try:
+        return await _watch(http, session or http, client, url, data, language)
+    finally:
+        if session:
+            await session.aclose()
+
+
+async def _watch(http, download, client, url, data, language):
     author = data.get("author") or {}
     music = data.get("music_info") or {}
     duration = data.get("duration") or 0
     frames, transcript, recognized = [], "", ""
     images = [i for i in (data.get("images") or []) if isinstance(i, str)]
-    if images:  # a photo slideshow
-        for image in images[:4]:
+    play = _absolute(data.get("play") or "")
+    video = None
+    if not images and play and (data.get("size") or 0) <= MAX_BYTES:
+        try:
+            response = await download.get(play, timeout=90, follow_redirects=True,
+                                          headers={**BROWSER, "Referer": "https://www.tiktok.com/"})
+            if response.status_code == 200 and 10_000 < len(response.content) <= MAX_BYTES:
+                video = response.content
+            else:
+                LOG.info("TikTok video download: %s, %d bytes", response.status_code, len(response.content))
+        except Exception as exc:
+            LOG.info("TikTok video download failed: %s", type(exc).__name__)
+    if not video:  # a photo slideshow, or only the cover could be had
+        for image in (images or [data.get("cover")])[:4]:
+            if not image:
+                continue
             try:
-                response = await http.get(_absolute(image), timeout=30, follow_redirects=True)
-                if response.status_code == 200:
+                response = await download.get(_absolute(image), timeout=30, follow_redirects=True, headers=BROWSER)
+                if response.status_code == 200 and response.content:
                     frames.append(response.content)
             except Exception:
                 pass
-    else:
-        play = _absolute(data.get("play") or "")
-        if not play or (data.get("size") or 0) > MAX_BYTES:
-            raise LinkError("no video")
-        response = await http.get(play, timeout=90, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"})
-        if response.status_code != 200 or len(response.content) < 10_000:
-            raise LinkError(f"download {response.status_code}")
+    if video:
         with tempfile.TemporaryDirectory(prefix="secret-ai-tt-") as folder:
-            frames, audio = await _frames_and_audio(response.content, duration, Path(folder))
+            frames, audio = await _frames_and_audio(video, duration, Path(folder))
             if audio:
                 transcript, recognized = await asyncio.gather(_transcribe(client, audio, language), _recognize(http, audio))
     sound = " — ".join(x for x in (str(music.get("title") or "").strip(), str(music.get("author") or "").strip()) if x)
     original = bool(music.get("original")) or bool(ORIGINAL.search(sound))
-    lines = [f"[The user shared a TikTok {'photo post' if images else 'video'}: {url}",
+    kind = "photo post" if images else "video" if video else "video (only its cover and description could be loaded — no sound)"
+    lines = [f"[The user shared a TikTok {kind}: {url}",
              f"Author: {author.get('nickname') or ''} (@{author.get('unique_id') or ''})"]
     if duration:
         lines.append(f"Length: {duration} s")
@@ -148,8 +235,10 @@ async def watch(http, client, url, language="ru"):
         lines.append(f"Song recognized from the audio: {recognized}")
     if transcript:
         lines.append(f"Speech or lyrics heard in it (automatic transcript, may have mistakes): {transcript[:2500]}")
-    lines.append(f"Below: {len(frames)} frames from it in order.]" if frames else "No frames could be taken.]")
-    lines.append("You have watched it. If asked what the song is, name it from the recognized song or the sound info; "
+    shown = "frames from it in order" if video else "pictures from it"
+    lines.append(f"Below: {len(frames)} {shown}.]" if frames else "No pictures could be taken.]")
+    lines.append(("You have watched it. " if video else "You only saw its cover and description; don't pretend you heard it. ") +
+                 "If asked what the song is, name it from the recognized song or the sound info; "
                  "if it is only an original sound, try the lyrics, and say honestly if you can't tell. If the user just "
                  "sent the link, react to it like a friend who watched it — short; joke along if it is funny. "
                  "Don't mention frames or transcripts.")
