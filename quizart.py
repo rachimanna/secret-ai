@@ -6,6 +6,7 @@ rate — the smooth intro at 25 fps, then one frame per half second for the coun
 so a clip is ~100 frames and renders in a second or two even on a small server.
 """
 import functools
+import itertools
 import io
 import re
 import subprocess
@@ -135,12 +136,20 @@ def panel(card, box, radius, color, alpha):
     card.alpha_composite(layer)
 
 
-def encode(frames):
+COVER_SECONDS = 0.5
+
+
+def encode(frames, cover=None):
     """(image, seconds) pairs, possibly a generator -> MP4 bytes. Frames go to disk as they come (a server has little
-    memory); the same image object twice in a row is one frame shown longer."""
+    memory); the same image object twice in a row is one frame shown longer.
+
+    cover: the finished card as the very first frame. Telegram makes the preview from the first frame (it ignores a
+    thumbnail we send), and whoever has autoplay off — or Low Power Mode on an iPhone — sees only that preview."""
     with tempfile.TemporaryDirectory(prefix="quiz-") as folder:
         folder = Path(folder)
         lines, count, previous = [], 0, None
+        if cover is not None:
+            frames = itertools.chain([(cover, COVER_SECONDS)], frames)
         for image, seconds in frames:
             if image is previous:
                 lines[-1] = f"duration {float(lines[-1].split()[1]) + seconds:.3f}"
@@ -279,7 +288,7 @@ class QuestionArt:
         return card
 
     def question_clip(self):
-        return encode(self._question_frames())
+        return encode(self._question_frames(), cover=self._timer(self._scene(99), self.seconds))
 
     def _question_frames(self):
         length = self.intro_length()
@@ -291,14 +300,17 @@ class QuestionArt:
         yield self._timer(still.copy(), 0), 2.0
 
     def reveal_clip(self, correct):
-        return encode(self._reveal_frames(correct))
+        return encode(self._reveal_frames(correct), cover=self._revealed(correct))
+
+    def _revealed(self, correct):
+        *_, (last, _) = self._reveal_frames(correct)
+        return last
 
     def question_thumb(self):
         return thumb(self._timer(self._scene(99), self.seconds))
 
     def reveal_thumb(self, correct):
-        *_, (last, _) = self._reveal_frames(correct)
-        return thumb(last)
+        return thumb(self._revealed(correct))
 
     def _reveal_frames(self, correct):
         right = self._tile(correct, GREEN, mark="right")
@@ -357,7 +369,8 @@ def banner_frames():
 
 
 def banner_clip():
-    return encode(banner_frames())
+    *_, (last, _) = banner_frames()
+    return encode(banner_frames(), cover=last)
 
 
 def banner():
@@ -431,7 +444,7 @@ def podium_clip(rows, questions, topic):
         for f in range(int(2.4 * FPS) + 1):
             yield podium_frame(rows, questions, topic, f / FPS), 1 / FPS
         yield podium_frame(rows, questions, topic, 9), 5.0
-    return encode(frames())
+    return encode(frames(), cover=podium_frame(rows, questions, topic, 9))
 
 
 def podium_thumb(rows, questions, topic):
