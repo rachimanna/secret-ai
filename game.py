@@ -125,12 +125,8 @@ class Quiz:
 
     def lobby_text(self, game):
         emoji, title = TOPICS[game.topic]
-        people = "\n".join(f"• {esc(name)}" for name in game.players.values())
-        return (f"<b>🧠 Викторина</b>\n\nТема: {emoji} <b>{esc(title)}</b> · {QUESTIONS} вопросов · {ANSWER_SECONDS} с на ответ\n"
-                f"Быстрый правильный ответ — больше очков, серия из трёх — бонус.\n"
-                f"Отвечать могут только те, кто нажал «Я играю».\n\n"
-                f"<b>Игроки ({len(game.players)}):</b>\n{people}\n\n"
-                f"Жмите «✋ Я играю», ведущий запускает ▶️")
+        people = ", ".join(esc(name) for name in game.players.values())
+        return f"<b>🧠 Викторина</b> · {emoji} {esc(title)}\n👥 {people}"
 
     def lobby_keyboard(self, game):
         topics = [Button(f"{'✅ ' if key == game.topic else ''}{emoji} {title}", callback_data=f"g:t:{key}")
@@ -231,7 +227,7 @@ class Quiz:
         if user.id not in game.players:
             await query.answer("Ты не в этой игре 🙅 Нажми «Я играю», когда начнётся следующая.", show_alert=True)
             return
-        if game.state != "question" or number != game.index:
+        if game.state != "question" or number != game.index or not game.asked_at:
             await query.answer("Время на этот вопрос вышло ⏱")
             return
         if user.id in game.answers:
@@ -248,7 +244,7 @@ class Quiz:
         try:
             emoji, title = TOPICS[game.topic]
             await game.lobby_message.edit_caption(
-                f"<b>🧠 Викторина · {emoji} {esc(title)}</b>\n\nИгроки: {esc(', '.join(game.players.values()))}\n\n⏳ Готовлю вопросы…",
+                f"<b>🧠 Викторина</b> · {emoji} {esc(title)}\n⏳ Готовлю вопросы…",
                 parse_mode="HTML")
             game.questions = await self._questions(game)
             loop = asyncio.get_running_loop()
@@ -291,16 +287,16 @@ class Quiz:
     async def _ask(self, bot, game):
         question, options, correct, fact = game.questions[game.index]
         number, total = game.index + 1, len(game.questions)
-        game.answers, game.answered = {}, asyncio.Event()
+        game.answers, game.answered, game.asked_at = {}, asyncio.Event(), 0.0
         self.mark_asked(game.chat_id, question)
         head = f"<b>Вопрос {number}/{total}</b> · {TOPICS[game.topic][0]} {esc(TOPICS[game.topic][1])}\n\n<b>{esc(question)}</b>\n\n"
 
         def waiting(seconds_left=None):
-            bar = ""
-            if seconds_left is not None:  # the text version has no picture with a timer
-                filled = round(10 * seconds_left / ANSWER_SECONDS)
-                bar = f"⏱ {'▰' * filled}{'▱' * (10 - filled)} {seconds_left} с · "
-            return head + f"{bar}ответили {len(game.answers)}/{len(game.players)}"
+            count = f"ответили {len(game.answers)}/{len(game.players)}"
+            if seconds_left is None:  # the animation shows the question and the timer itself
+                return f"{number}/{total} · {count}"
+            filled = round(10 * seconds_left / ANSWER_SECONDS)
+            return head + f"⏱ {'▰' * filled}{'▱' * (10 - filled)} {seconds_left} с · {count}"
 
         keyboard = Keyboard([[Button(f"{LETTERS[i]}. {opt}"[:60], callback_data=f"g:a:{game.index}:{i}")]
                              for i, opt in enumerate(options)])
@@ -350,16 +346,13 @@ class Quiz:
             else:
                 game.streak[user_id] = 0
                 missed.append(esc(game.players[user_id]))
-        silent = len(game.players) - len(game.answers)
-        result = f"✅ <b>{LETTERS[correct]}. {esc(options[correct])}</b>" + (f"\n💡 {esc(fact)}" if fact else "")
-        result += ("\n\n🏅 " + ", ".join(gained)) if gained else "\n\n😶 Никто не угадал"
+        result = f"✅ <b>{esc(options[correct])}</b>" + (f"\n💡 {esc(fact)}" if fact else "")
+        result += ("\n🏅 " + ", ".join(gained)) if gained else "\n😶 Никто не угадал"
         if missed:
             result += "\n❌ " + ", ".join(missed)
-        if silent:
-            result += f"\n💤 не ответили: {silent}"
         try:
             if clips:
-                await message.edit_media(InputMediaAnimation(mp4(clips[1], "answer"), caption=head + result, parse_mode="HTML",
+                await message.edit_media(InputMediaAnimation(mp4(clips[1], "answer"), caption=result, parse_mode="HTML",
                                                              width=quizart.W, height=quizart.H))
             else:
                 lines = [f"{'✅' if i == correct else '▫️'} {LETTERS[i]}. {esc(opt)}" for i, opt in enumerate(options)]
