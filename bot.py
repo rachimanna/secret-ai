@@ -1755,12 +1755,14 @@ async def respond(update, context, target, content, saved_question, voice=False)
         if error == "no_credits":
             return ("Not started: the user has no free generations or credits left. Tell them to top up in the Mini App "
                     "(button Secret AI → Generation) with Telegram Stars.")
+        if error == "duplicate":
+            return "Not started: the same thing is already being made. Tell the user it's on the way."
         if error:
             return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
         return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                       apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
-                                                     edit_tool(context, user_id, lang(update))])
+                                                     edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)])
     instructions = (SYSTEM + TRANSLATION_RULES + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
     speak_only = voice and bool(context.bot_data.get("tts_model"))
@@ -2010,7 +2012,7 @@ class GroupTools:
         self.update, self.context, self.message = update, context, message
 
     def definitions(self):
-        return [GROUP_MEDIA_TOOL, MEMORY_TOOL]
+        return [GROUP_MEDIA_TOOL, MEMORY_TOOL, CANCEL_TOOL]
 
     def status(self, name, args):
         return None
@@ -2020,6 +2022,8 @@ class GroupTools:
             self.context.bot_data["memory"].remember(self.update.effective_user.id, args.get("add") or [],
                                                      args.get("forget") or [])
             return "Saved."
+        if name == "cancel_generation":
+            return await cancel_generations(self.context.bot_data, self.message.chat_id)
         if name != "make_media":
             return "Unknown tool."
         kind = "video" if args.get("kind") == "video" else "photo"
@@ -2030,6 +2034,8 @@ class GroupTools:
         if error == "no_credits":
             return ("Not started: this person has no free generations or credits left. Tell them to top up in the bot's "
                     "Mini App (Генерация → Пополнить).")
+        if error == "duplicate":
+            return "Not started: the same thing is already being made. Say it's on the way."
         if error:
             return f"Not started ({error}). Say briefly that it doesn't work right now."
         return "Started. It will be posted in reply in a few minutes; say so in a few words."
@@ -2047,7 +2053,7 @@ async def group_respond(update, context, message, content, voice=False):
         if is_abacus(model) and MEDIA_TALK.search(str(content)):
             model = data["model"]  # the media tool needs function calls, which the Abacus path doesn't do
         answer, _ = await generate(context, live, GroupTools(update, context, message), model=model,
-                                   instructions=group_instructions(update)
+                                   instructions=group_instructions(update) + gen_status(data, message.chat_id)
                                    + memory_notes(data, update.effective_user.id, speaker(update.effective_user))
                                    + " Save lasting facts about the person writing with the remember tool." + (
                                        " This person sent a voice message: your answer will be read aloud, so talk like "
@@ -2521,6 +2527,15 @@ def memory_notes(data, user_id, name="", with_groups=False):
     return notes
 
 
+def cancel_tool(context, chat_id):
+    """cancel_generation for the private chat; its hint tells the model what is being made or was just sent."""
+    async def run(args):
+        return await cancel_generations(context.bot_data, chat_id)
+
+    return {"definition": CANCEL_TOOL, "run": run, "status": ("Отменяю", "Cancelling"),
+            "hint": gen_status(context.bot_data, chat_id).strip()}
+
+
 def memory_tool(context, user_id):
     """The remember tool for the private chat, with what the bot already knows about the user as a hint."""
     async def run(args):
@@ -2833,6 +2848,55 @@ def gen_state(bot_data, user_id):
     return state
 
 
+GEN_RECENT = 900  # seconds a finished picture/video stays in the bot's mind
+CANCEL_TOOL = {"type": "function", "name": "cancel_generation",
+               "description": ("Stop the picture or video still being made in this chat, when the user says not to make it "
+                               "(\"не рисуй\", \"не надо\", \"отмена\", \"стоп\"). A stopped one is not charged."),
+               "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}
+
+
+def gen_log(data, chat_id):
+    """This chat's pictures and videos: [{kind, prompt, state: running/done/failed/cancelled, at, task}]."""
+    return data.setdefault("gen_log", {}).setdefault(chat_id, [])
+
+
+def _words(text):
+    return {w[:6] for w in re.findall(r"\w{4,}", (text or "").lower())}
+
+
+def similar_prompt(a, b):
+    first, second = _words(a), _words(b)
+    return bool(first and second) and len(first & second) / min(len(first), len(second)) >= 0.5
+
+
+def gen_status(data, chat_id):
+    """For the instructions: what was made in this chat lately, so the bot doesn't start it again or forget it."""
+    now = time.monotonic()
+    recent = [e for e in gen_log(data, chat_id) if e["state"] == "running" or now - e["at"] < GEN_RECENT]
+    if not recent:
+        return ""
+    lines = []
+    for entry in recent:
+        minutes = max(1, int((now - entry["at"]) // 60))
+        state = {"running": f"being made right now (started {minutes} min ago)",
+                 "done": f"ALREADY DELIVERED to the chat {minutes} min ago",
+                 "failed": "failed, the user was told", "cancelled": "cancelled"}[entry["state"]]
+        lines.append(f"- {'picture' if entry['kind'] == 'photo' else 'video'} «{entry['prompt'][:150]}»: {state}")
+    return ("\n\nPictures and videos in this chat (each arrives in the chat by itself when ready):\n" + "\n".join(lines) +
+            "\nNever start one of these again unless the user clearly asks for another one or a new version — short "
+            "replies like \"э\", \"ну\", \"что делаешь\", \"где?\" are not requests. If they ask what you're doing or "
+            "where it is, answer from this list. If they say not to make it, call cancel_generation.")
+
+
+async def cancel_generations(data, chat_id):
+    running = [e for e in gen_log(data, chat_id) if e["state"] == "running" and e.get("task")]
+    for entry in running:
+        entry["task"].cancel()
+    if running:
+        return f"Stopped {len(running)}; nothing is charged for it. Tell the user briefly."
+    return "Nothing is being made now (it was already delivered or finished). Tell the user briefly."
+
+
 async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5, voice=True, images=None, chat_id=None,
                            reply_id=None):
     """Check the key and quota, take the generation and run it in the background. Returns None or an error code.
@@ -2850,6 +2914,9 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
         key = models["photo"]
     elif not key:
         return "no_key"
+    log = gen_log(data, chat_id or user_id)
+    if any(e["state"] == "running" and e["kind"] == kind and similar_prompt(e["prompt"], prompt) for e in log):
+        return "duplicate"
     cost = price(kind, seconds)
     in_group = bool(chat_id) and chat_id != user_id
     free_here = in_group and kind == "photo" and os.environ.get("GROUP_PHOTOS_FREE", "1").strip() != "0"
@@ -2860,7 +2927,12 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
     job = {"user_id": user_id, "language": language, "kind": kind, "prompt": prompt, "fmt": fmt if fmt in FORMATS else "portrait",
            "seconds": seconds, "voice": bool(voice), "key": key, "model": models[kind], "how": how, "cost": cost,
            "images": list(images or [])[:4], "chat_id": chat_id or user_id, "reply_id": reply_id}
+    entry = {"kind": kind, "prompt": prompt, "state": "running", "at": time.monotonic()}
+    log.append(entry)
+    del log[:-10]
+    job["entry"] = entry
     task = asyncio.create_task(generation_job(app, job))
+    entry["task"] = task
     jobs = data.setdefault("gen_tasks", set())
     jobs.add(task)
     task.add_done_callback(jobs.discard)
@@ -3082,6 +3154,11 @@ async def photo_bytes(bot, photos):
     return result
 
 
+def set_state(job, state):
+    if job.get("entry"):
+        job["entry"].update(state=state, at=time.monotonic(), task=None)
+
+
 async def generation_job(app, job):
     bot, data = app.bot, app.bot_data
     user_id, ru, kind = job["user_id"], job["language"] == "ru", job["kind"]
@@ -3092,8 +3169,8 @@ async def generation_job(app, job):
     except TelegramError:
         pass
     try:
-        # In groups no caption: the prompt is the model's own (often English) description, not something to show.
-        caption = None if job.get("chat_id") not in (None, user_id) else job["prompt"][:900]
+        # No caption: the prompt is the model's own (often English) description, not something to show.
+        caption = None
         if kind == "photo" and (job.get("images") or job["model"] == OPENAI_IMAGE):
             images = await photo_bytes(bot, job.get("images"))
             try:
@@ -3117,7 +3194,13 @@ async def generation_job(app, job):
                            else make_kling_video(data, job) if provider in ("kling", "anymodel") else make_veo_video(data, job))
             await bot.send_video(chat, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
                                  write_timeout=180, read_timeout=180, **answer)
+        set_state(job, "done")
+    except asyncio.CancelledError:  # the user said not to make it
+        set_state(job, "cancelled")
+        if job["how"] != "owner":
+            data["memory"].gen_refund(user_id, job["how"], job["cost"])
     except Exception as exc:  # any failure: give the generation back and explain
+        set_state(job, "failed")
         if job["how"] != "owner":
             data["memory"].gen_refund(user_id, job["how"], job["cost"])
         code = exc.code if isinstance(exc, MediaError) else "failed"
