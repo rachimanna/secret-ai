@@ -1,0 +1,6 @@
+.git
+__pycache__
+*.pyc
+.env
+deploy/.env
+memory.db*

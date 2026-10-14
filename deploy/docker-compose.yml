@@ -1,0 +1,26 @@
+# The bot plus Caddy, which gets a free HTTPS certificate for the Mini App automatically.
+services:
+  bot:
+    build: ..
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /data/memory.db
+      PORT: "8080"
+      KEEP_AWAKE: "0"
+    volumes:
+      - data:/data
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    command: caddy reverse-proxy --from ${DOMAIN} --to bot:8080
+    volumes:
+      - caddy:/data
+volumes:
+  data:
+  caddy:
