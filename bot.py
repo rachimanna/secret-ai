@@ -109,8 +109,9 @@ INTERJECT = (
     "generic commentary about 'the chat'. If nothing sharp comes to mind, answer exactly SKIP."
 )
 GROUP_TYPES = ("group", "supergroup")
-GROUP_RANDOM_CHANCE = 0.1  # scales fun.LEVELS (each group's own setting); 0.1 keeps them as listed
-GROUP_RANDOM_PAUSE = 180  # seconds between such surprises in one chat
+# Uninvited posts, like Sglypa: after every N members' messages, N drawn from the group's level.
+GROUP_EVERY = {"rare": (30, 60), "normal": (12, 25), "often": (5, 12)}
+GROUP_RANDOM_PAUSE = 40  # at least this many seconds between two uninvited posts
 USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
 HISTORY_LIMIT = 1000
@@ -1804,11 +1805,18 @@ async def group_chat(update, context):
     lock = data["locks"][chat_id]
     if not addressed_to_bot(message, context.bot, data):
         remember_group_message(store, message, name)
-        quiet = time.monotonic() - data["group_spoke"].get(chat_id, float("-inf"))
-        chance = LEVELS[store.level(chat_id)] * GROUP_RANDOM_CHANCE / 0.1
-        if lock.locked() or quiet < GROUP_RANDOM_PAUSE or random.random() >= chance:
+        span = GROUP_EVERY.get(store.level(chat_id))
+        if not span:  # off
             return
-        data["group_spoke"][chat_id] = time.monotonic()
+        counters = data.setdefault("group_count", {})
+        due = data.setdefault("group_due", {})
+        counters[chat_id] = counters.get(chat_id, 0) + 1
+        due.setdefault(chat_id, random.randint(*span))
+        quiet = time.monotonic() - data.setdefault("group_surprised", {}).get(chat_id, float("-inf"))
+        if counters[chat_id] < due[chat_id] or lock.locked() or quiet < GROUP_RANDOM_PAUSE:
+            return
+        counters[chat_id], due[chat_id] = 0, random.randint(*span)
+        data["group_surprised"][chat_id] = data["group_spoke"][chat_id] = time.monotonic()
         async with lock:
             try:
                 await group_surprise(context, message, user)
