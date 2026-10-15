@@ -1490,10 +1490,11 @@ async def discover_models(app):
 # The first free one is the default for everyone. Empty list: no models (the bot says so).
 MODEL_CATALOG = [
     (r"opus[-._ ]?5[-._]5(?![-._]?\d)", 5),              # Claude Opus 5.5 (paid; free for the owner)
+    (r"claude-haiku-4[-._]5", 0),                         # Claude Haiku 4.5 (cc/claude-haiku-4-5-20251001), free
 ]
 DEFAULT_PICK = r"deepseek"  # the default model for everyone who hasn't picked one: DeepSeek
 # Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
-ONLY_MODEL = (r"deepseek", r"opus")
+ONLY_MODEL = (r"deepseek", r"haiku", r"opus")
 ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # which gateway's DeepSeek goes first
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
@@ -1502,7 +1503,7 @@ def pick_catalog(ids, pattern):
     """The best id in a catalog for a pattern: a plain one before fast/thinking/preview/dated variants, cc/ routes first."""
     found = [i for i in ids if re.search(pattern, i, re.I) and not re.search(r"image|audio|tts|embed|vision", i, re.I)]
     found.sort(key=lambda i: (bool(re.search(r"fast|mini|lite|flash", i, re.I)), "thinking" in i.lower(), "preview" in i.lower(),
-                              bool(re.search(r"\d{6,}", i)), not i.startswith("cc/"), len(i)))
+                              not i.startswith("cc/"), bool(re.search(r"\d{6,}", i)), len(i)))  # the cc/ route first, dated or not
     return found[0] if found else None
 
 
