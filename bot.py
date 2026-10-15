@@ -1091,6 +1091,15 @@ async def discover_models(app):
             abacus_ids = {m.id for m in (await data["abacus"].models.list()).data}
         except Exception as exc:
             LOG.warning("RouteLLM model list unavailable: %s", type(exc).__name__)
+    if openai_ids and data["model"] not in openai_ids:  # OPENAI_MODEL names a model this key doesn't have
+        def rank(i):  # the newest full GPT: a higher version, then not mini/nano
+            version = re.match(r"gpt-(\d+(?:\.\d+)?)", i)
+            return (float(version.group(1)) if version else 0.0, not re.search(r"mini|nano", i), -len(i))
+        chat_ids = [i for i in openai_ids if i.startswith("gpt-") and not re.search(
+            r"image|audio|realtime|tts|transcribe|search|embedding|instruct|moderation|codex|\d{4}-\d\d-\d\d", i)]
+        fallback = GPT_PICK if GPT_PICK in openai_ids else (max(chat_ids, key=rank) if chat_ids else data["model"])
+        LOG.warning("OPENAI_MODEL %s is not on this OpenAI key; using %s", data["model"], fallback)
+        data["model"] = fallback
     images = sorted(i for i in openai_ids if i.startswith("gpt-image") and "mini" not in i)
     if not data.get("image_model"):
         data["image_model"] = images[-1] if images else "gpt-image-1"
