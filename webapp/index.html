@@ -313,6 +313,8 @@
   .sec-ready { text-align: center; font-weight: 700; color: var(--ok); margin: -2px 0 16px; }
   .premium-note { text-align: center; color: var(--hint); font-size: 13px; margin: -4px 0 12px; }
 
+  .paid { font-size: 12px; font-weight: 700; padding: 2px 7px; border-radius: 9px; margin-left: 4px; color: #fff;
+          background: linear-gradient(135deg, #a855f7, #3e8bff); vertical-align: 1px; }
   /* ---------- toast ---------- */
   .toast { position: fixed; z-index: 50; left: 50%; top: calc(var(--safe-top) + 12px); transform: translate(-50%, -140%); max-width: calc(100vw - 32px);
            padding: 12px 18px; border-radius: 22px; font-weight: 600; font-size: 15px; display: flex; gap: 8px; align-items: center;
@@ -637,6 +639,7 @@ const lang = (tg?.initDataUnsafe?.user?.language_code || navigator.language || "
 const T = {
   ru: {
     hello: n => n ? `Привет, ${n}!` : "Привет!", heroSub: "Ваш личный ИИ-агент. Подключите приложения — и просто пишите, что сделать.",
+    paidModel: n => `${n} кредитов за ответ · покупка за ⭐`, paidLow: n => `Платная модель: ${n} кредитов за ответ. Пополни за звёзды в «Генерация»`,
     secTitle: "ИИ-секретарь", secOn: "Отвечает за тебя", secOff: "Выключен", secNotConnected: "Не подключён — нажми, чтобы настроить",
     secLead: "Отвечает людям в твоей личке, пока ты занят. Внизу каждого ответа — подпись «ИИ-ассистент». Как только ты сам кому-то пишешь, он замолкает на 10 минут.",
     secRules: "Как отвечать", secRulesPh: "Например: привет, я занят или сплю, отвечу позже, это ИИ", secNotify: "Присылать мне, кому и что ответил",
@@ -706,6 +709,7 @@ const T = {
   },
   en: {
     hello: n => n ? `Hi, ${n}!` : "Hi!", heroSub: "Your personal AI agent. Connect apps — then just tell it what to do.",
+    paidModel: n => `${n} credits an answer · bought with ⭐`, paidLow: n => `Paid model: ${n} credits an answer. Top up with Stars in “Generation”`,
     secTitle: "AI secretary", secOn: "Answering for you", secOff: "Off", secNotConnected: "Not connected — tap to set up",
     secLead: "Answers people in your personal chats while you're busy, signed “AI assistant”. As soon as you write to someone yourself, it goes quiet for 10 minutes.",
     secRules: "How to answer", secRulesPh: "E.g.: hi, I'm busy or asleep, will answer later, this is an AI", secNotify: "Tell me whom it answered and what",
@@ -1002,9 +1006,11 @@ function renderHeader() {
   $("hello").textContent = T.hello(state.user.first_name);
   const n = connectedCount();
   $("cta-text").textContent = n ? T.ctaSome(n) : T.ctaNone;
+  const paid = s.premium || {};
   $("model-menu").innerHTML = s.models.map(m => `
     <button role="menuitemradio" data-model="${esc(m)}" class="${m === s.model ? "on" : ""}">
-      <div><div class="t">${esc(prettyModel(m))}</div></div>
+      <div><div class="t">${esc(prettyModel(m))}${paid[m] ? ` <span class="paid">💎 ${paid[m]}</span>` : ""}</div>
+        ${paid[m] ? `<div class="d">${T.paidModel(paid[m])}</div>` : ""}</div>
       <span class="check">${ICON.check}</span></button>`).join("");
 }
 function toggleMenu(open) {
@@ -1023,7 +1029,11 @@ $("model-menu").addEventListener("click", async e => {
   if (!b) return;
   if (state.settings.models.length < 2) { $("model-menu").classList.remove("open"); return; }
   haptic("select");
-  try { state.settings = (await api("/api/settings", { model: b.dataset.model })).settings; renderHeader(); renderSettings(); toast(T.saved); }
+  const price = (state.settings.premium || {})[b.dataset.model];
+  try {
+    state.settings = (await api("/api/settings", { model: b.dataset.model })).settings; renderHeader(); renderSettings();
+    toast(price && (state.settings.credits || 0) < price ? T.paidLow(price) : T.saved, price ? "💎" : "");
+  }
   catch (err) { toast(errorText(err)); }
   $("model-menu").classList.remove("open"); $("model-btn").setAttribute("aria-expanded", false);
 });
@@ -1231,7 +1241,7 @@ function openGroupSheet(g) {
     <div class="small">${T.levelTitle}</div>
     <div class="seg four" id="g-level">${Object.keys(T.levels).map(k => `<button class="${k === g.level ? "on" : ""}" data-level="${k}">${T.levels[k]}</button>`).join("")}</div>
     <div class="small">${T.gModelTitle}</div>
-    <div class="list" id="g-model" style="margin-bottom:6px">${["", ...state.settings.models.slice(1)].map(m => `<button class="row compact press" data-model="${esc(m)}">
+    <div class="list" id="g-model" style="margin-bottom:6px">${["", ...state.settings.models.slice(1).filter(m => !(state.settings.premium || {})[m])].map(m => `<button class="row compact press" data-model="${esc(m)}">
         <div class="body"><div class="t">${m ? esc(prettyModel(m)) : `${esc(prettyModel(state.settings.models[0]))} <span style="color:var(--hint)">· ${T.gModelDefault.toLowerCase()}</span>`}</div></div>
         <span class="check" style="color:var(--accent);opacity:${(g.model || "") === m ? 1 : 0}">${ICON.check}</span></button>`).join("")}</div>
     <div class="small">${T.adminOnly}</div>

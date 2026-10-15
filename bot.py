@@ -1055,7 +1055,7 @@ def model_identity(model):
         return (f" You run on {pretty}, a model made by Google. If someone asks which model you are or who created you, "
                 f"say plainly that you are {pretty} by Google, working inside the Secret AI Telegram bot.")
     if name.startswith("gpt") or name.startswith("o"):
-        pretty = name.upper().replace("GPT-", "GPT-").replace("-SOL", " Sol").replace("-LUNA", " Luna").replace("-TERRA", " Terra")
+        pretty = name.upper().replace("GPT-", "GPT-").replace("-SOL", " Sol").replace("-LUNA", " Luna").replace("-TERRA", " Terra").replace("-ASTRA", " Astra")
         return (f" You run on {pretty}, a model made by OpenAI. If someone asks which model you are or who created you, "
                 f"say plainly that you are {pretty} by OpenAI, working inside the Secret AI Telegram bot.")
     return ""
@@ -1227,9 +1227,49 @@ async def discover_models(app):
         found = sorted((i for i in abacus_ids if SONNET_55.search(i)), key=lambda i: ("thinking" in i.lower(), len(i)))
         sonnet = ABACUS_PREFIX + (found[0] if found else "claude-sonnet-5-5")
         LOG.info("Claude Sonnet 5.5 on Abacus: %s%s", sonnet, "" if found else " (not in the list, trying the usual id)")
-    data["models"] = [m for m in (gemini, sonnet, claude, gpt, deepseek) if m]  # the first one is the default
+    free = list(dict.fromkeys(m for m in (gemini, sonnet, claude, gpt, deepseek) if m))  # the first one is the default
+    data["premium"] = {m: price for m, price in find_premium(openai_ids, abacus_ids, any_ids).items() if m not in free}
+    data["models"] = free + list(data["premium"])
     chosen = data.get("chat_override")
-    data["chat_default"] = chosen if chosen in data["models"] else data["models"][0]
+    data["chat_default"] = chosen if chosen in free else free[0]
+
+
+# Paid models, like Mira's: each answer costs credits, and credits are only bought with Telegram Stars.
+# key: (how to find it in the catalogs, credits per answer). PREMIUM_PRICES="fable=6,opus=5,astra=4" overrides prices.
+PREMIUM = {
+    "fable": (re.compile(r"fable[-._ ]?5[-._ ]?1", re.I), 6),
+    "opus": (re.compile(r"opus[-._ ]?5[-._ ]?5", re.I), 5),
+    "astra": (re.compile(r"gpt[-._ ]?6(?:[-._]\d)?[-._ ]?astra", re.I), 4),
+}
+
+
+def premium_prices():
+    prices = {key: price for key, (_, price) in PREMIUM.items()}
+    for pair in os.environ.get("PREMIUM_PRICES", "").split(","):
+        key, _, value = pair.partition("=")
+        if key.strip().lower() in prices and value.strip().isdigit():
+            prices[key.strip().lower()] = max(1, int(value))
+    return prices
+
+
+def find_premium(openai_ids, abacus_ids, any_ids):
+    """{model id: credits per answer} for the paid models this account really has (OpenAI, then Abacus, then AnyModel)."""
+    found, prices = {}, premium_prices()
+    for key, (pattern, _) in PREMIUM.items():
+        for prefix, ids in (("", openai_ids), (ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids)):
+            hits = sorted((i for i in ids if pattern.search(i) and not re.search(r"mini|nano|image|audio|\d{4}-\d\d-\d\d", i)),
+                          key=lambda i: ("thinking" in i.lower(), "preview" in i.lower(), len(i)))
+            if hits:
+                found[prefix + hits[0]] = prices[key]
+                LOG.info("Paid model %s: %s (%s credits an answer)", key, prefix + hits[0], prices[key])
+                break
+        else:
+            LOG.warning("Paid model %s is in none of the catalogs; not offered", key)
+    return found
+
+
+def free_models(data):
+    return [m for m in data.get("models", ()) if m not in data.get("premium", {})]
 
 
 NANO = re.compile(r"nano[-_ ]?banana", re.I)
@@ -1775,6 +1815,36 @@ async def read_tiktok(update, context, question, url):
     return question, links.content(text, question, frames), f"{question} {label}"
 
 
+def model_title(model):
+    name = model.split(":", 1)[-1].split("/")[-1]
+    name = re.sub(r"^claude-", "Claude ", re.sub(r"^gpt-", "GPT-", name, flags=re.I), flags=re.I)
+    name = re.sub(r"-(\d+)-(\d+)$", r" \1.\2", name)
+    return re.sub(r"-([a-z])", lambda m: " " + m.group(1).upper(), name).replace("Claude f", "Claude F").replace("Claude o", "Claude O")
+
+
+async def premium_offer(context, update, model, price):
+    """No credits for a paid model: the price and Stars packs to buy right here (credits are only sold for Stars)."""
+    user_id, ru = update.effective_user.id, lang(update) == "ru"
+    credits = context.bot_data["memory"].gen_info(user_id)[1]
+    rows = []
+    for pack, (amount, stars) in PACKS.items():
+        try:
+            url = await context.bot.create_invoice_link(
+                title=f"{amount} кредитов" if ru else f"{amount} credits",
+                description=(f"Кредиты Secret AI: платные модели, фото и видео" if ru else "Secret AI credits: paid models, photos and videos"),
+                payload=f"gen:{pack}:{user_id}", currency="XTR", prices=[LabeledPrice(f"{amount} credits", stars)])
+        except TelegramError as exc:
+            LOG.warning("Invoice link failed: %s", type(exc).__name__)
+            continue
+        rows.append([InlineKeyboardButton(f"⭐ {stars} → {amount} " + ("кредитов" if ru else "credits") + f" (~{amount // price})", url=url)])
+    title = model_title(model)
+    text = (f"💎 {title} — платная модель: {price} кредитов за ответ. У тебя {credits}.\n\nКредиты покупаются только за звёзды "
+            "Telegram. Или выбери бесплатную модель в Secret AI (вверху Mini App)." if ru else
+            f"💎 {title} is a paid model: {price} credits an answer. You have {credits}.\n\nCredits are bought with Telegram "
+            "Stars only. Or pick a free model in Secret AI (top of the Mini App).")
+    return text, InlineKeyboardMarkup(rows) if rows else None
+
+
 def user_model(bot_data, user_id):
     chosen = bot_data["memory"].model(user_id)
     return chosen if chosen in bot_data["models"] else bot_data.get("chat_default") or bot_data["model"]
@@ -1880,9 +1950,15 @@ async def respond(update, context, target, content, saved_question, voice=False)
     else:
         oldest = history[-1]["id"] + 1 if history else None
     instructions += recall_note(memory.recall(user_id, saved_question, oldest))
+    model = user_model(context.bot_data, user_id)
+    price = context.bot_data.get("premium", {}).get(model)
+    if price and not memory.gen_charge(user_id, "chat", price):
+        await live.finish(*await premium_offer(context, update, model, price))
+        return
+    paid = bool(price)
     try:
         answer, incomplete = await unless_stopped(live, generate(
-            context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
+            context, live, toolbox, model=model, instructions=instructions,
             input=shown + [{"role": "user", "content": content}],
             store=False, max_output_tokens=32000))
     except Stopped:  # what was written so far stays as a message, and in the history
@@ -1894,12 +1970,16 @@ async def respond(update, context, target, content, saved_question, voice=False)
         memory.append_turn(user_id, saved_question, (partial[:12000] + " [stopped by the user]").strip())
         return
     except BaseException:
+        if paid:
+            memory.gen_refund(user_id, "credits", price)
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
     answer = answer.strip()
     if not answer and toolbox.proposals:
         answer = ui(update, "Подготовил изменения — проверьте и подтвердите ниже.", "Changes are ready — review and confirm below.")
     if not answer:
+        if paid:
+            memory.gen_refund(user_id, "credits", price)
         await live.finish(ui(update, "Модель не вернула текст. Попробуйте переформулировать вопрос.", "The model returned no text. Please rephrase your question."))
         return
     if incomplete:
@@ -2263,7 +2343,7 @@ async def group_surprise(context, message, user):
 def group_model(data, chat_id):
     """The model a group talks with: its own choice from the Mini App if still offered, else the bot's default."""
     chosen = data["groups"].model(chat_id)
-    return chosen if chosen and chosen in data.get("models", ()) else data.get("chat_default") or data["model"]
+    return chosen if chosen and chosen in free_models(data) else data.get("chat_default") or data["model"]
 
 
 async def quick_answer(data, model, instructions, text, max_tokens=2000):
@@ -3707,8 +3787,8 @@ async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     credits = PACKS[parsed[0]][0]
     if context.bot_data["memory"].gen_paid(payment.telegram_payment_charge_id, parsed[1], credits, payment.total_amount):
-        await send(update.effective_message, ui(update, f"✅ Готово! +{credits} генераций. Открывайте «Генерация» в Secret AI.",
-                                                f"✅ Done! +{credits} generations. Open “Generation” in Secret AI."))
+        await send(update.effective_message, ui(update, f"✅ Готово! +{credits} кредитов: платные модели, фото и видео.",
+                                                f"✅ Done! +{credits} credits: paid models, photos and videos."))
 
 
 async def unsupported(update, context):
@@ -3923,7 +4003,8 @@ class Bridge:
         async def read():
             data, memory = self.app.bot_data, self.app.bot_data["memory"]
             return {"persona": memory.persona(user_id), "model": user_model(data, user_id),
-                    "models": data["models"], "messages": memory.count(user_id),
+                    "models": data["models"], "premium": data.get("premium", {}), "credits": memory.gen_info(user_id)[1],
+                    "messages": memory.count(user_id),
                     "personas": [{"id": pid, "emoji": p[0], "ru": p[1], "en": p[2]} for pid, p in PERSONAS.items()]}
         return self._run(read())
 
@@ -4032,7 +4113,7 @@ class Bridge:
     def set_group_model(self, user_id, chat_id, model):
         """Admins choose the group's model ('' = default). Returns False if not allowed."""
         async def write():
-            if model and model not in self.app.bot_data["models"]:
+            if model and model not in free_models(self.app.bot_data):  # paid models are for private chats
                 return False
             try:
                 member = await self.app.bot.get_chat_member(chat_id, user_id)
