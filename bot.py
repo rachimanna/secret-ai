@@ -3506,7 +3506,7 @@ async def voice_over(data, job, scenes):
     if not (job["voice"] and narration and data.get("tts_model")):
         return None
     try:
-        return await speech_audio(data, narration[:4000])
+        return await owner_voice(data, narration[:4000])
     except Exception as exc:  # a video without voice is still a result
         LOG.warning("Voice-over failed: %s", type(exc).__name__)
         return None
@@ -3776,6 +3776,27 @@ async def speak(context, target, text):
         # Premium users can forbid voice messages (VOICE_MESSAGES_FORBIDDEN); an audio file is still allowed.
         LOG.warning("Voice message refused by Telegram (%s); sending an audio file", exc.message)
         await target.reply_audio(audio=audio, filename="Secret AI.ogg", title="Secret AI")
+
+
+async def owner_voice(data, text):
+    """Speech in the owner's own voice (the Fish Audio voice FISH_VOICE): Fish Audio with FISH_API_KEY, otherwise the
+    free Fish route on the AnyModel key; the Microsoft voice if neither answers. Used for video voice-overs."""
+    voice = data["connections"].get_meta("fish_voice") or data.get("fish_voice") or ""
+    if voice and voice != "off":
+        if data.get("fish_key"):
+            try:
+                return await fish_speech(data["http"], data["fish_key"], voice, text, data.get("fish_model", ""))
+            except Exception as exc:
+                LOG.warning("Owner's voice on Fish Audio failed: %s %s", type(exc).__name__, str(exc)[:200])
+        if data.get("anymodel_key"):
+            try:
+                audio = await anymodel_speech(data["http"], data["anymodel_key"], ANYMODEL_FISH, text,
+                                              data.get("anymodel_api") or ANYMODEL_API, reference_id=voice)
+                LOG.info("Voice-over in the owner's voice %s", voice)
+                return audio
+            except Exception as exc:
+                LOG.warning("Owner's voice through the Fish route failed: %s %s", type(exc).__name__, str(exc)[:200])
+    return await speech_audio(data, text)
 
 
 async def speech_audio(data, text):
@@ -4599,10 +4620,7 @@ def main():
     app.bot_data.update(
         connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key or "off", timeout=120, max_retries=2), openai=use_openai,
-        stt=AsyncOpenAI(api_key=key, timeout=120, max_retries=2) if use_openai else speech.LocalWhisper(
-            AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
-                        base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API, timeout=120)
-            if os.environ.get("ANYMODEL_API_KEY", "").strip() else None),
+        stt=AsyncOpenAI(api_key=key, timeout=120, max_retries=2) if use_openai else speech.GoogleSpeech(),
         memory=Memory(database), allowed=allowed, snapshots=snapshots, codex=codex.CodexStore(connections), codex_jobs={},
         model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",

@@ -8,6 +8,7 @@ the bot and runs on the CPU; a 30-second voice message takes a few seconds.
 import asyncio
 import logging
 import os
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -56,6 +57,61 @@ class LocalWhisper:
             file.seek(0)
             hint = {"language": language} if language else {}
             return await self.fallback.audio.transcriptions.create(model="whisper-1", file=file, **hint)
+
+
+GOOGLE_SPEECH = "http://www.google.com/speech-api/v2/recognize"
+GOOGLE_KEY = os.environ.get("GOOGLE_SPEECH_KEY", "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw")  # Chrome's public key
+LOCALES = {"ru": "ru-RU", "en": "en-US", "uk": "uk-UA", "kk": "kk-KZ", "uz": "uz-UZ", "az": "az-AZ", "hy": "hy-AM",
+           "ka": "ka-GE", "tr": "tr-TR", "de": "de-DE", "es": "es-ES", "fr": "fr-FR", "ky": "ky-KG", "tg": "tg-TJ"}
+CHUNK_SECONDS = 25  # the free endpoint takes short clips: longer audio goes in pieces
+
+
+class GoogleSpeech:
+    """Free speech recognition through the endpoint Chrome uses (no key of ours, nothing on disk).
+    Answers client.audio.transcriptions.create(model=..., file=..., language=...) like the OpenAI client."""
+
+    def __init__(self):
+        self.audio = SimpleNamespace(transcriptions=SimpleNamespace(create=self.create))
+
+    async def create(self, model=None, file=None, language=None, **_):
+        import httpx
+        import imageio_ffmpeg
+        locale = LOCALES.get((language or "ru")[:2], "ru-RU")
+        with tempfile.TemporaryDirectory(prefix="stt-") as folder:
+            source = Path(folder) / "in.audio"
+            source.write_bytes(file.read())
+            process = await asyncio.create_subprocess_exec(
+                imageio_ffmpeg.get_ffmpeg_exe(), "-nostdin", "-y", "-v", "error", "-i", str(source), "-vn", "-ac", "1",
+                "-ar", "16000", "-c:a", "flac", "-f", "segment", "-segment_time", str(CHUNK_SECONDS),
+                str(Path(folder) / "part%03d.flac"), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            await asyncio.wait_for(process.wait(), 120)
+            parts = sorted(Path(folder).glob("part*.flac"))
+            if not parts:
+                raise RuntimeError("the audio couldn't be read")
+            texts = []
+            async with httpx.AsyncClient(timeout=60) as http:
+                for part in parts:
+                    response = await http.post(GOOGLE_SPEECH, params={"client": "chromium", "lang": locale, "key": GOOGLE_KEY},
+                                               content=part.read_bytes(), headers={"Content-Type": "audio/x-flac; rate=16000"})
+                    if response.status_code >= 400:
+                        raise RuntimeError(f"speech service {response.status_code}")
+                    texts.append(_transcript(response.text))
+        return SimpleNamespace(text=" ".join(t for t in texts if t).strip())
+
+
+def _transcript(body):
+    """The best transcript from the endpoint's answer: one JSON object per line, the first is often empty."""
+    import json
+    for line in body.splitlines():
+        try:
+            results = json.loads(line).get("result") or []
+        except ValueError:
+            continue
+        for result in results:
+            alternatives = result.get("alternative") or []
+            if alternatives and alternatives[0].get("transcript"):
+                return alternatives[0]["transcript"].strip()
+    return ""
 
 
 def voice_for(text):
