@@ -15,6 +15,11 @@ LOG = logging.getLogger("secret_ai.speech")
 HERE = Path(__file__).resolve().parent
 WHISPER_MODEL = os.environ.get("WHISPER_MODEL", "base").strip() or "base"
 EDGE_VOICE = os.environ.get("EDGE_VOICE", "ru-RU-DmitryNeural").strip() or "ru-RU-DmitryNeural"  # a warm male voice
+# Russian voices for /voice: name -> Microsoft voice id, and what each sounds like.
+RU_VOICES = {"дмитрий": "ru-RU-DmitryNeural", "dmitry": "ru-RU-DmitryNeural",
+             "светлана": "ru-RU-SvetlanaNeural", "svetlana": "ru-RU-SvetlanaNeural",
+             "дария": "ru-RU-DariyaNeural", "dariya": "ru-RU-DariyaNeural"}
+RU_LABELS = {"дмитрий": "мужской, тёплый (по умолчанию)", "светлана": "женский, спокойный", "дария": "женский, живой"}
 EDGE_VOICES = {"ru": EDGE_VOICE, "en": "en-US-AndrewNeural", "uk": "uk-UA-OstapNeural", "kk": "kk-KZ-DauletNeural",
                "uz": "uz-UZ-SardorNeural", "az": "az-AZ-BabekNeural", "hy": "hy-AM-HaykNeural", "ka": "ka-GE-GiorgiNeural",
                "tr": "tr-TR-AhmetNeural", "de": "de-DE-ConradNeural", "es": "es-ES-AlvaroNeural", "fr": "fr-FR-HenriNeural"}

@@ -3166,54 +3166,41 @@ async def secretary_switch(update, context, text):
 
 
 async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/voice: which AnyModel voice answers voice messages; /voice <name or id> picks one, /voice off — the usual voice."""
+    """/voice: which free Microsoft voice reads the answers; /voice <name> picks one (owner only)."""
     if not await authorized(update, context):
         return
     data, message = context.bot_data, update.effective_message
     if data["connections"].get_meta("owner") != update.effective_user.id:
         await send(message, "Голос бота меняет только владелец.")
         return
-    base, query = data.get("anymodel_api") or ANYMODEL_API, " ".join(context.args or []).strip()
+    query = " ".join(context.args or []).strip()
     if query.lower().startswith("fish"):
         if not data.get("fish_key"):
-            await send(message, "Нужен ключ Fish Audio: переменная FISH_API_KEY в Render.")
+            await send(message, "Нужен ключ Fish Audio: FISH_API_KEY в .env.")
             return
         voice = fish_voice_id(query[4:].strip())
         if not voice:
-            await send(message, "Пришли так: /voice fish <ссылка на голос с fish.audio или его ID>")
+            await send(message, "Пришли так: /voice fish <ссылка на голос с fish.audio или его ID>, выключить: /voice fish off")
             return
         data["connections"].set_meta("fish_voice", voice)
-        await send(message, "🎙 Голос Fish Audio включён: " + voice + ("" if voice == "off" else
-                   "\nЧтобы не слетал после обновлений, пропиши в Render FISH_VOICE = " + voice))
+        await send(message, "🎙 Голос Fish Audio " + ("выключен" if voice == "off" else "включён: " + voice))
         return
-    if not data.get("anymodel_key"):
-        await send(message, "Нужен ключ AnyModel: переменная ANYMODEL_API_KEY в Render.")
-        return
-    if query.lower() in ("all", "все", "всё"):
-        voices = await anymodel_voices(data["http"], data["anymodel_key"], base, every_language=True)
-        lines = [f"{model}" + (f" — {label}" if label else "") for model, label in voices]
-        await send(message, f"🎙 Все голоса API ({len(voices)}):\n" + "\n".join(lines) if voices
-                   else "AnyModel не отдал список голосов.")
-        return
-    voices = await anymodel_voices(data["http"], data["anymodel_key"], base)
     if query:
-        found = await anymodel_voice_id(data["http"], data["anymodel_key"], query, base) if query.lower() != "off" else ""
-        if query.lower() != "off" and not found:
-            await send(message, f"Голос «{query}» через API не нашёлся. Напиши /voice — покажу, какие есть.")
+        voice = speech.RU_VOICES.get(query.lower()) or (query if re.fullmatch(r"[a-z]{2}-[A-Z]{2}-\w+Neural", query) else None)
+        if not voice:
+            await send(message, "Такого голоса нет. Напиши /voice — покажу список.")
             return
-        data["connections"].set_meta("anymodel_voice", query)
-        data["anymodel_voice_id"] = found
-        await send(message, f"🎙 Теперь голосовые отвечаю голосом: {found}" if found else "🎙 Вернул обычный голос.")
+        data["connections"].set_meta("edge_voice", voice)
+        try:
+            await speak(context, message, "Вах, брат, теперь я говорю этим голосом. Как тебе?")
+        except Exception as exc:
+            await send(message, f"Голос выбран: {voice}, но озвучить не вышло: {type(exc).__name__}")
         return
-    current = data.get("anymodel_voice_id")
-    head = f"🎙 Сейчас: {current or 'обычный голос (OpenAI)'}\n\n"
-    if not voices:
-        await send(message, head + "AnyModel не отдал список голосов — проверь ключ и баланс.")
-        return
-    lines = [f"• {model}" + (f" — {label}" if label else "") for model, label in voices[:60]]
-    await send(message, head + f"Голоса, доступные через API ({len(voices)}):\n" + "\n".join(lines)
-               + "\n\nВыбрать: /voice <имя или id>, например /voice " + voices[0][0] + "\nВсе голоса всех языков: /voice all"
-               + "\nОбычный голос: /voice off")
+    current = data["connections"].get_meta("edge_voice") or speech.EDGE_VOICE
+    names = {v: k for k, v in speech.RU_VOICES.items()}
+    await send(message, f"🎙 Сейчас голос: {names.get(current, current)}\n\nГолоса Microsoft (бесплатные):\n"
+               + "\n".join(f"• /voice {name} — {label}" for name, label in speech.RU_LABELS.items())
+               + "\n\nМожно любой голос Microsoft по id, например /voice en-US-AndrewNeural")
 
 
 async def secretary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3788,9 +3775,9 @@ async def speak(context, target, text):
 
 
 async def speech_audio(data, text):
-    """OGG Opus speech: a Fish Audio voice (FISH_API_KEY + FISH_VOICE or /voice fish …), else the AnyModel voice,
-    else OpenAI TTS; each one falls back to the next."""
-    fish = data["connections"].get_meta("fish_voice") or data.get("fish_voice") or ""
+    """OGG Opus speech in a free Microsoft neural voice (Dmitry by default, /voice picks another); a Fish Audio voice
+    (FISH_API_KEY + /voice fish …) if the owner set one up."""
+    fish = data["connections"].get_meta("fish_voice") or ""
     if fish and fish != "off" and data.get("fish_key"):
         try:
             audio = await fish_speech(data["http"], data["fish_key"], fish, text, data.get("fish_model", ""))
@@ -3798,35 +3785,11 @@ async def speech_audio(data, text):
             return audio
         except Exception as exc:
             LOG.warning("Fish Audio voice failed: %s %s", type(exc).__name__, str(exc)[:200])
-    elif fish and fish != "off" and data.get("anymodel_key") and data.get("fish_via_anymodel", True):
-        # No Fish Audio key: ask AnyModel's free Fish route for the same voice.
-        try:
-            audio = await anymodel_speech(data["http"], data["anymodel_key"], ANYMODEL_FISH, text,
-                                          data.get("anymodel_api") or ANYMODEL_API, reference_id=fish)
-            LOG.info("Voice reply: AnyModel %s asked for Fish voice %s", ANYMODEL_FISH, fish)
-            return audio
-        except Exception as exc:
-            LOG.warning("Fish voice through AnyModel failed: %s %s", type(exc).__name__, str(exc)[:200])
-    if data.get("anymodel_key") and data.get("anymodel_voice"):
-        try:
-            base = data.get("anymodel_api") or ANYMODEL_API
-            if "anymodel_voice_id" not in data:  # looked up once per run; /voice changes it
-                wanted = data["connections"].get_meta("anymodel_voice") or data["anymodel_voice"]
-                data["anymodel_voice_id"] = await anymodel_voice_id(data["http"], data["anymodel_key"], wanted, base)
-                LOG.info("AnyModel voice: %s", data["anymodel_voice_id"] or "not found, using the usual voice")
-            if data["anymodel_voice_id"]:
-                audio = await anymodel_speech(data["http"], data["anymodel_key"], data["anymodel_voice_id"], text, base)
-                LOG.info("Voice reply: AnyModel voice %s", data["anymodel_voice_id"])
-                return audio
-        except Exception as exc:  # the usual voice still answers
-            LOG.warning("AnyModel voice failed: %s %s", type(exc).__name__, str(exc)[:200])
-    if data.get("openai"):
-        audio = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"], input=text,
-                                                         response_format="opus")
-        LOG.info("Voice reply: OpenAI voice %s", data["tts_voice"])
-        return audio.content
-    audio = await voice_message(await speech.edge_speech(text))
-    LOG.info("Voice reply: Microsoft voice")
+    voice = data["connections"].get_meta("edge_voice") or None
+    if voice and speech.voice_for(text) != speech.EDGE_VOICE and voice.startswith("ru-"):
+        voice = None  # a Russian voice can't read English: the matching voice reads it
+    audio = await voice_message(await speech.edge_speech(text, voice))
+    LOG.info("Voice reply: Microsoft voice %s", voice or speech.voice_for(text))
     return audio
 
 
