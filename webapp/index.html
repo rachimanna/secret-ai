@@ -258,6 +258,60 @@
   .done-check svg { width: 20px; height: 20px; stroke: #fff; stroke-width: 3; fill: none; stroke-dasharray: 30; stroke-dashoffset: 30; animation: draw .5s .2s ease forwards; }
   @keyframes draw { to { stroke-dashoffset: 0; } }
 
+  /* ---------- secretary set-up: a looping phone demo of each step, like Mira ---------- */
+  .demo { position: relative; height: 270px; margin: 6px -4px 0; border-radius: 22px 22px 0 0; overflow: hidden;
+          background: linear-gradient(120deg, #ec4f9a 0%, #a855f7 38%, #6d6cf6 66%, #2f7bff 100%); }
+  .demo .phone { position: absolute; left: 50%; top: 18px; width: 230px; height: 330px; margin-left: -115px; border-radius: 40px; padding: 7px;
+                 background: linear-gradient(145deg, #3a3d4a, #15161c); box-shadow: 0 18px 40px rgba(0,0,0,.35), inset 0 0 0 1.5px rgba(255,255,255,.18); }
+  .demo .scr { position: relative; height: 100%; border-radius: 33px; overflow: hidden; background: #f2f2f7; color: #111; font-size: 11px; }
+  .demo .bar { height: 30px; display: flex; align-items: center; justify-content: space-between; padding: 0 22px; font-weight: 700; font-size: 11px; }
+  .demo .island { position: absolute; top: 7px; left: 50%; width: 70px; height: 20px; margin-left: -35px; border-radius: 12px; background: #000; z-index: 3; }
+  .demo .pg { position: absolute; inset: 30px 0 0; padding: 4px 12px; transition: transform .5s var(--spring), opacity .35s; opacity: 0; transform: translateX(40%); }
+  .demo .pg.on { opacity: 1; transform: none; }
+  .demo .pg.off { opacity: 0; transform: translateX(-30%); }
+  .demo .top { display: flex; justify-content: space-between; align-items: center; height: 28px; }
+  .demo .pill { padding: 5px 11px; border-radius: 14px; background: #fff; font-weight: 700; color: #007aff; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .demo .rnd { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; background: #fff; font-weight: 800; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .demo .rnd.ok { background: #c7c7cc; color: #fff; transition: background .3s, transform .3s var(--spring); }
+  .demo .rnd.ok.lit { background: #007aff; transform: scale(1.12); }
+  .demo .ava { width: 58px; height: 58px; border-radius: 50%; margin: 2px auto 6px; display: grid; place-items: center; color: #fff; font-size: 24px; font-weight: 800;
+               background: linear-gradient(135deg, #6d5dfc, #3e8bff) center / cover; }
+  .demo .nm { text-align: center; font-weight: 800; font-size: 14px; }
+  .demo .un { text-align: center; color: #8e8e93; margin-bottom: 8px; }
+  .demo .grp { background: #fff; border-radius: 12px; overflow: hidden; margin-bottom: 8px; }
+  .demo .it { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: .5px solid #e5e5ea; transition: background .25s; }
+  .demo .it:last-child { border-bottom: 0; }
+  .demo .it i { width: 20px; height: 20px; border-radius: 6px; display: grid; place-items: center; font-style: normal; font-size: 11px; color: #fff; }
+  .demo .it span { flex: 1; } .demo .it em { color: #c7c7cc; font-style: normal; font-weight: 700; }
+  .demo .it.hot { background: #e5f0ff; }
+  .demo .mascot { width: 64px; height: 64px; margin: 0 auto; display: block; object-fit: contain; }
+  .demo h5 { margin: 4px 0 2px; text-align: center; font-size: 14px; font-weight: 800; }
+  .demo .sub { text-align: center; color: #3c3c43; margin-bottom: 8px; }
+  .demo .inp { min-height: 30px; display: flex; align-items: center; padding: 0 10px; background: #fff; border-radius: 12px; margin-bottom: 8px; color: #8e8e93; }
+  .demo .inp.typed { color: #111; font-weight: 600; }
+  .demo .caret { width: 1.5px; height: 13px; background: #007aff; margin-left: 1px; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .demo .tg { width: 30px; height: 18px; border-radius: 9px; background: #e5e5ea; position: relative; transition: background .25s; }
+  .demo .tg::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff;
+                     box-shadow: 0 1px 2px rgba(0,0,0,.25); transition: transform .3s var(--spring); }
+  .demo .tg.on { background: #34c759; } .demo .tg.on::after { transform: translateX(12px); }
+  .demo .finger { position: absolute; z-index: 4; left: 0; top: 0; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%; pointer-events: none;
+                  background: rgba(255,255,255,.55); border: 2px solid rgba(0,0,0,.18); box-shadow: 0 4px 12px rgba(0,0,0,.25); opacity: 0;
+                  transition: transform .7s cubic-bezier(.5,0,.2,1), opacity .3s; }
+  .demo .finger.tap { animation: tap .35s ease; }
+  @keyframes tap { 50% { scale: .7; background: rgba(0,122,255,.45); } }
+  .steps { background: var(--card); border-radius: 0 0 22px 22px; margin: 0 -4px 14px; padding: 4px 0; }
+  .step { display: flex; gap: 14px; padding: 12px 16px; border-bottom: 1px solid var(--line); transition: opacity .3s; opacity: .55; cursor: pointer; }
+  .step:last-child { border-bottom: 0; }
+  .step.cur { opacity: 1; }
+  .step .n { flex: none; width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; background: var(--accent); color: #fff; font-weight: 800;
+             font-size: 14px; transition: transform .3s var(--spring); }
+  .step.cur .n { transform: scale(1.12); box-shadow: 0 0 0 5px rgba(62,139,255,.22); }
+  .step .t { font-weight: 700; font-size: 16px; line-height: 1.25; }
+  .step .d { color: var(--hint); font-size: 13.5px; margin-top: 3px; line-height: 1.35; }
+  .step b { color: var(--accent); }
+  .premium-note { text-align: center; color: var(--hint); font-size: 13px; margin: -4px 0 12px; }
+
   /* ---------- toast ---------- */
   .toast { position: fixed; z-index: 50; left: 50%; top: calc(var(--safe-top) + 12px); transform: translate(-50%, -140%); max-width: calc(100vw - 32px);
            padding: 12px 18px; border-radius: 22px; font-weight: 600; font-size: 15px; display: flex; gap: 8px; align-items: center;
@@ -586,7 +640,13 @@ const T = {
     secLead: "Отвечает людям в твоей личке, пока ты занят. Внизу каждого ответа — подпись «ИИ-ассистент». Как только ты сам кому-то пишешь, он замолкает на 10 минут.",
     secRules: "Как отвечать", secRulesPh: "Например: привет, я занят или сплю, отвечу позже, это ИИ", secNotify: "Присылать мне, кому и что ответил",
     secRecent: "Последние ответы", secNone: "Пока никому не отвечал", secSave: "Сохранить", secHow: "Как подключить (один раз, нужен Telegram Premium)",
-    secSteps: ["@BotFather → бот → Bot Settings → Business Mode → включить", "Telegram → Настройки → Telegram для бизнеса → Чат-боты", "Выбрать этого бота и разрешить «Отвечать на сообщения»"],
+    secSteps: [["Открой «Мой профиль»", "Telegram → Настройки → нажми на свою аватарку или имя вверху."],
+               ["Нажми Изменить → Автоматизация чатов", "В старых версиях Telegram: Настройки → Telegram для бизнеса → Чат-боты."],
+               ["Укажи <b>@{bot}</b> и подключи", "Вставь имя бота (кнопка ниже его скопирует), включи «Отвечать на сообщения» и нажми ✓."]],
+    secConnect: "Подключить Secret AI", secCopied: "Скопировал @{bot} — вставь в «Автоматизация чатов»",
+    secPremium: "Нужен Telegram Premium · подключается один раз",
+    secDemo: { me: "Мой профиль", edit: "Изменить", name: "Имя", bio: "О себе", birthday: "День рождения", auto: "Автоматизация чатов",
+               title: "Автоматизация чатов", sub: "Бот будет отвечать на сообщения за вас", field: "Имя бота", reply: "Отвечать на сообщения" },
     groupsTitle: "Мои группы", groupsSub: "Где я шучу, кидаю мемы и делаю цитаты", groupsEmpty: "Добавь меня в группу с друзьями",
     groupsEmptySub: "Буду подкалывать, кидать мемы из TikTok, делать цитаты и демотиваторы", addToGroup: "Добавить в группу",
     gStats: (m, s) => `${m} сообщ. · ${s} стикеров`, gDelete: "Удалить",
@@ -649,7 +709,13 @@ const T = {
     secLead: "Answers people in your personal chats while you're busy, signed “AI assistant”. As soon as you write to someone yourself, it goes quiet for 10 minutes.",
     secRules: "How to answer", secRulesPh: "E.g.: hi, I'm busy or asleep, will answer later, this is an AI", secNotify: "Tell me whom it answered and what",
     secRecent: "Recent answers", secNone: "No answers yet", secSave: "Save", secHow: "How to connect (once, Telegram Premium needed)",
-    secSteps: ["@BotFather → bot → Bot Settings → Business Mode → turn on", "Telegram → Settings → Telegram Business → Chatbots", "Pick this bot and allow it to reply to messages"],
+    secSteps: [["Open “My Profile”", "Telegram → Settings → tap your photo or name at the top."],
+               ["Tap Edit → Chat Automation", "In older Telegram versions: Settings → Telegram Business → Chatbots."],
+               ["Enter <b>@{bot}</b> and connect", "Paste the bot's name (the button below copies it), turn on “Reply to messages” and tap ✓."]],
+    secConnect: "Connect Secret AI", secCopied: "Copied @{bot} — paste it into “Chat Automation”",
+    secPremium: "Telegram Premium needed · set up once",
+    secDemo: { me: "My Profile", edit: "Edit", name: "Name", bio: "Bio", birthday: "Birthday", auto: "Chat Automation",
+               title: "Chat Automation", sub: "Add a bot to reply to messages on your behalf", field: "Bot name", reply: "Reply to messages" },
     groupsTitle: "My groups", groupsSub: "Where I joke, post memes and make quotes", groupsEmpty: "Add me to a group with friends",
     groupsEmptySub: "I'll tease, post TikTok memes, make quotes and demotivators", addToGroup: "Add to a group",
     gStats: (m, s) => `${m} messages · ${s} stickers`, gDelete: "Delete",
@@ -991,8 +1057,7 @@ function openSecretarySheet() {
   const ago = t => { const m = Math.max(1, Math.round((Date.now() / 1000 - t) / 60)); return m < 60 ? `${m} ${lang === "ru" ? "мин" : "min"}` : m < 1440 ? `${Math.round(m / 60)} ${lang === "ru" ? "ч" : "h"}` : `${Math.round(m / 1440)} ${lang === "ru" ? "дн" : "d"}`; };
   openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#1f8f4e,#34c759)">${SEC_ICON.replace('class="i"', 'class="i" style="width:40px;height:40px;stroke:#fff"')}</div>
       <h3>${T.secTitle}</h3><p class="lead">${T.secLead}</p></div>
-    ${ready ? "" : `<div class="section" style="margin-top:0"><h2>${T.secHow}</h2><div class="list">${T.secSteps.map((t, i) =>
-      `<div class="row compact"><div class="ic line" style="--tint:#8f80ff"><b style="font-size:14px">${i + 1}</b></div><div class="body"><div class="d" style="color:var(--text)">${esc(t)}</div></div></div>`).join("")}</div></div>`}
+    ${ready ? "" : secretarySetup()}
     <div class="small">${T.secRules}</div>
     <textarea class="field" id="sec-rules" placeholder="${T.secRulesPh}">${esc(s.rules || "")}</textarea>
     <div class="list" style="margin-bottom:14px"><div class="row compact"><div class="body"><div class="t">${T.secNotify}</div></div>
@@ -1001,6 +1066,7 @@ function openSecretarySheet() {
     <div class="section"><h2>${T.secRecent}</h2><div class="list">${(s.recent || []).length ? s.recent.map(r => `<div class="recent-item">
         <div class="who">${esc(r.name)} · ${ago(r.at)}</div><div class="said">«${esc(r.said)}»</div><div class="ans">↳ ${esc(r.reply)}</div></div>`).join("")
       : `<div class="empty" style="padding:22px">${T.secNone}</div>`}</div></div>`);
+  if (!ready) playSetupDemo();
   $("sec-notify").onclick = e => { e.currentTarget.classList.toggle("on"); haptic("select"); };
   $("sec-save").onclick = async () => {
     try {
@@ -1009,6 +1075,83 @@ function openSecretarySheet() {
       renderSecretary(); closeSheet(); toast(T.saved); haptic("success");
     } catch (e) { toast(errorText(e)); haptic("error"); }
   };
+}
+/* Set-up guide: a phone that shows each step on a loop (profile → Edit → Chat Automation → the bot's name), the steps
+   underneath light up with it, a tap on a step jumps there; the button copies the bot's name. */
+function secretarySetup() {
+  const D = T.secDemo, bot = state.bot || "bot", u = tg?.initDataUnsafe?.user || {};
+  const name = esc([u.first_name, u.last_name].filter(Boolean).join(" ") || "Secret AI");
+  const photo = u.photo_url ? ` style="background-image:url('${esc(u.photo_url)}')"` : "";
+  const item = (icon, color, text, id = "") => `<div class="it"${id ? ` id="${id}"` : ""}><i style="background:${color}">${icon}</i><span>${text}</span><em>›</em></div>`;
+  return `<div class="demo" id="demo"><div class="phone"><div class="scr" id="demo-scr"><div class="island"></div>
+      <div class="bar"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="pg" data-pg="0"><div class="top"><span></span><span class="pill" id="d-edit">${D.edit}</span></div>
+        <div class="ava"${photo}>${photo ? "" : name[0]}</div><div class="nm">${name}</div><div class="un">${u.username ? "@" + esc(u.username) : D.me}</div>
+        <div class="grp">${item("★", "#af52de", "Premium")}${item("⚙", "#8e8e93", lang === "ru" ? "Настройки" : "Settings")}</div></div>
+      <div class="pg" data-pg="1"><div class="top"><span class="rnd">‹</span><b>${D.edit}</b><span class="rnd ok lit">✓</span></div>
+        <div class="grp"><div class="it"><span>${name}</span></div><div class="it"><span style="color:#8e8e93">${D.bio}</span></div></div>
+        <div class="grp">${item("🎂", "#ff9f0a", D.birthday)}${item("🤖", "#007aff", D.auto, "d-auto")}</div></div>
+      <div class="pg" data-pg="2"><div class="top"><span class="rnd">‹</span><span></span><span class="rnd ok" id="d-ok">✓</span></div>
+        <img class="mascot" src="/mascot.png" alt=""><h5>${D.title}</h5><div class="sub">${D.sub}</div>
+        <div class="inp" id="d-inp">${D.field}</div>
+        <div class="grp"><div class="it"><span>${D.reply}</span><div class="tg" id="d-tg"></div></div></div></div>
+      <div class="finger" id="d-finger"></div></div></div></div>
+    <div class="steps">${T.secSteps.map(([t, d], i) => `<div class="step" data-step="${i}"><div class="n">${i + 1}</div>
+      <div><div class="t">${t.replace("{bot}", esc(bot))}</div><div class="d">${esc(d)}</div></div></div>`).join("")}</div>
+    <button class="btn" id="sec-connect" style="margin-bottom:8px">↗ ${T.secConnect}</button>
+    <div class="premium-note">${T.secPremium}</div>`;
+}
+function playSetupDemo() {
+  const demo = $("demo"), scr = $("demo-scr"), finger = $("d-finger"), bot = "@" + (state.bot || "bot");
+  const STEP_AT = [0, 3.2, 6.4], LOOP = 6.4 + 1.2 + bot.length * .11 + 4;
+  let start = performance.now(), last = {};
+  const pointAt = el => {  // the finger goes to the middle of an element, from the layout (the page may still be sliding in)
+    let x = el.offsetWidth / 2, y = el.offsetHeight / 2;
+    for (let n = el; n && n !== scr; n = n.offsetParent) { x += n.offsetLeft; y += n.offsetTop; }
+    finger.style.transform = `translate(${x}px, ${y}px)`;
+  };
+  const once = (key, fn) => { if (!last[key]) { last[key] = true; fn(); } };
+  demo.parentElement.querySelectorAll("[data-step]").forEach(el => el.onclick = () => {
+    start = performance.now() - STEP_AT[+el.dataset.step] * 1000; last = {}; haptic("select");
+  });
+  $("sec-connect").onclick = () => {
+    navigator.clipboard?.writeText(bot).catch(() => {});
+    toast(T.secCopied.replace("{bot}", state.bot || "bot"), "📋"); haptic("success");
+  };
+  const frame = now => {
+    if (!document.body.contains(demo)) return;  // the sheet was closed
+    let t = (now - start) / 1000;
+    if (t > LOOP) { start = now; t = 0; last = {}; }
+    const page = t < STEP_AT[1] ? 0 : t < STEP_AT[2] ? 1 : 2;
+    if (last.page !== page) {
+      last = { page };
+      demo.querySelectorAll(".pg").forEach(p => { const n = +p.dataset.pg; p.className = "pg" + (n === page ? " on" : n < page ? " off" : ""); });
+      demo.parentElement.querySelectorAll(".step").forEach(s => s.classList.toggle("cur", +s.dataset.step === page));
+      finger.style.opacity = 0; finger.classList.remove("tap");
+      $("d-auto").classList.remove("hot"); $("d-tg").classList.remove("on"); $("d-ok").classList.remove("lit");
+      $("d-inp").className = "inp"; $("d-inp").textContent = T.secDemo.field;
+    }
+    const local = t - STEP_AT[page];
+    const tap = (key, at, el, after) => {
+      if (local > at - .9) once(key + "move", () => { finger.style.opacity = 1; pointAt(el); });
+      if (local > at) once(key, () => { finger.classList.remove("tap"); void finger.offsetWidth; finger.classList.add("tap"); after?.(); });
+    };
+    if (page === 0) tap("edit", 1.9, $("d-edit"));
+    if (page === 1) tap("auto", 1.9, $("d-auto"), () => $("d-auto").classList.add("hot"));
+    if (page === 2) {
+      tap("inp", .9, $("d-inp"));
+      const typed = Math.max(0, Math.min(bot.length, Math.floor((local - 1.2) / 0.11)));
+      if (local > 1.2 && last.typed !== typed) {
+        last.typed = typed;
+        $("d-inp").className = "inp typed"; $("d-inp").innerHTML = esc(bot.slice(0, typed)) + '<span class="caret"></span>';
+      }
+      const typedEnd = 1.2 + bot.length * .11;
+      tap("tg", typedEnd + 1, $("d-tg"), () => $("d-tg").classList.add("on"));
+      tap("ok", typedEnd + 2.3, $("d-ok"), () => $("d-ok").classList.add("lit"));
+    }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
 }
 function addToGroup() {
   const url = `https://t.me/${state.bot}?startgroup=1`;
