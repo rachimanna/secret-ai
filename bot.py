@@ -3051,16 +3051,20 @@ async def plan_scenes(data, job):
         (f"Also write 'voice': a natural voice-over line in {'Russian' if ru else 'the language of the request'} for that "
          f"scene, at most {words} words, together telling the story. " if job["voice"] else "Set 'voice' to an empty string. ") +
         'Return JSON: {"scenes": [{"visual": "...", "sound": "...", "voice": "..."}]}.')
-    try:
-        response = await data["client"].responses.create(
-            model=data["model"], instructions=instructions, input=job["prompt"], store=False, max_output_tokens=4000,
-            text={"format": {"type": "json_object"}})
-        scenes = json.loads(response.output_text)["scenes"][:count]
-        scenes = [{"visual": str(s["visual"]).strip(), "sound": str(s.get("sound") or "").strip(),
-                   "voice": str(s.get("voice") or "").strip()} for s in scenes if s.get("visual")]
-    except Exception as exc:  # planning is a nicety: fall back to the raw idea
-        LOG.warning("Scene planning failed: %s", type(exc).__name__)
-        scenes = []
+    scenes = []
+    # The main chat model first, plain OpenAI as the fallback; JSON is cut out of the answer, no special format needed.
+    for model in dict.fromkeys([data.get("chat_default") or data["model"], data["model"]]):
+        try:
+            text = await quick_answer(data, model, instructions + " Output only the JSON.", job["prompt"], max_tokens=4000)
+            found = re.search(r"\{.*\}", text or "", re.S)
+            scenes = json.loads(found.group(0))["scenes"][:count] if found else []
+            scenes = [{"visual": str(s["visual"]).strip(), "sound": str(s.get("sound") or "").strip(),
+                       "voice": str(s.get("voice") or "").strip()} for s in scenes if s.get("visual")]
+        except Exception as exc:  # planning is a nicety: fall back to the raw idea
+            LOG.warning("Scene planning with %s failed: %s %s", model, type(exc).__name__, str(exc)[:200])
+            scenes = []
+        if scenes:
+            break
     if len(scenes) < count:
         scenes += [{"visual": f"{job['prompt']} (part {i + 1} of {count})", "sound": "", "voice": ""} for i in range(len(scenes), count)]
     return scenes
