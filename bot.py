@@ -1375,7 +1375,7 @@ async def discover_models(app):
         except Exception as exc:
             LOG.warning("%s model list unavailable (%s); trying %s", name, type(exc).__name__, usual)
             ids = []
-        hits = sorted((i for p in patterns for i in ids if re.search(p, i, re.I)),
+        hits = sorted((i for p in patterns for i in ids if re.search(p, i, re.I) and not re.search(r"code|coder|vision", i, re.I)),
                       key=lambda i: ("free" not in i.lower(), [-int(n) for n in re.findall(r"\d+", i)][:3], len(i)))
         model = f"{name}:{hits[0] if hits else usual}"
         extra.append(model)
