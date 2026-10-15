@@ -310,6 +310,7 @@
   .step .t { font-weight: 700; font-size: 16px; line-height: 1.25; }
   .step .d { color: var(--hint); font-size: 13.5px; margin-top: 3px; line-height: 1.35; }
   .step b { color: var(--accent); }
+  .sec-ready { text-align: center; font-weight: 700; color: var(--ok); margin: -2px 0 16px; }
   .premium-note { text-align: center; color: var(--hint); font-size: 13px; margin: -4px 0 12px; }
 
   /* ---------- toast ---------- */
@@ -644,7 +645,7 @@ const T = {
                ["Нажми Изменить → Автоматизация чатов", "В старых версиях Telegram: Настройки → Telegram для бизнеса → Чат-боты."],
                ["Укажи <b>@{bot}</b> и подключи", "Вставь имя бота (кнопка ниже его скопирует), включи «Отвечать на сообщения» и нажми ✓."]],
     secConnect: "Подключить Secret AI", secCopied: "Скопировал @{bot} — вставь в «Автоматизация чатов»",
-    secPremium: "Нужен Telegram Premium · подключается один раз",
+    secPremium: "Нужен Telegram Premium · подключается один раз", secReady: "Подключён — отвечает за тебя",
     secDemo: { me: "Мой профиль", edit: "Изменить", name: "Имя", bio: "О себе", birthday: "День рождения", auto: "Автоматизация чатов",
                title: "Автоматизация чатов", sub: "Бот будет отвечать на сообщения за вас", field: "Имя бота", reply: "Отвечать на сообщения" },
     groupsTitle: "Мои группы", groupsSub: "Где я шучу, кидаю мемы и делаю цитаты", groupsEmpty: "Добавь меня в группу с друзьями",
@@ -713,7 +714,7 @@ const T = {
                ["Tap Edit → Chat Automation", "In older Telegram versions: Settings → Telegram Business → Chatbots."],
                ["Enter <b>@{bot}</b> and connect", "Paste the bot's name (the button below copies it), turn on “Reply to messages” and tap ✓."]],
     secConnect: "Connect Secret AI", secCopied: "Copied @{bot} — paste it into “Chat Automation”",
-    secPremium: "Telegram Premium needed · set up once",
+    secPremium: "Telegram Premium needed · set up once", secReady: "Connected — answering for you",
     secDemo: { me: "My Profile", edit: "Edit", name: "Name", bio: "Bio", birthday: "Birthday", auto: "Chat Automation",
                title: "Chat Automation", sub: "Add a bot to reply to messages on your behalf", field: "Bot name", reply: "Reply to messages" },
     groupsTitle: "My groups", groupsSub: "Where I joke, post memes and make quotes", groupsEmpty: "Add me to a group with friends",
@@ -821,7 +822,6 @@ const QUICK = lang === "ru" ? [
 const DISCOVER = lang === "ru" ? [
   ["Лучшее", [
     ["🔍", "Задай любой вопрос", "Помогу во всём разобраться", "Привет! Что ты умеешь и чем можешь помочь мне прямо сейчас?"],
-    ["👔", "Режим секретаря", "Отвечает за тебя, пока ты занят", "", null, false, "", "secretary", "new"],
     ["📰", "Создать сайт", "Одно сообщение — готовый сайт", "Сделай мне красивый одностраничный сайт-визитку. Спроси, о чём он, и сразу собери.", null, false, "", "", "new"],
   ]],
   ["Основное", [
@@ -858,7 +858,6 @@ const DISCOVER = lang === "ru" ? [
 ] : [
   ["Best", [
     ["🔍", "Ask anything", "I'll help you figure it out", "Hi! What can you do and how can you help me right now?"],
-    ["👔", "Secretary mode", "Answers for you while you're busy", "", null, false, "", "secretary", "new"],
     ["📰", "Create a website", "One message — a ready site", "Make me a nice one-page website. Ask what it's about and build it right away.", null, false, "", "", "new"],
   ]],
   ["Basics", [
@@ -1033,7 +1032,6 @@ $("hero-edit").addEventListener("click", () => state && openPersonaSheet());
 
 
 /* ---------------- AI secretary + groups ---------------- */
-const SEC_ICON = '<svg class="i" viewBox="0 0 24 24"><path d="M20 12a8 8 0 0 1-11.6 7.1L4 20l1-4.4A8 8 0 1 1 20 12z"/><path d="M9 10.5h.01M12 10.5h.01M15 10.5h.01"/></svg>';
 const GROUP_ICON = '<svg class="i" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.2"/><path d="M3 20c.8-3.4 3.2-5 6-5s5.2 1.6 6 5"/><circle cx="17" cy="9" r="2.6"/><path d="M16 14.2c2.6-.3 4.4 1.2 5 4.3"/></svg>';
 function renderSecretary() {
   const s = state.secretary;
@@ -1055,9 +1053,8 @@ function renderSecretary() {
 function openSecretarySheet() {
   const s = state.secretary, ready = s.connected && s.can_reply;
   const ago = t => { const m = Math.max(1, Math.round((Date.now() / 1000 - t) / 60)); return m < 60 ? `${m} ${lang === "ru" ? "мин" : "min"}` : m < 1440 ? `${Math.round(m / 60)} ${lang === "ru" ? "ч" : "h"}` : `${Math.round(m / 1440)} ${lang === "ru" ? "дн" : "d"}`; };
-  openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#1f8f4e,#34c759)">${SEC_ICON.replace('class="i"', 'class="i" style="width:40px;height:40px;stroke:#fff"')}</div>
-      <h3>${T.secTitle}</h3><p class="lead">${T.secLead}</p></div>
-    ${ready ? "" : secretarySetup()}
+  openSheet(`<div class="head"><h3>${T.secTitle}</h3><p class="lead">${T.secLead}</p></div>
+    ${secretarySetup(ready)}
     <div class="small">${T.secRules}</div>
     <textarea class="field" id="sec-rules" placeholder="${T.secRulesPh}">${esc(s.rules || "")}</textarea>
     <div class="list" style="margin-bottom:14px"><div class="row compact"><div class="body"><div class="t">${T.secNotify}</div></div>
@@ -1066,7 +1063,7 @@ function openSecretarySheet() {
     <div class="section"><h2>${T.secRecent}</h2><div class="list">${(s.recent || []).length ? s.recent.map(r => `<div class="recent-item">
         <div class="who">${esc(r.name)} · ${ago(r.at)}</div><div class="said">«${esc(r.said)}»</div><div class="ans">↳ ${esc(r.reply)}</div></div>`).join("")
       : `<div class="empty" style="padding:22px">${T.secNone}</div>`}</div></div>`);
-  if (!ready) playSetupDemo();
+  playSetupDemo();
   $("sec-notify").onclick = e => { e.currentTarget.classList.toggle("on"); haptic("select"); };
   $("sec-save").onclick = async () => {
     try {
@@ -1078,7 +1075,7 @@ function openSecretarySheet() {
 }
 /* Set-up guide: a phone that shows each step on a loop (profile → Edit → Chat Automation → the bot's name), the steps
    underneath light up with it, a tap on a step jumps there; the button copies the bot's name. */
-function secretarySetup() {
+function secretarySetup(ready) {
   const D = T.secDemo, bot = state.bot || "bot", u = tg?.initDataUnsafe?.user || {};
   const name = esc([u.first_name, u.last_name].filter(Boolean).join(" ") || "Secret AI");
   const photo = u.photo_url ? ` style="background-image:url('${esc(u.photo_url)}')"` : "";
@@ -1098,8 +1095,8 @@ function secretarySetup() {
       <div class="finger" id="d-finger"></div></div></div></div>
     <div class="steps">${T.secSteps.map(([t, d], i) => `<div class="step" data-step="${i}"><div class="n">${i + 1}</div>
       <div><div class="t">${t.replace("{bot}", esc(bot))}</div><div class="d">${esc(d)}</div></div></div>`).join("")}</div>
-    <button class="btn" id="sec-connect" style="margin-bottom:8px">↗ ${T.secConnect}</button>
-    <div class="premium-note">${T.secPremium}</div>`;
+    ${ready ? `<div class="sec-ready">✅ ${T.secReady}</div>` : `<button class="btn" id="sec-connect" style="margin-bottom:8px">↗ ${T.secConnect}</button>
+    <div class="premium-note">${T.secPremium}</div>`}`;
 }
 function playSetupDemo() {
   const demo = $("demo"), scr = $("demo-scr"), finger = $("d-finger"), bot = "@" + (state.bot || "bot");
@@ -1114,7 +1111,7 @@ function playSetupDemo() {
   demo.parentElement.querySelectorAll("[data-step]").forEach(el => el.onclick = () => {
     start = performance.now() - STEP_AT[+el.dataset.step] * 1000; last = {}; haptic("select");
   });
-  $("sec-connect").onclick = () => {
+  if ($("sec-connect")) $("sec-connect").onclick = () => {
     navigator.clipboard?.writeText(bot).catch(() => {});
     toast(T.secCopied.replace("{bot}", state.bot || "bot"), "📋"); haptic("success");
   };
