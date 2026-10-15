@@ -39,6 +39,7 @@ from telegram.ext import (Application, BusinessConnectionHandler, CallbackContex
                           PreCheckoutQueryHandler, TypeHandler, filters)
 
 import codex
+import cursor
 import digest
 import game
 import hosting
@@ -1002,6 +1003,15 @@ def pick_deepseek(ids):
     return found[0] if found else None
 
 
+def pick_grok(ids):
+    """The newest Grok chat model in a catalog (not mini, vision, image or code ones), its provider prefix kept."""
+    found = [i for i in ids if re.search(r"grok[-._ ]?\d", i, re.I) and not re.search(r"mini|vision|image|imagine|code|embed", i, re.I)]
+    def version(i):
+        return ([int(n) for n in re.findall(r"\d+", re.split(r"grok", i, flags=re.I)[1])] + [0, 0])[:2]
+    found.sort(key=lambda i: ([-n for n in version(i)], "fast" in i.lower(), "reason" in i.lower(), len(i)))
+    return found[0] if found else None
+
+
 def chat_provider(model):
     return next((prefix for prefix in CHAT_PROVIDERS if model.startswith(prefix)), None)
 
@@ -1062,6 +1072,10 @@ def model_identity(model):
         pretty = "DeepSeek " + name.split("deepseek", 1)[1].strip("-").replace("-", " ").upper()
         return (f" You run on {pretty.strip()}, a model made by DeepSeek. If someone asks which model you are or who created "
                 f"you, say plainly that you are {pretty.strip()} by DeepSeek, working inside the Secret AI Telegram bot.")
+    if "grok" in name:
+        pretty = "Grok " + ".".join(re.findall(r"\d+", name.split("grok", 1)[1])[:2])
+        return (f" You run on {pretty}, a model made by xAI. If someone asks which model you are or who created you, say "
+                f"plainly that you are {pretty} by xAI, working inside the Secret AI Telegram bot.")
     if "gemini" in name:
         pretty = " ".join(p.capitalize() if not p[0].isdigit() else p for p in name.replace("gemini-", "gemini ").replace("-", " ").split())
         return (f" You run on {pretty}, a model made by Google. If someone asks which model you are or who created you, "
@@ -1264,7 +1278,17 @@ async def discover_models(app):
                 break
         else:
             LOG.warning("No search model on AnyModel or Abacus: web search is off")
-    free = list(dict.fromkeys(m for m in (gemini, sonnet, claude, gpt, deepseek) if m))  # the first one is the default
+    grok = None  # Grok from xAI, through whichever gateway has it (GROK_CHAT=0 hides it)
+    if os.environ.get("GROK_CHAT", "1").strip() != "0":
+        for prefix, ids in ((ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids)):
+            found = pick_grok(ids)
+            if found:
+                grok = prefix + found
+                LOG.info("Grok: %s", grok)
+                break
+        else:
+            LOG.info("Grok is in neither the Abacus nor the AnyModel catalog")
+    free = list(dict.fromkeys(m for m in (gemini, sonnet, claude, gpt, grok, deepseek) if m))  # the first one is the default
     free = free or [data["model"]]
     data["premium"] = {m: price for m, price in find_premium(openai_ids, abacus_ids, any_ids).items() if m not in free}
     data["models"] = free + list(data["premium"])
@@ -1340,6 +1364,14 @@ async def resolve_abacus_model(app):
 
 async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
+    if request["model"].startswith(cursor.PREFIX):  # the Cursor CLI: text in, streamed text out, no tools
+        async def on_text(text):
+            await live.update(text)
+        live.status("Cursor")
+        text = await cursor.answer(request["model"], (request.get("instructions") or "") + model_identity(request["model"]),
+                                   request["input"], on_text)
+        live.status(None)
+        return text, False
     if not chat_provider(request["model"]) and not context.bot_data.get("openai"):
         request["model"] = context.bot_data.get("chat_default") or request["model"]  # OpenAI is off: never call it
     request["instructions"] = (request.get("instructions") or "") + model_identity(request["model"])
@@ -1891,8 +1923,18 @@ async def premium_offer(context, update, model, price):
     return text, InlineKeyboardMarkup(rows) if rows else None
 
 
+def models_for(bot_data, user_id):
+    """The models this person may pick: Cursor ones (a personal subscription) only for the owner unless CURSOR_PUBLIC=1."""
+    extra = bot_data.get("cursor_models") or []
+    if extra and not cursor.public() and bot_data["connections"].get_meta("owner") != user_id:
+        extra = []
+    return list(bot_data["models"]) + extra
+
+
 def user_model(bot_data, user_id):
     chosen = bot_data["memory"].model(user_id)
+    if chosen and chosen.startswith(cursor.PREFIX) and chosen in models_for(bot_data, user_id):
+        return chosen
     if chosen and chosen not in bot_data["models"]:  # the same model now served by another gateway (e.g. Opus moved off OpenAI)
         bare = chosen.split(":", 1)[-1].split("/")[-1]
         chosen = next((m for m in bot_data["models"] if m.split(":", 1)[-1].split("/")[-1] == bare), None)
@@ -3893,7 +3935,8 @@ async def on_error(update, context):
         LOG.warning("Error notification could not be delivered")
 
 
-MODEL_ERRORS = (RateLimitError, NotFoundError, PermissionDeniedError, AuthenticationError, BadRequestError, APIConnectionError)
+MODEL_ERRORS = (RateLimitError, NotFoundError, PermissionDeniedError, AuthenticationError, BadRequestError, APIConnectionError,
+                cursor.CursorError)
 
 
 def error_text(error):
@@ -3993,6 +4036,9 @@ async def post_init(app):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     await resolve_abacus_model(app)
     await discover_models(app)
+    app.bot_data["cursor_models"] = cursor.models()
+    if app.bot_data["cursor_models"]:
+        app.bot_data["cursor_task"] = asyncio.create_task(cursor.install())
     if not app.bot_data.get("logo_id"):
         # The application is not running yet inside post_init, so start a plain task and keep a reference.
         app.bot_data["logo_task"] = asyncio.create_task(ensure_logo(app))
@@ -4089,7 +4135,7 @@ class Bridge:
         async def read():
             data, memory = self.app.bot_data, self.app.bot_data["memory"]
             return {"persona": memory.persona(user_id), "model": user_model(data, user_id),
-                    "models": data["models"],
+                    "models": models_for(data, user_id),
                     "premium": {} if data["connections"].get_meta("owner") == user_id else data.get("premium", {}), "credits": memory.gen_info(user_id)[1],
                     "messages": memory.count(user_id),
                     "personas": [{"id": pid, "emoji": p[0], "ru": p[1], "en": p[2]} for pid, p in PERSONAS.items()]}
@@ -4100,7 +4146,7 @@ class Bridge:
             memory = self.app.bot_data["memory"]
             if persona in PERSONAS:
                 memory.set_persona(user_id, persona)
-            if model in self.app.bot_data["models"]:
+            if model in models_for(self.app.bot_data, user_id):
                 memory.set_model(user_id, model)
         self._run(write())
 
