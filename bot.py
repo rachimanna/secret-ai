@@ -1761,6 +1761,9 @@ async def respond(update, context, target, content, saved_question, voice=False)
         raise
     # Free and paid image/video options are always available.
     async def media(kind, prompt, fmt, seconds=5, voice=True):
+        if not asks_for_media(saved_question):
+            return ("Not started: the user's message doesn't ask for a picture or video. Answer what they actually "
+                    "said instead; offer one only if it really fits.")
         error = await start_generation(context.application, user_id, lang(update), kind, prompt, fmt, seconds, voice)
         if error == "no_credits":
             return ("Not started: the user has no free generations or credits left. Tell them to top up in the Mini App "
@@ -2013,6 +2016,17 @@ GROUP_MEDIA_TOOL = {"type": "function", "name": "make_media",
 
 
 MEDIA_TALK = re.compile(r"видео|видос|ролик|клип|картин|фотк|нарису|video|picture|image", re.I)
+# What makes a message a request for a picture/video: it names one, or it briefly agrees to the one the bot offered.
+MEDIA_ASK = re.compile(r"видео|видое|видо|видяш|видик|вдео|видос|ролик|клип|мульт|аним|гиф|картин|фот|рисун|нарису|рисуй|изображ|постер|арт\b|"
+                       r"обо[ий]|аватар|логотип|сними|снять|video|picture|image|photo|draw|paint|animate", re.I)
+MEDIA_AGREE = re.compile(r"\b(давай|го+|да+|ок|окей|ага|угу|кинь|делай|сделай|хочу|можно|погнали|ещё|еще|заново|снова|"
+                         r"другой|другую|повтори|yes|ok|go|sure|another|again)\b", re.I)
+
+
+def asks_for_media(text):
+    """Does this user message ask for a picture or a video? Stops the model starting one nobody asked for."""
+    text = (text or "").strip()
+    return bool(MEDIA_ASK.search(text)) or (len(text.split()) <= 5 and bool(MEDIA_AGREE.search(text)))
 
 
 class GroupTools:
@@ -2036,6 +2050,9 @@ class GroupTools:
             return await cancel_generations(self.context.bot_data, self.message.chat_id)
         if name != "make_media":
             return "Unknown tool."
+        said = self.message.text or self.message.caption or ""
+        if said and not asks_for_media(said):
+            return "Not started: this message doesn't ask for a picture or video. Just answer what was said."
         kind = "video" if args.get("kind") == "video" else "photo"
         seconds = next((s for s in sorted(VIDEO_PRICES) if s >= int(args.get("seconds") or SCENE_SECONDS)), max(VIDEO_PRICES))
         error = await start_generation(self.context.application, self.update.effective_user.id, lang(self.update), kind,
@@ -2666,6 +2683,9 @@ async def secretary_answer(context, message):
         activity.log(chat_id, f"{conn.get('name', 'Owner')} (owner): {said}")
         return
     name = speaker(sender) if sender else "?"
+    if name.strip(" ?") == "":  # no name we can show: the chat's own title or @username
+        name = (message.chat.full_name or (f"@{message.chat.username}" if message.chat.username else "")
+                or f"id {chat_id}")[:40]
     activity.log(chat_id, f"{name}: {said}")
     current = sec.settings(store, conn["user_id"])
     if (not current["enabled"] or not conn["enabled"] or not conn["can_reply"] or message.chat.type != "private"
