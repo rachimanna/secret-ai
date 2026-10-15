@@ -1946,48 +1946,201 @@ def redeem_promo(data, user_id, code, ru):
                    "used": ("Ты уже активировал этот промокод." if ru else "You've already used this code.")}[result]
 
 
+def promo_button(text, data, style=None):
+    """A coloured inline button: style "primary" is blue, "success" green, "danger" red."""
+    return InlineKeyboardButton(text, callback_data=data, **({"style": style} if style else {}))
+
+
+PROMO_CREDITS = (10, 25, 50, 100, 250, 500)
+PROMO_PEOPLE = (10, 50, 100, 500, 1000)
+PROMO_DAYS = (1, 3, 7, 30)
+
+
+def promo_menu(owner, ru=True):
+    rows = []
+    if owner:
+        rows.append([promo_button("➕ Создать промокод" if ru else "➕ Create a code", "pr:new", "success")])
+        rows.append([promo_button("📋 Мои промокоды" if ru else "📋 My codes", "pr:list", "primary")])
+    rows.append([promo_button("🎟 Ввести промокод" if ru else "🎟 Enter a code", "pr:enter", "primary")])
+    return InlineKeyboardMarkup(rows)
+
+
+def promo_choices(values, prefix, extra, per_row=3):
+    """Number buttons (blue), the extra ones (blue), then a red Cancel."""
+    buttons = [promo_button(str(v), f"{prefix}{v}", "primary") for v in values]
+    rows = [buttons[i:i + per_row] for i in range(0, len(buttons), per_row)]
+    rows += [[promo_button(text, data, "primary")] for text, data in extra]
+    rows.append([promo_button("❌ Отмена", "pr:cancel", "danger")])
+    return InlineKeyboardMarkup(rows)
+
+
+def promo_summary(w):
+    return (f"🎁 Промокод {w['code']}\n"
+            f"💎 Кредитов: {w['credits']}\n"
+            f"👥 Людей: {w['people'] or 'без ограничений'}\n"
+            f"📅 Срок: {str(w['days']) + ' дн.' if w['days'] else 'бессрочно'}")
+
+
+async def promo_step(target, w, edit=False):
+    """Show the wizard's current step (edit the message after a button, or send a new one after typed text)."""
+    step = w["step"]
+    if step == "code":
+        text = ("🎁 Новый промокод\n\nШаг 1 из 4. Напиши название промокода сообщением "
+                "(буквы и цифры, например START), или нажми «Придумать за меня».")
+        markup = InlineKeyboardMarkup([[promo_button("🎲 Придумать за меня", "pr:rnd", "primary")],
+                                       [promo_button("❌ Отмена", "pr:cancel", "danger")]])
+    elif step == "credits":
+        text = f"🎁 {w['code']}\n\nШаг 2 из 4. Сколько кредитов даёт промокод?"
+        markup = promo_choices(PROMO_CREDITS, "pr:c:", [("✏️ Своё число", "pr:type")])
+    elif step == "people":
+        text = f"🎁 {w['code']} · {w['credits']} кр.\n\nШаг 3 из 4. Сколько человек могут его активировать?"
+        markup = promo_choices(PROMO_PEOPLE, "pr:p:", [("♾ Без ограничений", "pr:p:0"), ("✏️ Своё число", "pr:type")])
+    elif step == "days":
+        text = (f"🎁 {w['code']} · {w['credits']} кр. · {w['people'] or '∞'} чел.\n\n"
+                "Шаг 4 из 4. Сколько дней он действует?")
+        markup = promo_choices(PROMO_DAYS, "pr:d:", [("♾ Бессрочно", "pr:d:0"), ("✏️ Своё число", "pr:type")], per_row=4)
+    else:  # confirm
+        text = promo_summary(w) + "\n\nВсё верно?"
+        markup = InlineKeyboardMarkup([[promo_button("✅ Создать", "pr:ok", "success")],
+                                       [promo_button("❌ Отмена", "pr:cancel", "danger")]])
+    if w.get("typing"):
+        text += "\n\n✏️ Напиши число сообщением."
+    if edit:
+        await target.edit_message_text(text, reply_markup=markup)
+    else:
+        await target.reply_text(text, reply_markup=markup)
+
+
+def promo_list_view(memory):
+    rows = memory.promo_list()
+    if not rows:
+        return "Промокодов пока нет.", InlineKeyboardMarkup([[promo_button("➕ Создать промокод", "pr:new", "success")]])
+    lines, buttons = [], []
+    for code, credits, limit, used, expires in rows[:20]:
+        state = (" · истёк" if expires and expires < time.time() else
+                 f" · до {time.strftime('%d.%m', time.localtime(expires))}" if expires else "")
+        lines.append(f"• {code} — {credits} кр., активаций {used}" + (f"/{limit}" if limit else "") + state)
+        buttons.append([promo_button(f"🗑 Удалить {code}", f"pr:del:{code}", "danger")])
+    buttons.append([promo_button("➕ Создать промокод", "pr:new", "success")])
+    return "📋 Твои промокоды:\n\n" + "\n".join(lines), InlineKeyboardMarkup(buttons)
+
+
 async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """/promo CODE: get credits. The owner: /promo new CODE CREDITS [PEOPLE] [DAYS], /promo list, /promo del CODE."""
+    """/promo: a menu with buttons (the owner creates codes step by step). /promo CODE applies a code at once."""
     if not await authorized(update, context):
         return
     data, user_id, args = context.bot_data, update.effective_user.id, context.args or []
     ru = lang(update) == "ru"
+    if args:
+        _, text = redeem_promo(data, user_id, args[0], ru)
+        await send(update.effective_message, text)
+        return
     owner = data["connections"].get_meta("owner") == user_id
-    action = args[0].lower() if args else ""
-    if owner and action in ("new", "create", "add", "создать", "новый"):
-        numbers = [a for a in args[2:] if a.isdigit()]
-        code = promo_clean(args[1] if len(args) > 1 else "")
-        if not code or not numbers or int(numbers[0]) <= 0:
-            await send(update.effective_message, "Как создать: /promo new КОД КРЕДИТЫ [СКОЛЬКО_ЛЮДЕЙ] [ДНЕЙ]\n"
-                                                 "Например: /promo new START 50 100 7 — 50 кредитов, первые 100 человек, 7 дней.\n"
-                                                 "Без числа людей — без ограничений, без дней — бессрочно.")
+    data.setdefault("promo_wizard", {}).pop(user_id, None)
+    await update.effective_message.reply_text(
+        ("🎁 Промокоды" + ("\n\nСоздавай коды на кредиты для своих пользователей." if owner else
+                          "\n\nЕсть промокод? Нажми кнопку и отправь его.")) if ru else
+        "🎁 Promo codes", reply_markup=promo_menu(owner, ru))
+
+
+async def promo_button_press(update, context, query, action):
+    """The pr:… buttons. Returns nothing; always answers the query."""
+    data, user_id, ru = context.bot_data, update.effective_user.id, lang(update) == "ru"
+    owner = data["connections"].get_meta("owner") == user_id
+    wizards = data.setdefault("promo_wizard", {})
+    w = wizards.get(user_id)
+    if action == "enter":
+        wizards[user_id] = {"step": "redeem"}
+        await query.answer()
+        await query.edit_message_text("🎟 Отправь промокод сообщением." if ru else "🎟 Send the code as a message.",
+                                      reply_markup=InlineKeyboardMarkup([[promo_button("❌ Отмена", "pr:cancel", "danger")]]))
+        return
+    if action == "cancel":
+        wizards.pop(user_id, None)
+        await query.answer()
+        await query.edit_message_text("Отменено." if ru else "Cancelled.")
+        return
+    if not owner:
+        await query.answer()
+        return
+    if action == "new":
+        wizards[user_id] = w = {"step": "code", "credits": 0, "people": 0, "days": 0}
+        await query.answer()
+        await promo_step(query, w, edit=True)
+        return
+    if action == "list":
+        await query.answer()
+        text, markup = promo_list_view(data["memory"])
+        await query.edit_message_text(text, reply_markup=markup)
+        return
+    if action.startswith("del:"):
+        code = promo_clean(action[4:])
+        data["memory"].promo_delete(code)
+        await query.answer(f"Удалён {code}")
+        text, markup = promo_list_view(data["memory"])
+        await query.edit_message_text(text, reply_markup=markup)
+        return
+    if not w or w["step"] == "redeem":
+        await query.answer("Начни заново: /promo")
+        return
+    if action == "rnd" and w["step"] == "code":
+        w.update(code=secrets.token_hex(3).upper(), step="credits")
+    elif action == "type":
+        w["typing"] = True
+    elif action.startswith(("c:", "p:", "d:")) and action[2:].isdigit():
+        field, value = {"c": "credits", "p": "people", "d": "days"}[action[0]], int(action[2:])
+        if field == "credits" and value <= 0:
+            await query.answer()
             return
-        credits, people = int(numbers[0]), int(numbers[1]) if len(numbers) > 1 else 0
-        days = int(numbers[2]) if len(numbers) > 2 else None
-        data["memory"].promo_create(code, credits, people, days)
-        await send(update.effective_message, f"✅ Промокод {code}: +{credits} кредитов, "
-                                             + (f"для {people} человек" if people else "без ограничения по людям")
-                                             + (f", {days} дн." if days else ", бессрочно")
-                                             + f"\nАктивировать: /promo {code} или в Mini App → Генерация.")
+        w[field] = value
+        w["step"] = {"credits": "people", "people": "days", "days": "confirm"}[field]
+        w.pop("typing", None)
+    elif action == "ok" and w["step"] == "confirm":
+        data["memory"].promo_create(w["code"], w["credits"], w["people"], w["days"] or None)
+        wizards.pop(user_id, None)
+        await query.answer("Создан ✅")
+        await query.edit_message_text(f"✅ Промокод создан!\n\n{promo_summary(w)}\n\n"
+                                      f"Как активировать: /promo {w['code']} или Mini App → Генерация → Промокод.",
+                                      reply_markup=InlineKeyboardMarkup([[promo_button("📋 Мои промокоды", "pr:list", "primary")],
+                                                                         [promo_button("➕ Ещё один", "pr:new", "success")]]))
         return
-    if owner and action in ("list", "список"):
-        rows = data["memory"].promo_list()
-        lines = [f"{code} — +{credits}, использовано {used}" + (f"/{limit}" if limit else "")
-                 + (" (истёк)" if expires and expires < time.time() else
-                    f" до {time.strftime('%d.%m', time.localtime(expires))}" if expires else "")
-                 for code, credits, limit, used, expires in rows]
-        await send(update.effective_message, "🎁 Промокоды:\n" + "\n".join(lines) if lines else "Промокодов пока нет. "
-                   "Создать: /promo new КОД КРЕДИТЫ")
-        return
-    if owner and action in ("del", "delete", "удалить"):
-        code = promo_clean(args[1] if len(args) > 1 else "")
-        gone = data["memory"].promo_delete(code)
-        await send(update.effective_message, f"🗑 Промокод {code} удалён." if gone else "Такого промокода нет.")
-        return
-    _, text = redeem_promo(data, user_id, args[0] if args else "", ru)
-    if owner and not args:
-        text += "\n\nТы владелец: /promo new КОД КРЕДИТЫ [ЛЮДЕЙ] [ДНЕЙ], /promo list, /promo del КОД"
-    await send(update.effective_message, text)
+    await query.answer()
+    await promo_step(query, w, edit=True)
+
+
+async def promo_typed(update, context):
+    """A typed message while the promo menu waits for text (a code to apply, or the owner's code name/number).
+    True if it was taken."""
+    data, user_id = context.bot_data, update.effective_user.id
+    w = data.get("promo_wizard", {}).get(user_id)
+    message = update.effective_message
+    if not w or not message.text or message.text.startswith("/"):
+        return False
+    text, ru = message.text.strip(), lang(update) == "ru"
+    if w["step"] == "redeem":
+        ok, answer = redeem_promo(data, user_id, text, ru)
+        if ok or len(text) > 32:
+            data["promo_wizard"].pop(user_id, None)
+        await send(message, answer)
+        return True
+    if w["step"] == "code":
+        code = promo_clean(text)
+        if len(code) < 3:
+            await send(message, "Название — от 3 букв или цифр, латиницей. Например START")
+            return True
+        w.update(code=code, step="credits")
+    elif w.get("typing") and w["step"] in ("credits", "people", "days"):
+        if not text.isdigit() or (w["step"] == "credits" and int(text) <= 0) or int(text) > 1_000_000:
+            await send(message, "Нужно целое число, например 75.")
+            return True
+        field = w["step"]
+        w[field] = int(text)
+        w["step"] = {"credits": "people", "people": "days", "days": "confirm"}[field]
+        w.pop("typing", None)
+    else:
+        return False  # a button is expected: the message goes to the chat as usual
+    await promo_step(message, w)
+    return True
 
 
 async def wipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4119,6 +4272,8 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await authorized(update, context):
         return
     message = update.effective_message
+    if message.text and await promo_typed(update, context):
+        return
     if message.text and await secretary_switch(update, context, message.text):
         return
     if not models_for(context.bot_data, update.effective_user.id):
@@ -4275,6 +4430,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.answer(label)
         await query.edit_message_text(ui(update, f"Режим включён: {label}", f"Mode enabled: {label}"),
                                       reply_markup=persona_keyboard(update, data[5:]))
+        return
+
+    if data.startswith("pr:"):
+        await promo_button_press(update, context, query, data[3:])
         return
 
     if data.startswith("wipe:"):
