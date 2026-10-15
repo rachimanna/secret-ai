@@ -1,7 +1,8 @@
 """Models through the Cursor Agent CLI (cursor-agent) in headless mode, with the owner's CURSOR_API_KEY.
 
 The CLI is installed once next to the bot (https://cursor.com/install puts it into ~/.local/bin). Each answer runs
-`cursor-agent -p --output-format stream-json -m <model>` in an empty folder (no --force: it can't change any files),
+`cursor-agent -p --trust --output-format stream-json --model <model>` in an empty folder (--trust skips the workspace
+question; no --force: it can't change any files),
 the conversation goes in as one prompt, and the streamed assistant text comes back. It is a personal subscription, so
 by default only the bot's owner sees these models (CURSOR_PUBLIC=1 opens them to everyone, at the owner's risk).
 """
@@ -85,7 +86,7 @@ async def answer(model, instructions, items, on_text):
     folder = tempfile.mkdtemp(prefix="cursor-")
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", folder), "CURSOR_API_KEY": key,
            "LANG": "C.UTF-8", "NO_COLOR": "1"}
-    args = [path, "-p", "--output-format", "stream-json", "--model", model[len(PREFIX):], prompt_from(instructions, items)]
+    args = [path, "-p", "--trust", "--output-format", "stream-json", "--model", model[len(PREFIX):], prompt_from(instructions, items)]
     process = await asyncio.create_subprocess_exec(*args, cwd=folder, env=env, stdin=asyncio.subprocess.DEVNULL,
                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                                                    limit=4 * 1024 * 1024)
