@@ -85,7 +85,7 @@ async def answer(model, instructions, items, on_text):
     folder = tempfile.mkdtemp(prefix="cursor-")
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", folder), "CURSOR_API_KEY": key,
            "LANG": "C.UTF-8", "NO_COLOR": "1"}
-    args = [path, "-p", "--output-format", "stream-json", "-m", model[len(PREFIX):], "--", prompt_from(instructions, items)]
+    args = [path, "-p", "--output-format", "stream-json", "--model", model[len(PREFIX):], prompt_from(instructions, items)]
     process = await asyncio.create_subprocess_exec(*args, cwd=folder, env=env, stdin=asyncio.subprocess.DEVNULL,
                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                                                    limit=4 * 1024 * 1024)

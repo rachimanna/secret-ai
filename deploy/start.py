@@ -50,15 +50,37 @@ def fetch_code():
     say("Code downloaded from GitHub (zip; automatic updates need git).")
 
 
+# Heavy leftovers that don't fit a small (4 GB) disk: the pip download cache and a half-installed local speech model.
+JUNK = [os.path.join(HOME, ".cache", "pip"), os.path.join(HOME, "models")]
+HEAVY = ("ctranslate2", "onnxruntime", "faster_whisper", "faster-whisper", "av-", "av.libs", "ctranslate2.libs")
+
+
+def free_space():
+    """Delete caches and leftovers of packages the bot no longer uses, and say how much room there is."""
+    for path in JUNK:
+        shutil.rmtree(path, ignore_errors=True)
+    for root, folders, _ in os.walk(LOCAL):
+        for name in list(folders):
+            if name == "av" or name.lower().startswith(HEAVY):
+                shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+                folders.remove(name)
+    try:
+        free = shutil.disk_usage(HOME).free // (1024 * 1024)
+        say(f"Free disk space: {free} MB" + (" — very little, delete big files in Files" if free < 300 else ""))
+    except OSError:
+        pass
+
+
 def install():
     say("Installing libraries (the first start takes a few minutes)…")
-    result = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check",
+    result = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--no-cache-dir",
                              "--prefix", LOCAL, "-r", os.path.join(HOME, "requirements.txt")])
     if result.returncode:
         say("Library install failed — see the lines above.")
 
 
 def main():
+    free_space()  # first: a full disk breaks the code update too
     fetch_code()
     if not os.path.exists(os.path.join(HOME, ".env")):
         shutil.copy(os.path.join(HOME, "deploy", "env.example"), os.path.join(HOME, ".env"))

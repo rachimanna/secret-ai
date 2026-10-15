@@ -196,6 +196,7 @@ async def self_update(before_restart):
         try:
             fetched = await asyncio.to_thread(_git, "fetch", "-q", "origin", "main")
             if fetched.returncode:
+                LOG.warning("Update check failed: %s", (fetched.stderr or "").strip()[-200:] or "git fetch error")
                 continue
             head = (await asyncio.to_thread(_git, "rev-parse", "HEAD")).stdout.strip()
             latest = (await asyncio.to_thread(_git, "rev-parse", "origin/main")).stdout.strip()
@@ -205,7 +206,7 @@ async def self_update(before_restart):
             await asyncio.to_thread(_git, "reset", "-q", "--hard", "origin/main")
             if "requirements.txt" in changed:
                 target = ["--prefix", str(HERE / ".local")] if (HERE / ".local").exists() else ["--user"]
-                await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "pip", "install", "-q", "-U", *target,
+                await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "pip", "install", "-q", "-U", "--no-cache-dir", *target,
                                                          "-r", str(HERE / "requirements.txt")], timeout=600)
             LOG.info("Updated to %s, restarting", latest[:7])
         except Exception as exc:

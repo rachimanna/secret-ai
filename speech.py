@@ -1,4 +1,5 @@
-"""Speech without OpenAI: recognition by a local Whisper model, voices by Microsoft's free neural voices.
+"""Speech without OpenAI: recognition by a local Whisper model (if faster-whisper is installed; it doesn't fit a 4 GB disk,
+so usually AnyModel's whisper-1 does it), voices by Microsoft's free neural voices.
 
 LocalWhisper answers client.audio.transcriptions.create(...) like the OpenAI client, so the code that reads voice messages
 and TikTok sound works with either. The model (WHISPER_MODEL, "base" by default) is downloaded once into models/ next to
