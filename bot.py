@@ -1491,7 +1491,7 @@ async def discover_models(app):
 # The first free one is the default for everyone. Empty list: no models (the bot says so).
 MODEL_CATALOG = [
     (r"opus[-._ ]?5[-._]5(?![-._]?\d)", 5),              # Claude Opus 5.5 (paid; free for the owner)
-    (r"claude-haiku-4[-._]5", 0, False),                  # Claude Haiku 4.5, free: the direct route first, cc/ if that's all
+    (r"claude-haiku-4[-._]5", 0),                         # Claude Haiku 4.5, free (cc/: the direct route was 3x slower)
 ]
 DEFAULT_PICK = r"deepseek"  # the default model for everyone who hasn't picked one: DeepSeek
 # Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
