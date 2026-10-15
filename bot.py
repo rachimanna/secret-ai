@@ -2067,6 +2067,18 @@ async def premium_offer(context, update, model, price):
     return text, InlineKeyboardMarkup(rows) if rows else None
 
 
+def drop_model(data, model, exc):
+    """A model the gateway won't serve at all (no access, no such model): out of the menu and the fallbacks until restart."""
+    if not isinstance(exc, (PermissionDeniedError, AuthenticationError, NotFoundError)) or model not in data.get("models", []):
+        return
+    data["models"] = [m for m in data["models"] if m != model]
+    data["fallbacks"] = [m for m in data.get("fallbacks", []) if m != model]
+    data.get("premium", {}).pop(model, None)
+    if data.get("chat_default") == model:
+        data["chat_default"] = data["model"] = (data["fallbacks"] or data["models"] or [None])[0]
+    LOG.warning("%s is not available (%s): removed from the menu until restart", model, type(exc).__name__)
+
+
 def models_for(bot_data, user_id):
     """The models this person may pick: Cursor ones (a personal subscription) only for the owner unless CURSOR_PUBLIC=1."""
     extra = bot_data.get("cursor_models") or []
@@ -2231,6 +2243,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
                 break
             except MODEL_ERRORS as exc:
                 LOG.warning("Model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:300])
+                drop_model(context.bot_data, attempt, exc)
                 if not chain or live.text.strip():
                     raise
                 if paid:  # the paid model didn't answer: nothing is charged, a free one answers instead
@@ -2652,6 +2665,7 @@ async def quick_answer(data, model, instructions, text, max_tokens=2000):
         try:
             return await quick_answer_once(data, candidate, instructions, text, max_tokens)
         except MODEL_ERRORS as exc:
+            drop_model(data, candidate, exc)
             if index == len(chain) - 1:
                 raise
             LOG.warning("Model %s failed (%s); trying %s", candidate, type(exc).__name__, chain[index + 1])
@@ -3288,7 +3302,8 @@ async def probe_model(data, model):
     except asyncio.TimeoutError:
         return None, "не ответила за 40 с"
     except Exception as exc:
-        return None, f"ошибка {type(exc).__name__}"
+        drop_model(data, model, exc)
+        return None, f"ошибка {type(exc).__name__}" + (" — убрал из меню" if model not in data.get("models", []) else "")
     return first if first is not None else time.monotonic() - started, time.monotonic() - started
 
 
