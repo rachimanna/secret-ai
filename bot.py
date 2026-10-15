@@ -1356,6 +1356,10 @@ async def discover_models(app):
     free_on = [m for m in chosen_models if m not in prices]
     data.update(models=chosen_models, premium=prices, fallbacks=free_on)
     data["chat_default"] = data["model"] = (free_on or chosen_models or [None])[0]
+    saved = data["connections"].get_meta("default_model") if data.get("connections") else None
+    if saved in free_on:  # /speed set picked the fastest one
+        data["chat_default"] = data["model"] = saved
+        data["fallbacks"] = [saved] + [m for m in free_on if m != saved]
     if not chosen_models:
         LOG.warning("No models are offered: the bot tells people it has none yet")
 
@@ -3223,6 +3227,62 @@ async def secretary_switch(update, context, text):
     return True
 
 
+async def probe_model(data, model):
+    """(seconds to the first word, seconds in total) for a tiny question, or (None, error text)."""
+    provider = chat_provider(model)
+    client = data.get(CHAT_PROVIDERS[provider]) if provider else None
+    if not client:
+        return None, "нет ключа"
+    started, first = time.monotonic(), None
+    try:
+        async def run():
+            nonlocal first
+            stream = await client.chat.completions.create(model=model[len(provider):], stream=True, max_tokens=20,
+                                                          messages=[{"role": "user", "content": "Скажи «привет» одним словом."}])
+            async for chunk in stream:
+                choice = (getattr(chunk, "choices", None) or [None])[0]
+                if first is None and getattr(getattr(choice, "delta", None), "content", None):
+                    first = time.monotonic() - started
+        await asyncio.wait_for(run(), 40)
+    except asyncio.TimeoutError:
+        return None, "не ответила за 40 с"
+    except Exception as exc:
+        return None, f"ошибка {type(exc).__name__}"
+    return first if first is not None else time.monotonic() - started, time.monotonic() - started
+
+
+async def speed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/speed: how fast each model answers right now (owner); /speed set makes the fastest free one the default."""
+    if not await authorized(update, context):
+        return
+    data, message = context.bot_data, update.effective_message
+    if data["connections"].get_meta("owner") != update.effective_user.id:
+        await send(message, "Скорость моделей проверяет только владелец.")
+        return
+    models = list(data.get("models") or [])
+    if not models:
+        await send(message, "Моделей нет.")
+        return
+    status = await reply(message, f"⏱ Проверяю {len(models)} моделей…")
+    results = await asyncio.gather(*(probe_model(data, m) for m in models))
+    rows = sorted(zip(models, results), key=lambda r: (r[1][0] is None, r[1][0] or 0))
+    paid = data.get("premium", {})
+    lines = []
+    for model, (first, total) in rows:
+        name = model_title(model) + (" 💎" if model in paid else "") + (" ⭐ по умолчанию" if model == data.get("chat_default") else "")
+        lines.append(f"• {name}: " + (f"начала через {first:.1f} с, всего {total:.1f} с" if first is not None else f"❌ {total}"))
+    free_ok = [m for m, (first, _) in rows if first is not None and m not in paid]
+    tip = ""
+    if context.args and context.args[0].lower() in ("set", "поставь", "default") and free_ok:
+        data["connections"].set_meta("default_model", free_ok[0])
+        data["chat_default"] = data["model"] = free_ok[0]
+        data["fallbacks"] = free_ok + [m for m in data.get("fallbacks", []) if m not in free_ok]
+        tip = f"\n\n✅ По умолчанию теперь {model_title(free_ok[0])} — самая быстрая бесплатная."
+    elif free_ok and free_ok[0] != data.get("chat_default"):
+        tip = f"\n\nСамая быстрая бесплатная — {model_title(free_ok[0])}. Сделать её моделью по умолчанию: /speed set"
+    await status.edit_text("⏱ Скорость моделей сейчас (от быстрой к медленной):\n\n" + "\n".join(lines) + tip)
+
+
 async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """/voice: which free Microsoft voice reads the answers; /voice <name> picks one (owner only)."""
     if not await authorized(update, context):
@@ -4746,6 +4806,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler(["secretary", "sekretar"], secretary_command))
     app.add_handler(CommandHandler(["voice", "golos"], voice_command))
+    app.add_handler(CommandHandler(["speed", "skorost"], speed_command))
     app.add_handler(CommandHandler("wipe", wipe))
     app.add_handler(CommandHandler("welcome", welcome_command))
     app.add_handler(CommandHandler("setwelcome", set_welcome))
