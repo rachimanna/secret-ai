@@ -1275,7 +1275,7 @@ function renderAll() {
 function prettyModel(id) {
   if (!id) return lang === "ru" ? "Нет моделей" : "No models";
   if (/^cursor:/i.test(id)) return prettyModel(String(id).slice(7)) + " · Cursor";
-  if (/^(nvidia|openrouter|tokenharbor):/i.test(id)) return prettyModel("anymodel:" + String(id).replace(/^\w+:/, "").replace(/:free$/, ""));
+  if (/^(nvidia|openrouter|tokenharbor|bai):/i.test(id)) return prettyModel("anymodel:" + String(id).replace(/^\w+:/, "").replace(/:free$/, ""));
   if (/^opencode:/i.test(id)) return prettyModel("anymodel:" + String(id).replace(/^\w+:/, "")).replace(/^Kimi/i, "Kimi");
   if (/^(groq|cerebras):/i.test(id)) return prettyModel("anymodel:" + String(id).replace(/^\w+:/, "")) + " ⚡";
   return String(id).replace(/^(abacus|anymodel):/i, "").replace(/^[\w-]+\//, "").replace(/^grok-/i, "Grok ").replace(/^kimi-/i, "Kimi ").replace(/^mimo-/i, "MiMo ").replace(/^gpt-/i, "GPT-").replace(/^claude-/i, "Claude ").replace(/^gemini-/i, "Gemini ").replace(/^deepseek-/i, "DeepSeek ")
