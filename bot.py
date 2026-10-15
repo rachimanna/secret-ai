@@ -1203,7 +1203,8 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     messages = chat_messages(request.get("instructions"), request["input"])
     no_tools = context.bot_data.setdefault("no_tools", set())
     tools = chat_tools(toolbox) if provider not in no_tools else []
-    if provider not in no_tools and (context.bot_data.get("web_search") or context.bot_data.get("search_model")):
+    no_web = request.pop("no_web", False)
+    if provider not in no_tools and not no_web and (context.bot_data.get("web_search") or context.bot_data.get("search_model")):
         tools.append(WEB_TOOL)
     # Connected apps are remote MCP servers, which only OpenAI calls by itself: here the bot does it for the model.
     servers = [d for d in toolbox.definitions() if d.get("type") == "mcp"] if toolbox and provider not in no_tools else []
@@ -1446,8 +1447,8 @@ async def discover_models(app):
     data["vision_model"] = await find_vision_model(data)
     # The owner's list (MODEL_CATALOG) decides what is offered: each found in AnyModel's catalog, free or for credits.
     chosen_models, prices = [], {}
-    for pattern, price in MODEL_CATALOG:
-        found = pick_catalog(any_ids, pattern)
+    for pattern, price, *route in MODEL_CATALOG:
+        found = pick_catalog(any_ids, pattern, cc_first=route[0] if route else True)
         if not found:
             LOG.warning("Model %s is not in the AnyModel catalog; not offered", pattern)
             continue
@@ -1490,7 +1491,7 @@ async def discover_models(app):
 # The first free one is the default for everyone. Empty list: no models (the bot says so).
 MODEL_CATALOG = [
     (r"opus[-._ ]?5[-._]5(?![-._]?\d)", 5),              # Claude Opus 5.5 (paid; free for the owner)
-    (r"claude-haiku-4[-._]5", 0),                         # Claude Haiku 4.5 (cc/claude-haiku-4-5-20251001), free
+    (r"claude-haiku-4[-._]5", 0, False),                  # Claude Haiku 4.5, free: the direct route first, cc/ if that's all
 ]
 DEFAULT_PICK = r"deepseek"  # the default model for everyone who hasn't picked one: DeepSeek
 # Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
@@ -1499,11 +1500,11 @@ ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # whic
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
 
-def pick_catalog(ids, pattern):
+def pick_catalog(ids, pattern, cc_first=True):
     """The best id in a catalog for a pattern: a plain one before fast/thinking/preview/dated variants, cc/ routes first."""
     found = [i for i in ids if re.search(pattern, i, re.I) and not re.search(r"image|audio|tts|embed|vision", i, re.I)]
     found.sort(key=lambda i: (bool(re.search(r"fast|mini|lite|flash", i, re.I)), "thinking" in i.lower(), "preview" in i.lower(),
-                              not i.startswith("cc/"), bool(re.search(r"\d{6,}", i)), len(i)))  # the cc/ route first, dated or not
+                              i.startswith("cc/") != cc_first, bool(re.search(r"\d{6,}", i)), len(i)))  # cc/ first, or last
     return found[0] if found else None
 
 
@@ -1579,6 +1580,8 @@ async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
     if not request.get("model"):
         raise NoModels()
+    if request.pop("light", False):  # small talk on a slow gateway: no tool definitions to read, a faster first word
+        toolbox, request["no_web"] = None, True
     if request["model"].startswith(cursor.PREFIX):  # the Cursor CLI: text in, streamed text out, no tools
         async def on_text(text):
             await live.update(text)
@@ -2452,6 +2455,20 @@ APP_WORDS = re.compile(
     r"trello|slack|linear|jira|asana|figma|dropbox|контакт|crm|сделк|клиент|прилож|подключ|интеграц|mcp", re.I)
 
 
+ANYMODEL_HISTORY_CHARS = 9000  # AnyModel models read a shorter history: every 1000 characters cost them time
+# Messages that need a tool (memory, the secretary, edits, search, media, links); anything else is small talk.
+TOOL_WORDS = re.compile(
+    r"запомн|забуд|помнишь|секретар|автоответ|отмени|останов|измени|отредакт|исправ|найди|поищи|загугл|поиск|гугл|"
+    r"новост|погод|курс|сегодня|сейчас|вчера|завтра|цен[аыу]|стоит|сколько стоит|актуальн|последн|2026|2027|"
+    r"нарису|картин|фото|видео|сгенер|озвуч|голос|ссылк|http|www\.|\.com|\.ru|github|репо|код|сайт|"
+    r"remember|forget|search|find|news|weather|price|today|draw|picture|video|link|code|website", re.I)
+
+
+def needs_tools(text):
+    text = text or ""
+    return bool(TOOL_WORDS.search(text)) or asks_for_media(text)
+
+
 APPS_FOLLOW_UP = 600  # seconds after an apps request when short follow-ups ("теперь удали второй") keep the apps
 
 
@@ -2499,14 +2516,14 @@ def recall_note(found):
             "them — bring them up naturally when they matter, never say you searched):\n" + "\n".join(lines))
 
 
-def fit_history(history):
+def fit_history(history, limit=None):
     """The newest messages in full, older long ones shortened, all within HISTORY_CHARS (oldest dropped first)."""
-    kept, total = [], 0
+    kept, total, limit = [], 0, limit or HISTORY_CHARS
     for index, item in enumerate(reversed(history)):
         text = item["content"]
         if index >= 6 and len(text) > HISTORY_ITEM_CHARS:
             text = text[:HISTORY_ITEM_CHARS] + " …"
-        if total + len(text) > HISTORY_CHARS:
+        if total + len(text) > limit:
             break
         kept.append({"role": item["role"], "content": text})
         total += len(text)
@@ -2569,16 +2586,19 @@ async def respond(update, context, target, content, saved_question, voice=False)
     if speak_only:
         instructions += (" The user sent a voice message and your answer will be read aloud as a voice message: talk like "
                          "in a live conversation, short (2-5 sentences), no lists, no markdown, no links, no emoji.")
-    if toolbox.instructions():
+    model = user_model(context.bot_data, user_id)
+    # AnyModel adds seconds per request, more the bigger it is: a shorter history, and no tools unless the message needs them.
+    slow_gateway = bool(model) and model.startswith(ANYMODEL_PREFIX)
+    light = slow_gateway and not use_apps and not needs_tools(saved_question)
+    if toolbox.instructions() and not light:
         instructions += " " + toolbox.instructions()
     history = memory.history(user_id)
-    shown = fit_history(history)
+    shown = fit_history(history, ANYMODEL_HISTORY_CHARS if slow_gateway else None)
     if shown:  # everything older than what the model reads comes back by search when the talk touches it
         oldest = history[len(history) - len(shown)]["id"]
     else:
         oldest = history[-1]["id"] + 1 if history else None
     instructions += recall_note(memory.recall(user_id, saved_question, oldest))
-    model = user_model(context.bot_data, user_id)
     price = context.bot_data.get("premium", {}).get(model)
     if price and context.bot_data["connections"].get_meta("owner") == user_id:
         price = None  # the owner talks to every model without limits
@@ -2594,7 +2614,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
                 answer, incomplete = await unless_stopped(live, generate(
                     context, live, toolbox, model=attempt, instructions=instructions,
                     input=shown + [{"role": "user", "content": content}],
-                    store=False, max_output_tokens=32000))
+                    store=False, max_output_tokens=32000, light=light and attempt.startswith(ANYMODEL_PREFIX)))
                 break
             except MODEL_ERRORS as exc:
                 LOG.warning("Model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:300])
