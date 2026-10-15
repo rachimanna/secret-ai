@@ -4057,6 +4057,8 @@ def main():
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler(["version", "v"], version_command))
+    # "/version" pasted as formatted text isn't a command for Telegram: catch it as text too.
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*/(version|v)(@\w+)?\s*$"), version_command))
     app.add_handler(CommandHandler("emojiid", emojiid))
     app.add_handler(CommandHandler(["app", "connect"], open_app))
     app.add_handler(CommandHandler(["q", "quote"], quote_command))
