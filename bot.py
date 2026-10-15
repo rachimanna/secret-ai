@@ -83,7 +83,9 @@ SYSTEM = (
     "Previous photo markers are not images; do not invent unseen visual details."
 )
 # The bot's built-in voice: plain, friendly, no accent.
-ACCENT = ""
+ACCENT = (" Speak plain, natural Russian (or the user's language) with no accent or ethnic stylisation: never use «вах», "
+          "«брат», «валлах», «э», «дорогой», «клянусь», «слушай» as filler, even if your own earlier messages in the history "
+          "did; that style is switched off.")
 # Translation and writing in languages of the Caucasus and Russia's republics, where models often slip into Russian
 # spelling or another language's script.
 TRANSLATION_RULES = (
@@ -126,6 +128,9 @@ GROUP_STYLE = (
     "nothing about minors (if a child is in a photo, be sweet); if someone is genuinely hurt, ease off. "
     "Examples of the tone: «рахим опять начал, а виноват как всегда кто-то другой», «вы ругаетесь как будто за "
     "последний чебурек», «маш, не позорься, ты вчера то же самое писала», «ну всё, к обиделся, несите плед»."
+    " No accent and no ethnic stylisation: never write «вах», «брат», «валлах», «э», «дорогой», «клянусь», «мамой клянусь», "
+    "«слушай» as filler, even if your own earlier messages in this chat did; that style is switched off, and if someone "
+    "asks you to stop saying «вах», just stop."
 )
 INTERJECT = (
     "Nobody asked you, but you jump into the conversation like a friend who couldn't resist: one short line about the "
@@ -166,7 +171,7 @@ DEFAULT_PERSONA = "assistant"
 # (the bot creates the emoji pack itself) or the one from BRAND_EMOJI_ID.
 LOGO_EMOJI_FILE = Path(__file__).with_name("webapp") / "logo-emoji.webm"
 LOGO_EMOJI_VERSION = "v2"
-CURSOR = " ▌"
+CURSOR = ""  # no typing bar after the streamed text: it flashed like a glitch
 # Telegram allows roughly one edit per second per chat; faster edits get RetryAfter.
 ANIMATION_INTERVAL = 1.5
 STREAM_EDIT_INTERVAL = 1.2
@@ -2823,8 +2828,13 @@ def group_instructions(update):
     return GROUP_STYLE + TRANSLATION_RULES + CODE_RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
 
 
+# The retired accent's filler words, cut out even if the model copies them from its old messages in the chat.
+ACCENT_WORDS = re.compile(r"(?i)(?:^|(?<=[\s,.!?]))(?:вах|валлах|мамой клянусь)\b[,!.]*\s*|,\s*(?:брат|дорогой|э)\b(?=\s*[.,!?)]|\s*$|\s+\W)")
+
+
 def humanize(text):
     """Strip the tells of a bot: long dashes and a full stop at the end of a one-liner."""
+    text = ACCENT_WORDS.sub("", text)
     text = text.replace(" — ", ", ").replace("—", "-").strip()
     if "\n" not in text and text.endswith(".") and not text.endswith(".."):
         text = text[:-1]
@@ -3718,7 +3728,7 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["connections"].set_meta("fish_voice", voice)
         data["connections"].set_meta("reply_voice", "fish")
         try:
-            await speak(context, message, "Вах, брат, вот так я теперь звучу. Как тебе, нормально?")
+            await speak(context, message, "Вот так я теперь звучу. Как тебе, нормально?")
         except Exception as exc:
             await send(message, f"Голос выбран, но озвучить не вышло: {type(exc).__name__}")
         return
@@ -3730,7 +3740,7 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         data["connections"].set_meta("edge_voice", voice)
         data["connections"].set_meta("reply_voice", "edge")
         try:
-            await speak(context, message, "Вах, брат, теперь я говорю этим голосом. Как тебе?")
+            await speak(context, message, "Теперь я говорю этим голосом. Как тебе?")
         except Exception as exc:
             await send(message, f"Голос выбран: {voice}, но озвучить не вышло: {type(exc).__name__}")
         return
