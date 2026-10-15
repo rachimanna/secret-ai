@@ -18,6 +18,9 @@ LOG = logging.getLogger("secret_ai.cursor")
 PREFIX = "cursor:"
 INSTALL = "curl https://cursor.com/install -fsS | bash"
 TIMEOUT = 240
+HISTORY_ITEMS = 12  # the CLI reads one text prompt: the last messages only, or every answer gets slow
+HISTORY_CHARS = 6000
+_partial = {"ok": True}  # --stream-partial-output: text as it's written; dropped if this CLI doesn't know it
 
 
 class CursorError(Exception):
@@ -66,9 +69,10 @@ async def install():
 def prompt_from(instructions, items):
     """System instructions and the conversation as one prompt (the CLI takes text only)."""
     lines = [instructions.strip(), "", "Conversation so far (answer the last user message; reply only with your answer):"]
+    items = [item for item in items if "role" in item][-HISTORY_ITEMS:]
+    while len(items) > 1 and sum(len(str(i["content"])) for i in items) > HISTORY_CHARS:
+        items = items[1:]  # oldest first out; the last message always stays
     for item in items:
-        if "role" not in item:
-            continue
         content = item["content"]
         if isinstance(content, list):
             content = " ".join(p.get("text", "") for p in content if p.get("type") == "input_text") + \
@@ -82,11 +86,23 @@ async def answer(model, instructions, items, on_text):
     path = binary() or await install()
     if not path:
         raise CursorError("the Cursor CLI is not installed")
+    try:
+        return await _answer(path, model, instructions, items, on_text, _partial["ok"])
+    except CursorError as exc:
+        if _partial["ok"] and "stream-partial-output" in str(exc):
+            _partial["ok"] = False
+            LOG.info("This Cursor CLI streams whole messages only")
+            return await _answer(path, model, instructions, items, on_text, False)
+        raise
+
+
+async def _answer(path, model, instructions, items, on_text, partial):
     key = os.environ.get("CURSOR_API_KEY", "").strip()
     folder = tempfile.mkdtemp(prefix="cursor-")
     env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": os.environ.get("HOME", folder), "CURSOR_API_KEY": key,
            "LANG": "C.UTF-8", "NO_COLOR": "1"}
-    args = [path, "-p", "--trust", "--output-format", "stream-json", "--model", model[len(PREFIX):], prompt_from(instructions, items)]
+    args = [path, "-p", "--trust", "--output-format", "stream-json", *(["--stream-partial-output"] if partial else []),
+            "--model", model[len(PREFIX):], prompt_from(instructions, items)]
     process = await asyncio.create_subprocess_exec(*args, cwd=folder, env=env, stdin=asyncio.subprocess.DEVNULL,
                                                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                                                    limit=4 * 1024 * 1024)
