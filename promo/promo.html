@@ -2,145 +2,178 @@
 <html lang="ru"><head><meta charset="utf-8">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { width: 1080px; height: 1920px; overflow: hidden; background: #07061a; font-family: "Inter Display", "Inter", sans-serif; color: #fff; }
+  html, body { width: 1080px; height: 1920px; overflow: hidden; background: #05040f; font-family: "Inter Display", "Inter", sans-serif; color: #fff; }
   #stage { position: absolute; inset: 0; overflow: hidden; }
-  .bg { position: absolute; inset: -200px; background:
-        radial-gradient(700px 700px at 20% 15%, rgba(109,93,252,.55), transparent 70%),
-        radial-gradient(800px 800px at 85% 60%, rgba(217,70,239,.38), transparent 70%),
-        radial-gradient(700px 700px at 30% 100%, rgba(20,184,166,.28), transparent 70%), #07061a; }
-  .grain { position: absolute; inset: 0; opacity: .07; background-image: repeating-linear-gradient(0deg, #fff 0 1px, transparent 1px 3px); mix-blend-mode: overlay; }
+
+  /* living colour behind the glass */
+  .orb { position: absolute; border-radius: 50%; filter: blur(70px); opacity: .9; }
+  #o1 { width: 760px; height: 760px; background: radial-gradient(circle at 30% 30%, #7c6cff, #3b2bd0 60%, transparent 72%); }
+  #o2 { width: 820px; height: 820px; background: radial-gradient(circle at 60% 40%, #f472b6, #c026d3 55%, transparent 72%); }
+  #o3 { width: 680px; height: 680px; background: radial-gradient(circle at 50% 50%, #2dd4bf, #0e7490 58%, transparent 72%); }
+  #o4 { width: 520px; height: 520px; background: radial-gradient(circle at 50% 50%, #fbbf24, #ea580c 55%, transparent 72%); opacity: .55; }
+  .vignette { position: absolute; inset: 0; background: radial-gradient(1200px 1500px at 50% 45%, transparent 55%, rgba(0,0,0,.55)); }
+
+  /* Liquid Glass */
+  .glass { position: relative; background: linear-gradient(150deg, rgba(255,255,255,.26), rgba(255,255,255,.07) 45%, rgba(255,255,255,.12));
+           backdrop-filter: blur(34px) saturate(190%) brightness(1.08); -webkit-backdrop-filter: blur(34px) saturate(190%) brightness(1.08);
+           border: 1.5px solid rgba(255,255,255,.38);
+           box-shadow: inset 0 2px 1px rgba(255,255,255,.65), inset 0 -2px 6px rgba(255,255,255,.12), inset 0 0 40px rgba(255,255,255,.06),
+                       0 40px 90px rgba(0,0,0,.42), 0 8px 24px rgba(0,0,0,.25); overflow: hidden; }
+  .glass::before { content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+                   background: linear-gradient(115deg, transparent 30%, rgba(255,255,255,.28) 46%, rgba(255,255,255,.05) 52%, transparent 62%);
+                   transform: translateX(var(--sheen, -120%)); }
+  .glass::after { content: ""; position: absolute; left: 6%; right: 6%; top: 0; height: 45%; border-radius: inherit; pointer-events: none;
+                  background: linear-gradient(180deg, rgba(255,255,255,.18), transparent); }
+
   .scene { position: absolute; inset: 0; display: none; }
   .center { position: absolute; left: 0; right: 0; text-align: center; }
-  .big { font-weight: 900; letter-spacing: -3px; line-height: .95; text-shadow: 0 10px 40px rgba(0,0,0,.5); }
-  .grad { background: linear-gradient(90deg, #b3a6ff, #f0abfc 50%, #5eead4); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .word { display: inline-block; }
-  .phone { position: absolute; left: 140px; width: 800px; height: 1080px; border-radius: 70px; background: #121028;
-           border: 10px solid #2a2650; box-shadow: 0 60px 140px rgba(0,0,0,.6), 0 0 0 2px rgba(255,255,255,.06) inset; overflow: hidden; }
-  .phone .top { height: 120px; display: flex; align-items: center; gap: 22px; padding: 0 40px; background: rgba(255,255,255,.04);
-                border-bottom: 1px solid rgba(255,255,255,.07); }
-  .phone .top img { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(135deg,#3b2f9e,#8b5cf6); padding: 6px; }
-  .phone .top b { font-size: 38px; } .phone .top span { display: block; font-size: 26px; color: #8f8bb8; font-weight: 500; }
+  .big { font-weight: 900; letter-spacing: -.035em; line-height: .96; text-shadow: 0 12px 50px rgba(0,0,0,.45); }
+  .grad { background: linear-gradient(92deg, #c4bbff, #f5b8ff 45%, #8ff3e3); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .soft { color: rgba(255,255,255,.8); font-weight: 650; }
+
+  .pill { display: inline-flex; align-items: center; gap: 18px; padding: 20px 40px 20px 22px; border-radius: 99px; font-size: 42px; font-weight: 800; letter-spacing: -.01em; }
+  .pill .ico { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; background: rgba(255,255,255,.22);
+               box-shadow: inset 0 1px 1px rgba(255,255,255,.7); }
+  .pill svg { width: 36px; height: 36px; fill: none; stroke: #fff; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* iPhone */
+  .phone { position: absolute; left: 150px; width: 780px; border-radius: 96px; padding: 18px; }
+  .phone .screen { position: relative; height: 100%; border-radius: 80px; overflow: hidden;
+                   background: linear-gradient(180deg, rgba(14,11,34,.82), rgba(24,18,52,.86)); }
+  .island { position: absolute; left: 50%; top: 22px; width: 200px; height: 58px; margin-left: -100px; border-radius: 30px; background: #000; z-index: 3; }
+  .status { display: flex; justify-content: space-between; padding: 30px 62px 0; font-size: 30px; font-weight: 700; height: 92px; }
+  .status i { font-style: normal; letter-spacing: 4px; }
+  .head { display: flex; align-items: center; gap: 22px; margin: 6px 26px 0; padding: 18px 26px; border-radius: 44px; }
+  .head .av { width: 76px; height: 76px; border-radius: 50%; background: linear-gradient(140deg, #6d5dfc, #d946ef); display: grid; place-items: center; flex: none; }
+  .head .av img { width: 60px; }
+  .head b { font-size: 36px; display: block; } .head span { font-size: 26px; color: rgba(255,255,255,.65); font-weight: 600; }
   .msgs { padding: 30px 34px; display: flex; flex-direction: column; gap: 22px; }
-  .bubble { max-width: 78%; padding: 22px 30px; border-radius: 38px; font-size: 38px; font-weight: 600; line-height: 1.25; }
-  .bubble.me { align-self: flex-end; background: linear-gradient(135deg,#7b6bff,#a855f7); border-bottom-right-radius: 12px; }
-  .bubble.bot { align-self: flex-start; background: #24213f; border-bottom-left-radius: 12px; }
-  .bubble small { display: block; font-size: 26px; font-style: italic; color: #a7a3d6; margin-top: 10px; font-weight: 500; }
-  .card { position: absolute; border-radius: 44px; overflow: hidden; box-shadow: 0 50px 120px rgba(0,0,0,.6); }
-  .card img { display: block; width: 100%; }
-  .tag { display: inline-flex; align-items: center; gap: 16px; padding: 18px 36px; border-radius: 99px; font-size: 40px; font-weight: 800;
-         background: rgba(255,255,255,.1); border: 2px solid rgba(255,255,255,.18); backdrop-filter: blur(10px); }
-  .wave { display: flex; align-items: center; gap: 8px; height: 90px; }
+  .bubble { max-width: 80%; padding: 24px 32px; border-radius: 40px; font-size: 37px; font-weight: 600; line-height: 1.28; letter-spacing: -.01em; }
+  .bubble.me { align-self: flex-end; background: linear-gradient(140deg, #7c6cff, #b14ef0); border-bottom-right-radius: 14px;
+               box-shadow: inset 0 2px 1px rgba(255,255,255,.4), 0 14px 30px rgba(124,108,255,.35); }
+  .bubble.bot { align-self: flex-start; border-bottom-left-radius: 14px; }
+  .bubble small { display: flex; align-items: center; gap: 10px; font-size: 25px; font-style: italic; color: rgba(255,255,255,.75); margin-top: 12px; font-weight: 600; }
+  .bubble ol { margin: 10px 0 0 40px; } .bubble li { margin: 4px 0; }
+
+  .card { position: absolute; border-radius: 56px; padding: 14px; }
+  .card img { display: block; width: 100%; border-radius: 44px; }
+
+  .wave { display: flex; align-items: center; gap: 9px; height: 90px; }
   .wave i { width: 10px; border-radius: 6px; background: #fff; }
-  .apps { position: absolute; left: 90px; right: 90px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 34px; }
-  .app { aspect-ratio: 1; border-radius: 48px; display: grid; place-items: center; font-size: 104px;
-         background: rgba(255,255,255,.95); box-shadow: 0 30px 70px rgba(0,0,0,.45); }
-  .btn { display: inline-flex; align-items: center; gap: 22px; padding: 38px 70px; border-radius: 40px; font-size: 52px; font-weight: 900;
-         background: linear-gradient(135deg,#6d5dfc,#d946ef); box-shadow: 0 30px 80px rgba(217,70,239,.55); }
-  #caption { position: absolute; left: 60px; right: 60px; top: 1290px; text-align: center; font-weight: 900; font-size: 84px; line-height: 1.08;
-             letter-spacing: -1px; -webkit-text-stroke: 3px rgba(0,0,0,.85); paint-order: stroke fill;
-             text-shadow: 0 8px 0 rgba(0,0,0,.55), 0 14px 40px rgba(0,0,0,.6); }
+
+  .apps { position: absolute; left: 100px; right: 100px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 36px; }
+  .app { aspect-ratio: 1; border-radius: 30%; display: grid; place-items: center; }
+  .app svg { width: 62%; height: 62%; filter: drop-shadow(0 6px 14px rgba(0,0,0,.25)); position: relative; z-index: 1; }
+
+  .btn { display: inline-flex; align-items: center; gap: 24px; padding: 40px 76px; border-radius: 60px; font-size: 54px; font-weight: 900; letter-spacing: -.02em;
+         background: linear-gradient(140deg, rgba(124,108,255,.9), rgba(217,70,239,.9)); }
+  .btn svg { width: 58px; height: 58px; fill: #fff; position: relative; z-index: 1; }
+
+  #caption { position: absolute; left: 50px; right: 50px; top: 1300px; text-align: center; font-weight: 900; font-size: 86px; line-height: 1.08;
+             letter-spacing: -.02em; -webkit-text-stroke: 3px rgba(0,0,0,.8); paint-order: stroke fill;
+             text-shadow: 0 8px 0 rgba(0,0,0,.45), 0 16px 44px rgba(0,0,0,.55); }
   #caption span { display: inline-block; margin: 0 10px; }
-  #caption .on { color: #ffe14d; }
+  #caption .on { color: #ffe45e; }
   #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
-  #bar { position: absolute; left: 0; top: 0; height: 10px; background: linear-gradient(90deg,#6d5dfc,#d946ef,#14b8a6); }
+  #bar { position: absolute; left: 0; top: 0; height: 8px; background: linear-gradient(90deg, #a99bff, #f0abfc, #5eead4); border-radius: 0 4px 4px 0; }
 </style></head>
 <body><div id="stage">
-  <div class="bg" id="bg"></div>
+  <div class="orb" id="o1"></div><div class="orb" id="o2"></div><div class="orb" id="o3"></div><div class="orb" id="o4"></div>
+  <div class="vignette"></div>
 
-  <!-- 1 hook -->
   <div class="scene" id="s1">
-    <div class="center big" style="top:520px;font-size:190px" id="h1a">СТОП.</div>
-    <div class="center big" style="top:760px;font-size:118px;line-height:1.02" id="h1b">В твоём Telegram<br>может жить <span class="grad">своя нейросеть</span></div>
+    <div class="center big" style="top:470px;font-size:210px" id="h1a">СТОП.</div>
+    <div class="center" style="top:770px" id="h1b"><div class="glass pill" style="font-size:56px;padding:30px 54px;border-radius:60px;display:inline-block;line-height:1.15">
+      Нейросеть, которая живёт<br>в твоём <span class="grad">Telegram</span></div></div>
   </div>
 
-  <!-- 2 intro -->
   <div class="scene" id="s2">
-    <img id="m2" src="img/mascot.png" style="position:absolute;left:290px;top:300px;width:500px;filter:drop-shadow(0 40px 80px rgba(109,93,252,.7))">
-    <div class="center big" style="top:840px;font-size:150px" id="t2"><span class="grad">Secret AI</span></div>
-    <div class="center" style="top:1030px;font-size:50px;font-weight:700;color:#cfcaff" id="t2b">ИИ прямо в Телеграме</div>
+    <div class="glass" id="ring2" style="position:absolute;left:290px;top:300px;width:500px;height:500px;border-radius:50%"></div>
+    <img id="m2" src="img/mascot.png" style="position:absolute;left:330px;top:330px;width:420px;filter:drop-shadow(0 30px 60px rgba(60,40,200,.6))">
+    <div class="center big" style="top:880px;font-size:160px" id="t2"><span class="grad">Secret AI</span></div>
+    <div class="center soft" style="top:1070px;font-size:52px" id="t2b">Твой ИИ. Прямо в чате.</div>
   </div>
 
-  <!-- 3 chat -->
   <div class="scene" id="s3">
-    <div class="phone" id="p3" style="top:200px;height:880px">
-      <div class="top"><img src="img/mascot.png"><div><b>Secret AI</b><span>бот · в сети</span></div></div>
+    <div class="glass phone" id="p3" style="top:200px;height:860px"><div class="screen"><div class="island"></div>
+      <div class="status"><span>9:41</span><i>▂▄▆ ◔</i></div>
+      <div class="glass head"><div class="av"><img src="img/mascot.png"></div><div><b>Secret AI</b><span>в сети</span></div></div>
       <div class="msgs">
-        <div class="bubble me" id="b31">как быстро выучить английский? 🇬🇧</div>
-        <div class="bubble bot" id="b32">Лови план на 30 дней 👇<br>1. 20 минут слов каждый день<br>2. Сериалы с субтитрами<br>3. Болтай со мной на English 😉</div>
-      </div>
-    </div>
+        <div class="bubble me" id="b31">Как выучить английский за месяц?</div>
+        <div class="glass bubble bot" id="b32">План на 30 дней ✨<ol><li>20 новых слов в день</li><li>Сериалы с субтитрами</li><li>Болтаем на English каждый вечер</li></ol></div>
+      </div></div></div>
   </div>
 
-  <!-- 4 draw -->
   <div class="scene" id="s4">
-    <div class="center" style="top:170px"><div class="tag" id="g4">🎨 рисует за 10 секунд</div></div>
-    <div class="phone" id="p4" style="top:300px;height:240px;background:transparent;border:0;box-shadow:none">
-      <div class="msgs" style="padding:0"><div class="bubble me" id="b41" style="font-size:44px">нарисуй кота на окне 🐱</div></div>
-    </div>
-    <div class="card" id="c4" style="left:150px;top:460px;width:780px"><img src="img/cat.jpg"></div>
+    <div class="center" style="top:160px"><div class="glass pill" id="g4"><span class="ico"><svg viewBox="0 0 24 24"><path d="M12 3c.6 4 2.5 6 6.5 6.5-4 .6-5.9 2.5-6.5 6.5-.6-4-2.5-5.9-6.5-6.5C9.5 9 11.4 7 12 3z"/><path d="M19 15c.3 1.6 1 2.3 2.5 2.5-1.5.3-2.2 1-2.5 2.5-.3-1.5-1-2.2-2.5-2.5 1.5-.2 2.2-.9 2.5-2.5z"/></svg></span>Рисует за секунды</div></div>
+    <div style="position:absolute;right:120px;top:320px" id="b41"><div class="bubble me" style="font-size:44px;max-width:none">Нарисуй рыжего кота на окне</div></div>
+    <div class="glass card" id="c4" style="left:150px;top:480px;width:780px"><img src="img/cat.jpg"></div>
   </div>
 
-  <!-- 5 video -->
   <div class="scene" id="s5">
-    <div class="center" style="top:170px"><div class="tag" id="g5">🎬 снимает видео с озвучкой</div></div>
-    <div class="card" id="c5" style="left:120px;top:330px;width:840px;height:840px;background:#000">
-      <img id="v5" src="img/vid/f001.jpg" style="width:840px;height:840px;object-fit:cover">
-      <div style="position:absolute;left:30px;right:30px;bottom:30px;height:12px;border-radius:6px;background:rgba(255,255,255,.25)">
-        <div id="pv5" style="height:100%;width:0;border-radius:6px;background:#fff"></div></div>
+    <div class="center" style="top:160px"><div class="glass pill" id="g5"><span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="3"/><path d="m16 10 5-3v10l-5-3z"/></svg></span>Снимает видео с озвучкой</div></div>
+    <div class="glass card" id="c5" style="left:130px;top:330px;width:820px">
+      <img id="v5" src="img/vid/f001.jpg" style="height:792px;object-fit:cover">
+      <div class="glass" style="position:absolute;left:44px;right:44px;bottom:44px;height:74px;border-radius:40px;display:flex;align-items:center;gap:22px;padding:0 28px">
+        <svg viewBox="0 0 24 24" style="width:34px;height:34px;fill:#fff;position:relative;z-index:1"><path d="M7 5v14l11-7z"/></svg>
+        <div style="flex:1;height:10px;border-radius:6px;background:rgba(255,255,255,.3);position:relative;z-index:1"><div id="pv5" style="height:100%;width:0;border-radius:6px;background:#fff"></div></div>
+        <span style="font-size:28px;font-weight:700;position:relative;z-index:1">0:08</span></div>
     </div>
   </div>
 
-  <!-- 6 voice -->
   <div class="scene" id="s6">
-    <div class="center" style="top:170px"><div class="tag" id="g6">🎙 отвечает голосом</div></div>
-    <div class="phone" id="p6" style="top:340px;height:760px">
-      <div class="top"><img src="img/mascot.png"><div><b>Secret AI</b><span>записывает голосовое…</span></div></div>
+    <div class="center" style="top:160px"><div class="glass pill" id="g6"><span class="ico"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></span>Говорит голосом</div></div>
+    <div class="glass phone" id="p6" style="top:330px;height:820px"><div class="screen"><div class="island"></div>
+      <div class="status"><span>9:41</span><i>▂▄▆ ◔</i></div>
+      <div class="glass head"><div class="av"><img src="img/mascot.png"></div><div><b>Secret AI</b><span id="rec6">записывает голосовое…</span></div></div>
       <div class="msgs" style="gap:30px">
-        <div class="bubble me" id="b61" style="display:flex;align-items:center;gap:24px"><span style="font-size:60px">▶</span><div class="wave" id="w61"></div></div>
-        <div class="bubble bot" id="b62" style="display:flex;align-items:center;gap:24px"><span style="font-size:60px">⏸</span><div class="wave" id="w62"></div></div>
-      </div>
-    </div>
+        <div class="bubble me" id="b61" style="display:flex;align-items:center;gap:22px"><svg viewBox="0 0 24 24" style="width:54px;height:54px;fill:#fff;flex:none"><path d="M7 5v14l11-7z"/></svg><div class="wave" id="w61"></div><span style="font-size:28px">0:04</span></div>
+        <div class="glass bubble bot" id="b62" style="display:flex;align-items:center;gap:22px"><svg viewBox="0 0 24 24" style="width:54px;height:54px;fill:#fff;flex:none;position:relative;z-index:1"><path d="M7 5h3.5v14H7zM13.5 5H17v14h-3.5z"/></svg><div class="wave" id="w62" style="position:relative;z-index:1"></div><span style="font-size:28px;position:relative;z-index:1">0:09</span></div>
+      </div></div></div>
   </div>
 
-  <!-- 7 secretary -->
   <div class="scene" id="s7">
-    <div class="center" style="top:150px;font-size:150px" id="moon">🌙</div>
-    <div class="center" style="top:340px"><div class="tag" id="g7">👔 ИИ-секретарь</div></div>
-    <div class="phone" id="p7" style="top:470px;height:720px">
-      <div class="top"><div style="width:72px;height:72px;border-radius:50%;background:#e2725b;display:grid;place-items:center;font-size:40px;font-weight:800">А</div><div><b>Ахмед</b><span>личный чат</span></div></div>
+    <div class="glass" id="moon" style="position:absolute;left:440px;top:120px;width:200px;height:200px;border-radius:50%;display:grid;place-items:center">
+      <svg viewBox="0 0 24 24" style="width:110px;height:110px;fill:#ffe9a8;position:relative;z-index:1"><path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/></svg></div>
+    <div class="center" style="top:350px"><div class="glass pill" id="g7"><span class="ico"><svg viewBox="0 0 24 24"><path d="M4 7h16v12H4zM9 7V5h6v2M4 12h16"/></svg></span>Отвечает, пока ты спишь</div></div>
+    <div class="glass phone" id="p7" style="top:480px;height:720px"><div class="screen"><div class="island"></div>
+      <div class="status"><span>3:12</span><i>▂▄▆ ◔</i></div>
+      <div class="glass head"><div class="av" style="background:linear-gradient(140deg,#fb923c,#e11d48);font-size:40px;font-weight:800">А</div><div><b>Ахмед</b><span>личный чат</span></div></div>
       <div class="msgs">
-        <div class="bubble bot" id="b71" style="background:#2f2c4f">брат ты где? завтра встречаемся?</div>
-        <div class="bubble me" id="b72">Он сейчас спит 😴 Утром ответит — встреча в силе!<small>✦ secret ai · ИИ-ассистент</small></div>
-      </div>
-    </div>
+        <div class="glass bubble bot" id="b71">Брат, ты где? Завтра в силе?</div>
+        <div class="bubble me" id="b72">Он спит 😴 Встреча в силе — утром напишет!<small><img src="img/mascot.png" style="width:30px">secret ai · ИИ-ассистент</small></div>
+      </div></div></div>
   </div>
 
-  <!-- 8 groups -->
   <div class="scene" id="s8">
-    <div class="center" style="top:150px"><div class="tag" id="g8">🎮 движ в группах</div></div>
-    <div class="card" id="c8b" style="left:230px;top:330px;width:620px"><img src="img/day.jpg"></div>
-    <div class="card" id="c8a" style="left:90px;top:620px;width:900px"><img src="img/quiz.jpg"></div>
+    <div class="center" style="top:150px"><div class="glass pill" id="g8"><span class="ico"><svg viewBox="0 0 24 24"><rect x="2.5" y="7" width="19" height="11" rx="5.5"/><path d="M7 10.5v4M5 12.5h4M15.5 11.5h.01M18 13.5h.01"/></svg></span>Игры и движ в группах</div></div>
+    <div class="glass card" id="c8b" style="left:250px;top:330px;width:600px"><img src="img/day.jpg"></div>
+    <div class="glass card" id="c8a" style="left:80px;top:640px;width:920px"><img src="img/quiz.jpg"></div>
   </div>
 
-  <!-- 9 apps -->
   <div class="scene" id="s9">
-    <div class="center big" style="top:190px;font-size:140px" id="t9"><span class="grad">2500+</span></div>
-    <div class="center" style="top:350px;font-size:54px;font-weight:800;color:#d9d5ff" id="t9b">приложений одной кнопкой</div>
+    <div class="center big" style="top:170px;font-size:170px" id="t9"><span class="grad">2 500+</span></div>
+    <div class="center soft" style="top:360px;font-size:50px" id="t9b">приложений — одной кнопкой</div>
     <div class="apps" style="top:500px" id="a9">
-      <div class="app">📧</div><div class="app">📅</div><div class="app">📊</div><div class="app">📝</div>
-      <div class="app">🎵</div><div class="app">▶️</div><div class="app">🐙</div><div class="app">☁️</div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><path d="M6 14l18 14 18-14" fill="none" stroke="#ea4335" stroke-width="5" stroke-linejoin="round"/><path d="M6 14v22a3 3 0 0 0 3 3h5V21" fill="none" stroke="#4285f4" stroke-width="5"/><path d="M42 14v22a3 3 0 0 1-3 3h-5V21" fill="none" stroke="#34a853" stroke-width="5"/><path d="M6 14a4 4 0 0 1 6-3l12 9 12-9a4 4 0 0 1 6 3" fill="none" stroke="#fbbc04" stroke-width="5"/></svg></div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><rect x="6" y="8" width="36" height="34" rx="7" fill="#fff"/><path d="M6 15a7 7 0 0 1 7-7h22a7 7 0 0 1 7 7v4H6z" fill="#ef4444"/><text x="24" y="38" font-size="18" font-weight="800" text-anchor="middle" fill="#111" font-family="Inter">17</text></svg></div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><path d="M12 4h18l10 10v28a3 3 0 0 1-3 3H12a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3z" fill="#0f9d58"/><path d="M30 4v10h10" fill="#87ceac"/><rect x="15" y="22" width="18" height="14" fill="#fff" rx="1.5"/><path d="M15 29h18M24 22v14" stroke="#0f9d58" stroke-width="2"/></svg></div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><rect x="8" y="6" width="32" height="36" rx="6" fill="#fff" stroke="#111" stroke-width="3"/><path d="M17 33V15l14 18V15" fill="none" stroke="#111" stroke-width="4" stroke-linejoin="round"/></svg></div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="19" fill="#1ed760"/><path d="M13 18c8-3 16-2 23 2M14.5 25c6.5-2 13-1.4 18.5 1.7M16 31.5c5-1.4 10-1 14 1.2" stroke="#000" stroke-width="3.4" fill="none" stroke-linecap="round"/></svg></div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><rect x="4" y="11" width="40" height="27" rx="9" fill="#ff0033"/><path d="M20 18v13l11-6.5z" fill="#fff"/></svg></div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="19" fill="#111"/><path d="M19 41v-5c-6 1-7-3-7-3-1-2.5-2.5-3-2.5-3-2-1.4.2-1.4.2-1.4 2.2.2 3.4 2.3 3.4 2.3 2 3.4 5.3 2.4 6.6 1.8.2-1.4.8-2.4 1.4-3-5-.6-10-2.5-10-11 0-2.4.9-4.4 2.3-6-.2-.6-1-2.8.2-5.8 0 0 1.9-.6 6.2 2.3a21 21 0 0 1 11.2 0c4.3-2.9 6.2-2.3 6.2-2.3 1.2 3 .4 5.2.2 5.8 1.4 1.6 2.3 3.6 2.3 6 0 8.6-5.1 10.4-10 11 .8.7 1.5 2 1.5 4V41" fill="#fff"/></svg></div>
+      <div class="glass app"><svg viewBox="0 0 48 48"><circle cx="24" cy="24" r="19" fill="#29a9eb"/><path d="M11.5 23.5 35 14.5c1.1-.4 2 .3 1.7 1.9l-4 18.8c-.3 1.3-1.1 1.6-2.2 1l-6-4.4-2.9 2.8c-.3.3-.6.6-1.2.6l.4-6.1 11.2-10.1c.5-.4-.1-.7-.8-.3L17.4 27.4l-5.9-1.8c-1.3-.4-1.3-1.3.3-1.9z" fill="#fff"/></svg></div>
     </div>
   </div>
 
-  <!-- 10 CTA -->
   <div class="scene" id="s10">
-    <img id="m10" src="img/mascot.png" style="position:absolute;left:340px;top:230px;width:400px;filter:drop-shadow(0 40px 80px rgba(217,70,239,.7))">
-    <div class="center big" style="top:640px;font-size:112px" id="t10">Попробуй<br><span class="grad">бесплатно</span></div>
-    <div class="center" style="top:930px" id="btn10"><div class="btn">✈️ @iooos_Ai_BoT</div></div>
-    <div class="center" style="top:1125px;font-size:48px;font-weight:800;color:#d9d5ff" id="t10b">ссылка в профиле 👆</div>
+    <div class="glass" id="ring10" style="position:absolute;left:330px;top:210px;width:420px;height:420px;border-radius:50%"></div>
+    <img id="m10" src="img/mascot.png" style="position:absolute;left:365px;top:240px;width:350px;filter:drop-shadow(0 30px 60px rgba(200,40,200,.55))">
+    <div class="center big" style="top:700px;font-size:116px" id="t10">Попробуй<br><span class="grad">бесплатно</span></div>
+    <div class="center" style="top:980px" id="btn10"><div class="glass btn"><svg viewBox="0 0 24 24"><path d="M21.9 4.6 18.7 19.7c-.2 1.1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4 1.4 11.9c-1-.3-1.1-1 .2-1.5L20.5 3.1c.9-.3 1.6.2 1.4 1.5z"/></svg><span style="position:relative;z-index:1">Открыть в Telegram</span></div></div>
+    <div class="center soft" style="top:1170px;font-size:46px" id="t10b">@iooos_Ai_BoT · ссылка в профиле</div>
   </div>
 
-  <div class="grain"></div>
   <div id="caption"></div>
   <div id="flash"></div>
   <div id="bar"></div>
@@ -153,78 +186,68 @@ const eb = x => { x = clamp(x) - 1; return 1 + 2.70158 * x * x * x + 1.70158 * x
 const lerp = (a, b, k) => a + (b - a) * k;
 let SCENES = [], WORDS = [], TOTAL = 30, VIDFRAMES = 1;
 function setup(cfg) { SCENES = cfg.scenes; WORDS = cfg.words; TOTAL = cfg.total; VIDFRAMES = cfg.vidframes || 1;
-  for (const w of ["w61", "w62"]) $(w).innerHTML = Array.from({ length: 22 }, () => "<i></i>").join(""); }
-function show(el, alpha, dy = 0, scale = 1, extra = "") {
-  el.style.opacity = alpha; el.style.transform = `translateY(${dy}px) scale(${scale}) ${extra}`; }
+  for (const w of ["w61", "w62"]) $(w).innerHTML = Array.from({ length: 15 }, () => "<i></i>").join(""); }
+function show(el, alpha, dy = 0, scale = 1, extra = "") { el.style.opacity = alpha; el.style.transform = `translateY(${dy}px) scale(${scale}) ${extra}`; }
 function pop(el, k, from = 40) { show(el, clamp(k * 2), from * (1 - eo(k)), lerp(.6, 1, eb(k))); }
+function sheen(scene, l) { scene.querySelectorAll(".glass").forEach((g, i) => g.style.setProperty("--sheen", lerp(-130, 130, clamp((l - .25 - i * .08) / 1.1)) + "%")); }
 
 function render(t) {
   $("bar").style.width = (100 * t / TOTAL) + "%";
-  $("bg").style.transform = `translate(${Math.sin(t * .4) * 60}px, ${Math.cos(t * .3) * 50}px) rotate(${t * 2}deg)`;
+  const orbs = [[$("o1"), -120, -100, .31, 0], [$("o2"), 420, 700, .27, 2], [$("o3"), -80, 1200, .23, 4], [$("o4"), 600, 120, .35, 1]];
+  orbs.forEach(([o, x, y, sp, ph]) => o.style.transform = `translate(${x + Math.sin(t * sp + ph) * 180}px, ${y + Math.cos(t * sp * 1.3 + ph) * 160}px) scale(${1 + Math.sin(t * .5 + ph) * .08})`);
   let flash = 0;
   SCENES.forEach((s, i) => {
     const el = $(s.id), local = t - s.start, len = s.end - s.start;
     if (t < s.start - .001 || t > s.end + .25) { el.style.display = "none"; return; }
     el.style.display = "block";
-    // whip transition: the new scene snaps in from below, the old one flies up with blur
-    const inK = eo(local / .28), outK = clamp((t - s.end) / .25);
-    const blur = (1 - inK) * 18 + outK * 22;
-    el.style.transform = `translateY(${(1 - inK) * 260 - outK * 300}px) scale(${lerp(1.08, 1, inK) - outK * .05})`;
+    const inK = eo(local / .3), outK = clamp((t - s.end) / .25);
+    const blur = (1 - inK) * 16 + outK * 22;
+    el.style.transform = `translateY(${(1 - inK) * 240 - outK * 300}px) scale(${lerp(1.07, 1, inK) - outK * .05})`;
     el.style.filter = blur > .3 ? `blur(${blur}px)` : "none";
     el.style.opacity = i === 0 ? 1 : clamp(inK * 1.6) * (1 - outK);
-    if (local >= 0 && local < .12 && i > 0) flash = Math.max(flash, (1 - local / .12) * .35);
-    SCENE_FX[s.id](local, len);
+    if (local >= 0 && local < .12 && i > 0) flash = Math.max(flash, (1 - local / .12) * .28);
+    SCENE_FX[s.id](local, len); sheen(el, local);
   });
   $("flash").style.opacity = flash;
-  // captions: up to 3 words at a time, the spoken one highlighted
   const idx = WORDS.findIndex(w => t >= w.s && t < w.e + .12);
   const cap = $("caption");
   if (idx < 0) { cap.innerHTML = ""; return; }
   const start = idx - (idx - WORDS[idx].g0) % 3, group = [];
   for (let j = start; j < WORDS.length && j < start + 3 && WORDS[j].g === WORDS[idx].g; j++) group.push(j);
-  cap.innerHTML = group.map(j => {
-    const k = clamp((t - WORDS[j].s) / .12);
-    const on = j === idx;
-    return `<span class="${on ? "on" : ""}" style="transform:scale(${on ? lerp(1.25, 1.08, eo(k)) : 1});opacity:${t >= WORDS[j].s - .05 ? 1 : .55}">${WORDS[j].w}</span>`;
-  }).join(" ");
+  cap.innerHTML = group.map(j => { const k = clamp((t - WORDS[j].s) / .12), on = j === idx;
+    return `<span class="${on ? "on" : ""}" style="transform:scale(${on ? lerp(1.22, 1.06, eo(k)) : 1});opacity:${t >= WORDS[j].s - .05 ? 1 : .5}">${WORDS[j].w}</span>`; }).join(" ");
 }
 
 const SCENE_FX = {
-  s1(l) { const a = $("h1a"), b = $("h1b");
-    const shake = l < .5 ? Math.sin(l * 90) * 14 * (1 - l / .5) : 0;
-    show(a, clamp(l / .08), 0, lerp(2.6, 1, eo(l / .25)), `translateX(${shake}px)`);
-    pop(b, (l - .55) / .35, 80); },
-  s2(l) { show($("m2"), clamp(l / .2), Math.sin(l * 3) * 14, lerp(.3, 1, eb(l / .5)), `rotate(${lerp(-25, -4, eo(l / .6)) + Math.sin(l * 2) * 3}deg)`);
+  s1(l) { const shake = l < .5 ? Math.sin(l * 90) * 14 * (1 - l / .5) : 0;
+    show($("h1a"), clamp(l / .08), 0, lerp(2.6, 1, eo(l / .25)), `translateX(${shake}px)`); pop($("h1b"), (l - .55) / .4, 90); },
+  s2(l) { show($("ring2"), clamp(l / .25), 0, lerp(.4, 1, eb(l / .5)));
+    show($("m2"), clamp(l / .2), Math.sin(l * 3) * 14, lerp(.3, 1, eb((l - .1) / .5)), `rotate(${lerp(-25, -4, eo(l / .6)) + Math.sin(l * 2) * 3}deg)`);
     pop($("t2"), (l - .35) / .4, 60); pop($("t2b"), (l - .7) / .4, 40); },
-  s3(l) { show($("p3"), 1, (1 - eo(l / .4)) * 400, 1);
-    pop($("b31"), (l - .25) / .3); pop($("b32"), (l - 1.0) / .35); },
+  s3(l) { show($("p3"), 1, (1 - eo(l / .4)) * 400, 1); pop($("b31"), (l - .25) / .3); pop($("b32"), (l - 1.0) / .35); },
   s4(l) { pop($("g4"), l / .3); pop($("b41"), (l - .2) / .3);
-    const k = (l - .7) / .5; const c = $("c4");
-    show(c, clamp(k * 2), (1 - eo(k)) * 120, lerp(.7, 1, eb(k)) + Math.max(0, l - 1.2) * .03, `rotate(${lerp(-8, -2, eo(k))}deg)`); },
+    const k = (l - .65) / .5; show($("c4"), clamp(k * 2), (1 - eo(k)) * 120, lerp(.7, 1, eb(k)) + Math.max(0, l - 1.2) * .025, `rotate(${lerp(-8, -2, eo(k))}deg)`); },
   s5(l, len) { pop($("g5"), l / .3); const k = (l - .2) / .45;
     show($("c5"), clamp(k * 2), (1 - eo(k)) * 160, lerp(.75, 1, eb(k)), `rotate(${lerp(6, 1.5, eo(k))}deg)`);
     const p = clamp((l - .3) / Math.max(.5, len - .4));
-    $("v5").src = `img/vid/f${String(1 + Math.floor(p * (VIDFRAMES - 1))).padStart(3, "0")}.jpg`;
-    $("pv5").style.width = (p * 100) + "%"; },
-  s6(l) { pop($("g6"), l / .3); show($("p6"), 1, (1 - eo(l / .35)) * 300, 1);
-    pop($("b61"), (l - .2) / .3); pop($("b62"), (l - .8) / .3);
+    $("v5").src = `img/vid/f${String(1 + Math.floor(p * (VIDFRAMES - 1))).padStart(3, "0")}.jpg`; $("pv5").style.width = (p * 100) + "%"; },
+  s6(l) { pop($("g6"), l / .3); show($("p6"), 1, (1 - eo(l / .35)) * 300, 1); pop($("b61"), (l - .2) / .3); pop($("b62"), (l - .8) / .3);
+    $("rec6").textContent = l < .8 ? "записывает голосовое…" : "в сети";
     for (const [id, phase, live] of [["w61", 0, l < .9], ["w62", 1.7, l > .9]])
-      [...$(id).children].forEach((bar, i) => {
-        const h = live ? 20 + Math.abs(Math.sin(l * 9 + i * .7 + phase) * Math.cos(i * 1.3)) * 70 : 14 + Math.abs(Math.sin(i * 1.7)) * 30;
+      [...$(id).children].forEach((bar, i) => { const h = live ? 20 + Math.abs(Math.sin(l * 9 + i * .7 + phase) * Math.cos(i * 1.3)) * 70 : 14 + Math.abs(Math.sin(i * 1.7)) * 30;
         bar.style.height = h + "px"; bar.style.opacity = live ? 1 : .55; }); },
   s7(l) { show($("moon"), clamp(l / .2), Math.sin(l * 2.5) * 12, lerp(.4, 1, eb(l / .4)), `rotate(${Math.sin(l * 1.5) * 8}deg)`);
-    pop($("g7"), (l - .15) / .3); show($("p7"), 1, (1 - eo((l - .1) / .4)) * 400, 1);
-    pop($("b71"), (l - .45) / .3); pop($("b72"), (l - 1.3) / .35); },
-  s8(l) { pop($("g8"), l / .3);
-    const a = (l - .15) / .45, b = (l - .7) / .45;
+    pop($("g7"), (l - .15) / .3); show($("p7"), 1, (1 - eo((l - .1) / .4)) * 400, 1); pop($("b71"), (l - .45) / .3); pop($("b72"), (l - 1.25) / .35); },
+  s8(l) { pop($("g8"), l / .3); const a = (l - .15) / .45, b = (l - .7) / .45;
     show($("c8b"), clamp(b * 2), (1 - eo(b)) * 200, lerp(.8, 1, eb(b)), `rotate(${lerp(14, 5, eo(b))}deg)`);
     show($("c8a"), clamp(a * 2), (1 - eo(a)) * 250 + Math.max(0, l - 1) * 30, lerp(.8, 1, eb(a)), `rotate(${lerp(-10, -3, eo(a))}deg)`); },
   s9(l) { pop($("t9"), l / .35, 60); pop($("t9b"), (l - .25) / .35);
     [...$("a9").children].forEach((app, i) => { const k = (l - .35 - i * .09) / .35;
       show(app, clamp(k * 2), (1 - eo(k)) * 160 + Math.sin(l * 3 + i) * 8, lerp(.3, 1, eb(k)), `rotate(${(1 - eo(k)) * (i % 2 ? 30 : -30)}deg)`); }); },
-  s10(l) { show($("m10"), clamp(l / .2), Math.sin(l * 3) * 16, lerp(.3, 1, eb(l / .5)), `rotate(${Math.sin(l * 2) * 6}deg)`);
+  s10(l) { show($("ring10"), clamp(l / .25), 0, lerp(.4, 1, eb(l / .5)) * (1 + Math.sin(l * 4) * .02));
+    show($("m10"), clamp(l / .2), Math.sin(l * 3) * 16, lerp(.3, 1, eb((l - .1) / .5)), `rotate(${Math.sin(l * 2) * 6}deg)`);
     pop($("t10"), (l - .25) / .4, 60);
-    const k = (l - .6) / .4; show($("btn10"), clamp(k * 2), (1 - eo(k)) * 80, lerp(.6, 1, eb(k)) * (1 + Math.max(0, Math.sin(l * 6)) * .04 * (l > 1.2)));
+    const k = (l - .6) / .4; show($("btn10"), clamp(k * 2), (1 - eo(k)) * 80, lerp(.6, 1, eb(k)) * (1 + Math.max(0, Math.sin(l * 6)) * .035 * (l > 1.2)));
     pop($("t10b"), (l - 1.0) / .4); },
 };
 </script></body></html>
