@@ -13,3 +13,4 @@ deploy/.env
 bin/
 .local/
 promo/*.mp4
+tpl_previews/

@@ -11,6 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 import codex
+import gentemplates
 
 from apps import PipedreamError, featured
 from mcp_oauth import DIRECT_APPS, MCPAuthError, direct_catalog
@@ -147,7 +148,14 @@ def make_handler(config):
             elif url.path == "/mascot.png":
                 self._send(200, MASCOT.read_bytes(), "image/png", cache="public, max-age=86400")
             elif url.path == "/app":
-                self._send(200, PAGE.read_bytes().replace(b"__LOGO__", LOGO.read_bytes()), "text/html; charset=utf-8")
+                self._send(200, PAGE.read_bytes().replace(b"__LOGO__", LOGO.read_bytes())
+                           .replace(b"__TEMPLATES__", gentemplates.page_json().encode()), "text/html; charset=utf-8")
+            elif url.path.startswith("/tpl/") and url.path.endswith(".jpg"):
+                image = gentemplates.preview(url.path[len("/tpl/"):-len(".jpg")])
+                if image:
+                    self._send(200, image, "image/jpeg", cache="public, max-age=86400")
+                else:
+                    self._send(404, b"", "text/plain")
             elif url.path == "/logo.svg":
                 self._send(200, LOGO.read_bytes(), "image/svg+xml", cache="public, max-age=86400")
             elif url.path == "/connected":

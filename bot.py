@@ -43,6 +43,7 @@ from telegram.ext import (Application, BusinessConnectionHandler, CallbackContex
 
 import codex
 import cursor
+import gentemplates
 import digest
 import game
 import hosting
@@ -4380,6 +4381,7 @@ async def post_init(app):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     await resolve_abacus_model(app)
     await discover_models(app)
+    app.bot_data["previews_task"] = asyncio.create_task(gentemplates.draw_previews(app.bot_data, free_image))
     app.bot_data["cursor_models"] = cursor.models() if "cursor" in ENABLED_MODELS else []
     if app.bot_data["cursor_models"]:
         app.bot_data["cursor_task"] = asyncio.create_task(cursor.install())

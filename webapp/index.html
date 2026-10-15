@@ -823,6 +823,37 @@
   .cx-send { background: var(--accent); color: #fff; }
   .cx-orb { color: var(--blue-soft); }
 
+  /* ================= Templates: picture cards like a gallery (3 small, then 2 big) ================= */
+  .sec-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 4px 12px; }
+  .sec-head h2 { margin: 0 !important; font-size: 22px !important; }
+  .sec-head button { color: var(--accent); font-size: 15.5px; font-weight: 500; }
+  :root:not([data-theme="light"]) .sec-head button { color: var(--blue-soft); }
+  .mosaic { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+  .mt { position: relative; grid-column: span 2; aspect-ratio: 3 / 4; border-radius: 22px; overflow: hidden; color: #fff; text-align: center;
+        background: linear-gradient(160deg, var(--c1), var(--c2)); }
+  .mt.wide { grid-column: span 3; aspect-ratio: 3 / 4.1; }
+  .mt .em { position: absolute; inset: 0 0 22%; display: grid; place-items: center; font-size: 44px; }
+  .mt.wide .em { font-size: 56px; }
+  .mt img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity .4s; }
+  .mt img.ok { opacity: 1; }
+  .mt::after { content: ""; position: absolute; inset: 45% 0 0; background: linear-gradient(to bottom, transparent, rgba(0,0,0,.62)); }
+  .mt b { position: absolute; z-index: 1; left: 8px; right: 8px; bottom: 12px; font-size: 15px; font-weight: 700; line-height: 1.15;
+          text-shadow: 0 1px 8px rgba(0,0,0,.45); }
+  .mt.wide b { font-size: 17.5px; bottom: 16px; }
+  .mt .vid { position: absolute; z-index: 1; top: 10px; right: 10px; width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center;
+             background: rgba(0,0,0,.35); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .mt .vid svg { width: 16px; height: 16px; stroke: #fff; }
+  .mt:active { transform: scale(.97); }
+  .tpl-hero { width: 132px; aspect-ratio: 3 / 4; border-radius: 22px; margin: 4px auto 14px; }
+  .tpl-hero b, .tpl-hero::after, .tpl-hero .vid { display: none; }
+  .tpl-drop { display: flex; align-items: center; gap: 14px; width: 100%; padding: 14px; border-radius: 18px; background: var(--card); box-shadow: var(--rim);
+              text-align: left; margin-bottom: 12px; }
+  .tpl-drop .ph { width: 56px; height: 56px; border-radius: 14px; background: var(--card-hi); display: grid; place-items: center; overflow: hidden; flex: none; color: var(--hint); }
+  .tpl-drop .ph img { width: 100%; height: 100%; object-fit: cover; }
+  .tpl-drop .t { font-weight: 600; font-size: 15.5px; }
+  .tpl-drop .d { color: var(--hint); font-size: 13px; margin-top: 2px; }
+  .tpl-or { color: var(--hint); font-size: 13px; text-align: center; margin: 2px 0 8px; }
+
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
 </head>
@@ -926,6 +957,7 @@
 <div class="toast glass" id="toast"></div>
 
 <template id="logo-tpl">__LOGO__</template>
+<script type="application/json" id="tpl-data">__TEMPLATES__</script>
 
 <script>
 const tg = window.Telegram?.WebApp;
@@ -972,7 +1004,7 @@ const T = {
     tabAgent: "Агент", tabDiscover: "Открытия", tabGen: "Генерация", tabApps: "Приложения", tabSettings: "Настройки",
     gen: "Генерация", genSub: "Фото, видео и редактирование твоих фото — результат придёт в чат", myGen: "Мои генерации",
     freeToday: (n, max) => `${n} из ${max} фото бесплатно сегодня`, credits: n => `${n} кредитов`, unlimited: "Без ограничений · вы владелец",
-    topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны",
+    topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны", showAll: "Показать все", tplPhoto: "Загрузите своё фото", tplPhotoSub: "лучше всего селфи, лицо крупно", tplOr: "или опишите, кого изобразить", tplChange: "Другое фото",
     photoSub: "Картинка по описанию — Nano Banana",
     makeEdit: "Изменить фото", editSub: "Убрать людей, совместить фото, сменить фон",
     editLead: "Добавь до 4 фото и напиши, что сделать. Лица и детали останутся как есть.",
@@ -1053,7 +1085,7 @@ const T = {
     tabAgent: "Agent", tabDiscover: "Discover", tabGen: "Create", tabApps: "Apps", tabSettings: "Settings",
     gen: "Create", genSub: "Pictures, videos and edits of your photos — the result arrives in the chat", myGen: "My generations",
     freeToday: (n, max) => `${n} of ${max} free photos today`, credits: n => `${n} credits`, unlimited: "Unlimited · you're the owner",
-    topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates",
+    topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates", showAll: "Show all", tplPhoto: "Upload your photo", tplPhotoSub: "a selfie works best, face close up", tplOr: "or describe who to show", tplChange: "Another photo",
     photoSub: "A picture from a description — Nano Banana",
     makeEdit: "Edit photos", editSub: "Remove people, put photos together, change the background",
     editLead: "Add up to 4 photos and say what to do. Faces and details stay as they are.",
@@ -2099,25 +2131,73 @@ function openPersonaSheet() {
 }
 
 /* ---------------- generation ---------------- */
-const GEN_TEMPLATES = (lang === "ru" ? [
-  ["photo", "🧸", "3D-игрушка", "милая 3D-фигурка", "cute 3D collectible toy figurine, pixar style, soft studio lighting, high detail", "#f472b6", "#fb7185"],
-  ["photo", "🌸", "Аниме", "как кадр из аниме", "anime key visual, Makoto Shinkai style, vibrant colors, detailed background", "#a78bfa", "#f0abfc"],
-  ["photo", "🌃", "Киберпанк", "неон и ночной город", "cyberpunk, neon lights, rainy night city, cinematic, ultra detailed", "#22d3ee", "#6366f1"],
-  ["photo", "📸", "Студийный портрет", "как фотосессия", "professional studio portrait photo, 85mm lens, soft light, shallow depth of field", "#94a3b8", "#64748b"],
-  ["photo", "🎨", "Акварель", "нежный рисунок", "delicate watercolor painting, soft pastel colors, paper texture", "#38bdf8", "#818cf8"],
-  ["photo", "🧱", "Пластилин", "пластилиновая версия", "claymation style, plasticine figures, handmade look, warm light", "#f59e0b", "#fb7185"],
-  ["video", "🎬", "Кино", "кинематографичный ролик", "cinematic shot, smooth camera movement, film look, dramatic lighting", "#6366f1", "#f472b6"],
-  ["video", "✨", "Аниме-видео", "оживший аниме-кадр", "anime style animation, gentle wind, flowing hair, magical particles", "#8b5cf6", "#2dd4bf"],
-] : [
-  ["photo", "🧸", "3D toy", "a cute 3D figurine", "cute 3D collectible toy figurine, pixar style, soft studio lighting, high detail", "#f472b6", "#fb7185"],
-  ["photo", "🌸", "Anime", "like an anime frame", "anime key visual, Makoto Shinkai style, vibrant colors, detailed background", "#a78bfa", "#f0abfc"],
-  ["photo", "🌃", "Cyberpunk", "neon and night city", "cyberpunk, neon lights, rainy night city, cinematic, ultra detailed", "#22d3ee", "#6366f1"],
-  ["photo", "📸", "Studio portrait", "like a photo shoot", "professional studio portrait photo, 85mm lens, soft light, shallow depth of field", "#94a3b8", "#64748b"],
-  ["photo", "🎨", "Watercolor", "a soft painting", "delicate watercolor painting, soft pastel colors, paper texture", "#38bdf8", "#818cf8"],
-  ["photo", "🧱", "Clay", "a plasticine version", "claymation style, plasticine figures, handmade look, warm light", "#f59e0b", "#fb7185"],
-  ["video", "🎬", "Cinema", "a cinematic clip", "cinematic shot, smooth camera movement, film look, dramatic lighting", "#6366f1", "#f472b6"],
-  ["video", "✨", "Anime video", "an anime frame comes alive", "anime style animation, gentle wind, flowing hair, magical particles", "#8b5cf6", "#2dd4bf"],
-]);
+// Templates come from the server (gentemplates.py) with their preview pictures; the built-in list is a fallback.
+const GEN_TEMPLATES = (() => {
+  try { const all = JSON.parse($("tpl-data").textContent); return all[lang === "ru" ? "ru" : "en"] || all.ru; }
+  catch (e) {
+    return [["head3d", "photo", "🙂", "3D голова", "#9ca3af", "#4b5563", "stylized 3D animated movie character head"],
+            ["clay", "photo", "🧱", "Пластилин", "#f59e0b", "#b45309", "claymation plasticine figure"],
+            ["anime", "photo", "🌸", "Аниме", "#a78bfa", "#db2777", "anime key visual, Makoto Shinkai style"],
+            ["cyber", "photo", "🌃", "Киберпанк", "#22d3ee", "#4338ca", "cyberpunk, neon lights, rainy night city"],
+            ["cinema", "video", "🎬", "Кино", "#6366f1", "#9d174d", "cinematic shot, smooth camera movement"]]
+      .map(([key, kind, emoji, title, c1, c2, style]) => ({ key, kind, emoji, title, sub: "", style, c1, c2, preview: false }));
+  }
+})();
+function tplCard(t, i, cls = "") {
+  return `<button class="mt press ${cls}" data-tpl="${i}" style="--c1:${t.c1};--c2:${t.c2}"><span class="em">${t.emoji}</span>
+    ${t.preview ? `<img src="/tpl/${t.key}.jpg" alt="" loading="lazy" onload="this.classList.add('ok')" onerror="this.remove()">` : ""}
+    ${t.kind === "video" ? `<span class="vid">${GEN_ICON.video}</span>` : ""}<b>${esc(t.title)}</b></button>`;
+}
+function tplMosaic(list) {
+  // Groups of five: three small cards in a row, then two big ones.
+  // A last group of just two cards goes big as well, so no row is left half empty.
+  const tail = list.length % 5;
+  return `<div class="mosaic">${list.map((i, n) => tplCard(GEN_TEMPLATES[i], i,
+    n % 5 > 2 || (tail === 2 && n >= list.length - 2) ? "wide" : "")).join("")}</div>`;
+}
+function bindTemplates(root) {
+  root.querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => openTemplate(GEN_TEMPLATES[+b.dataset.tpl]));
+}
+function openAllTemplates() {
+  openSheet(`<div class="head"><h3>${T.templates}</h3></div>${tplMosaic(GEN_TEMPLATES.map((_, i) => i))}`);
+  bindTemplates($("sheet"));
+}
+function openTemplate(t) {
+  if (t.kind === "video") { openGenSheet("video", { title: t.title, style: t.style }); return; }
+  if (!state.gen.ready) { openGenSheet("photo"); return; }  // explains what's missing
+  let photo = null;
+  openSheet(`<div class="head">${tplCard(t, 0, "tpl-hero")}<h3>${esc(t.title)}</h3>${t.sub ? `<p class="lead">${esc(t.sub)}</p>` : ""}</div>
+    <button class="tpl-drop press" id="tpl-drop"><div class="ph" id="tpl-ph">${ICON.plus}</div>
+      <div><div class="t" id="tpl-pt">${T.tplPhoto}</div><div class="d">${T.tplPhotoSub}</div></div></button>
+    <input type="file" id="tpl-file" accept="image/*" style="display:none">
+    <div class="tpl-or">${T.tplOr}</div>
+    <textarea class="field" id="tpl-prompt" maxlength="600" placeholder="${esc(T.describeStyle(t.title))}" style="height:84px"></textarea>
+    <div class="cost">${genCost("photo")}</div>
+    <button class="btn" id="tpl-go">${T.create}</button>`);
+  $("sheet").querySelector(".tpl-hero").onclick = null;
+  $("tpl-drop").onclick = () => $("tpl-file").click();
+  $("tpl-file").onchange = async e => {
+    const f = e.target.files[0]; e.target.value = "";
+    if (!f) return;
+    try { photo = await shrinkPhoto(f); } catch (err) { return; }
+    $("tpl-ph").innerHTML = `<img src="${photo}" alt="">`; $("tpl-pt").textContent = T.tplChange; haptic("select");
+  };
+  $("tpl-go").onclick = async () => {
+    const text = $("tpl-prompt").value.trim();
+    if (!photo && !text) { toast(T.tplPhoto); haptic("warning"); return; }
+    const btn = $("tpl-go"); btn.disabled = true; btn.innerHTML = `<span class="spinner"></span>${T.opening}`;
+    try {
+      const res = photo
+        ? await api("/api/edit", { images: [photo], prompt: t.style + (text ? `. ${text}` : ""), format: "portrait" })
+        : await api("/api/generate", { kind: "photo", prompt: `${text}, ${t.style}`, format: "portrait" });
+      state.gen = res.gen; renderGen(); closeSheet(); toast(T.genStarted); haptic("success");
+    } catch (e) {
+      btn.disabled = false; btn.textContent = T.create; haptic("error");
+      if (e.code === "gen_no_credits") { closeSheet(); setTimeout(openBuySheet, 350); toast(T.noCredits); }
+      else toast(errorText(e));
+    }
+  };
+}
 const GEN_ICON = {
   photo: '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></svg>',
   video: '<svg class="i" viewBox="0 0 24 24"><rect x="2.5" y="6" width="13" height="12" rx="3"/><path d="m15.5 10.5 6-3.5v10l-6-3.5"/></svg>',
@@ -2144,18 +2224,14 @@ function renderGen() {
       <button class="row press" data-gen="video"><div class="ic sym">${GEN_ICON.video}</div><div class="body"><div class="t">${T.makeVideo}</div><div class="d">${state.gen.video_free ? T.videoSubFree : T.videoSub}</div></div>${ICON.chev}</button>
       <button class="row press" data-edit="1"><div class="ic sym">${EDIT_ICON}</div><div class="body"><div class="t">${T.makeEdit}</div><div class="d">${T.editSub}</div></div>${ICON.chev}</button>
     </div>
-    <div class="section"><h2>${T.templates}</h2><div class="tpl-grid" style="margin-top:12px">
-      ${GEN_TEMPLATES.map(([kind, e, t, d, , c1, c2], i) => `<button class="tpl press" data-tpl="${i}" style="--c1:${c1};--c2:${c2}">
-        <span class="kind">${kind === "video" ? T.kindVideo : T.kindPhoto}</span><span class="e">${e}</span><b>${esc(t)}</b><span>${esc(d)}</span></button>`).join("")}
-    </div></div>`;
+    <div class="section"><div class="sec-head"><h2>${T.templates}</h2>${GEN_TEMPLATES.length > 5 ? `<button class="press" id="tpl-all">${T.showAll}</button>` : ""}</div>
+      ${tplMosaic(GEN_TEMPLATES.slice(0, 5).map((_, i) => i))}</div>`;
   $("gen-buy")?.addEventListener("click", openBuySheet);
   $("gen-setup")?.addEventListener("click", openGenKeySheet);
   $("gen").querySelectorAll("[data-gen]").forEach(b => b.onclick = () => openGenSheet(b.dataset.gen));
   $("gen").querySelector("[data-edit]").onclick = openEditSheet;
-  $("gen").querySelectorAll("[data-tpl]").forEach(b => b.onclick = () => {
-    const [kind, , title, , style] = GEN_TEMPLATES[+b.dataset.tpl];
-    openGenSheet(kind, { title, style });
-  });
+  bindTemplates($("gen"));
+  $("tpl-all")?.addEventListener("click", openAllTemplates);
 }
 
 const EDIT_ICON = '<svg class="i" viewBox="0 0 24 24"><path d="m4 20 10-10M14 10l2-2M18 3l.6 1.6L20 5.2l-1.4.6L18 7.5l-.6-1.7L16 5.2l1.4-.6z"/><rect x="3" y="12" width="9" height="9" rx="2"/></svg>';
