@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Secret AI — ИИ-помощник в Telegram</title>
+<meta name="description" content="Secret AI — умный ИИ прямо в Telegram: отвечает на вопросы, рисует, снимает видео, говорит голосом, отвечает за тебя как секретарь и веселит группы.">
+<meta property="og:title" content="Secret AI — ИИ-помощник в Telegram">
+<meta property="og:description" content="Чат, картинки, видео, голос, секретарь, игры для групп и 2500+ приложений — в одном боте.">
+<meta property="og:image" content="/mascot.png">
+<meta name="theme-color" content="#0b0a1a">
+<link rel="icon" href="/logo.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #0b0a1a; --card: rgba(255,255,255,.055); --line: rgba(255,255,255,.09); --text: #f4f3ff; --hint: #a9a6cc;
+    --violet: #6d5dfc; --pink: #d946ef; --teal: #14b8a6; --amber: #f5a524;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body { background: var(--bg); color: var(--text); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+         overflow-x: hidden; -webkit-font-smoothing: antialiased; }
+  a { color: inherit; text-decoration: none; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+
+  /* glowing background */
+  .glow { position: fixed; inset: -20vh -20vw; z-index: -1; pointer-events: none;
+          background: radial-gradient(40vw 40vw at 15% 10%, rgba(109,93,252,.35), transparent 70%),
+                      radial-gradient(45vw 45vw at 90% 40%, rgba(217,70,239,.22), transparent 70%),
+                      radial-gradient(40vw 40vw at 30% 95%, rgba(20,184,166,.16), transparent 70%);
+          animation: drift 18s ease-in-out infinite alternate; }
+  @keyframes drift { to { transform: translate3d(3vw, -2vh, 0) scale(1.05); } }
+
+  nav { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
+        background: rgba(11,10,26,.55); border-bottom: 1px solid var(--line); }
+  nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 62px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
+  .brand img { width: 32px; height: 32px; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 50px; padding: 0 24px; border-radius: 16px;
+         font-weight: 650; font-size: 16px; transition: transform .2s, box-shadow .2s, background .2s; white-space: nowrap; }
+  .btn:active { transform: scale(.97); }
+  .btn.main { background: linear-gradient(135deg, var(--violet), var(--pink)); color: #fff; box-shadow: 0 10px 30px rgba(109,93,252,.4); }
+  .btn.main:hover { box-shadow: 0 14px 40px rgba(217,70,239,.45); transform: translateY(-1px); }
+  .btn.ghost { background: var(--card); border: 1px solid var(--line); }
+  .btn.ghost:hover { background: rgba(255,255,255,.09); }
+  .btn.small { height: 40px; padding: 0 16px; border-radius: 12px; font-size: 14.5px; }
+  .btn svg { width: 20px; height: 20px; fill: currentColor; }
+
+  /* hero */
+  .hero { display: grid; grid-template-columns: 1.15fr .85fr; gap: 30px; align-items: center; padding: 70px 20px 50px; }
+  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 99px; background: var(--card); border: 1px solid var(--line);
+          color: var(--hint); font-size: 14px; margin-bottom: 22px; }
+  .pill i { width: 8px; height: 8px; border-radius: 50%; background: #34c759; box-shadow: 0 0 0 4px rgba(52,199,89,.18); }
+  h1 { font-size: clamp(38px, 6.4vw, 68px); line-height: 1.04; letter-spacing: -.035em; font-weight: 800; }
+  .shine { background: linear-gradient(90deg, #a99bff, #f0abfc, #5eead4, #a99bff); background-size: 300% 100%; -webkit-background-clip: text;
+           background-clip: text; color: transparent; animation: shine 8s linear infinite; }
+  @keyframes shine { to { background-position: 300% 0; } }
+  .lead { color: var(--hint); font-size: clamp(17px, 2.1vw, 20px); margin: 20px 0 30px; max-width: 34em; }
+  .cta { display: flex; gap: 12px; flex-wrap: wrap; }
+  .note { color: var(--hint); font-size: 13.5px; margin-top: 14px; }
+  .mascot { position: relative; display: grid; place-items: center; }
+  .mascot img { width: min(380px, 80vw); filter: drop-shadow(0 30px 60px rgba(109,93,252,.45)); animation: float 6s ease-in-out infinite; }
+  .mascot::before { content: ""; position: absolute; width: 70%; aspect-ratio: 1; border-radius: 50%;
+                    background: radial-gradient(circle, rgba(217,70,239,.35), transparent 65%); filter: blur(10px); }
+  @keyframes float { 0%, 100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-18px) rotate(3deg); } }
+
+  /* chat preview */
+  .chat { margin: 10px auto 0; max-width: 560px; background: rgba(20,18,40,.7); border: 1px solid var(--line); border-radius: 26px; padding: 18px;
+          box-shadow: 0 30px 80px rgba(0,0,0,.45); }
+  .msg { max-width: 82%; padding: 10px 14px; border-radius: 18px; margin: 8px 0; font-size: 15px; opacity: 0; transform: translateY(10px);
+         transition: opacity .5s, transform .5s; }
+  .msg.show { opacity: 1; transform: none; }
+  .msg.me { margin-left: auto; background: linear-gradient(135deg, #7b6bff, #a855f7); border-bottom-right-radius: 6px; }
+  .msg.bot { background: rgba(255,255,255,.08); border-bottom-left-radius: 6px; }
+  .typing { display: inline-flex; gap: 4px; }
+  .typing b { width: 7px; height: 7px; border-radius: 50%; background: var(--hint); animation: dot 1.2s infinite; }
+  .typing b:nth-child(2) { animation-delay: .15s; } .typing b:nth-child(3) { animation-delay: .3s; }
+  @keyframes dot { 0%, 60%, 100% { opacity: .3; transform: none; } 30% { opacity: 1; transform: translateY(-3px); } }
+
+  section { padding: 60px 0; }
+  h2 { font-size: clamp(30px, 4.4vw, 44px); letter-spacing: -.03em; line-height: 1.1; text-align: center; font-weight: 800; }
+  .sub { color: var(--hint); text-align: center; max-width: 36em; margin: 12px auto 36px; font-size: 17px; }
+
+  /* features */
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 22px; position: relative; overflow: hidden;
+          transition: transform .25s, border-color .25s, background .25s; }
+  .card:hover { transform: translateY(-4px); border-color: rgba(169,155,255,.35); background: rgba(255,255,255,.075); }
+  .card .ic { width: 48px; height: 48px; border-radius: 15px; display: grid; place-items: center; font-size: 26px; margin-bottom: 14px;
+              background: color-mix(in srgb, var(--tint) 22%, transparent); border: 1px solid color-mix(in srgb, var(--tint) 35%, transparent); }
+  .card h3 { font-size: 18.5px; margin-bottom: 6px; letter-spacing: -.01em; }
+  .card p { color: var(--hint); font-size: 15px; }
+  .card.wide { grid-column: span 2; }
+
+  /* groups band */
+  .band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 22px; }
+  .chip { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px; text-align: center; }
+  .chip b { display: block; font-size: 28px; margin-bottom: 4px; }
+  .chip span { color: var(--hint); font-size: 14px; }
+
+  /* steps */
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; counter-reset: s; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 24px; }
+  .step::before { counter-increment: s; content: counter(s); display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%;
+                  background: linear-gradient(135deg, var(--violet), var(--pink)); font-weight: 800; margin-bottom: 14px; }
+  .step h3 { font-size: 18px; margin-bottom: 6px; }
+  .step p { color: var(--hint); font-size: 15px; }
+
+  .final { text-align: center; background: linear-gradient(135deg, rgba(109,93,252,.25), rgba(217,70,239,.18)); border: 1px solid var(--line);
+           border-radius: 32px; padding: 50px 22px; }
+  .final img { width: 96px; margin-bottom: 14px; animation: float 6s ease-in-out infinite; }
+  .final .cta { justify-content: center; margin-top: 26px; }
+  footer { color: var(--hint); font-size: 13.5px; text-align: center; padding: 34px 0 40px; }
+
+  /* appear on scroll */
+  .up { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); }
+  .up.in { opacity: 1; transform: none; }
+  .grid .up:nth-child(2), .steps .up:nth-child(2) { transition-delay: .08s; }
+  .grid .up:nth-child(3), .steps .up:nth-child(3) { transition-delay: .16s; }
+  .grid .up:nth-child(5) { transition-delay: .08s; } .grid .up:nth-child(6) { transition-delay: .16s; }
+
+  @media (max-width: 860px) {
+    .hero { grid-template-columns: 1fr; text-align: center; padding-top: 40px; }
+    .hero .lead { margin-left: auto; margin-right: auto; }
+    .hero .cta { justify-content: center; }
+    .mascot { order: -1; } .mascot img { width: min(240px, 60vw); }
+    .grid, .steps { grid-template-columns: 1fr; } .card.wide { grid-column: auto; }
+    .band { grid-template-columns: repeat(2, 1fr); }
+    nav .hide-sm { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } .up { opacity: 1; transform: none; } }
+</style>
+</head>
+<body>
+<div class="glow"></div>
+
+<nav><div class="wrap">
+  <a class="brand" href="#"><img src="/logo.svg" alt=""> Secret AI</a>
+  <a class="btn main small" href="https://t.me/__BOT__">Открыть бота</a>
+</div></nav>
+
+<header class="wrap hero">
+  <div>
+    <div class="pill"><i></i> Работает 24/7 · бесплатно начать</div>
+    <h1>Твой ИИ —<br><span class="shine">прямо в Telegram</span></h1>
+    <p class="lead">Отвечает на любые вопросы, рисует, снимает видео, говорит голосом, отвечает за тебя, пока ты занят, и устраивает движ в группах. Без приложений и регистраций.</p>
+    <div class="cta">
+      <a class="btn main" href="https://t.me/__BOT__"><svg viewBox="0 0 24 24"><path d="M21.9 4.6 18.7 19.7c-.2 1.1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4 1.4 11.9c-1-.3-1.1-1 .2-1.5L20.5 3.1c.9-.3 1.6.2 1.4 1.5z"/></svg>Открыть в Telegram</a>
+      <a class="btn ghost" href="https://t.me/__BOT__?startgroup=1">Добавить в группу</a>
+    </div>
+    <p class="note">Работает на Claude Sonnet 5.5 и GPT — выбираешь сам.</p>
+  </div>
+  <div class="mascot"><img src="/mascot.png" alt="Secret AI"></div>
+</header>
+
+<div class="wrap">
+  <div class="chat up" id="chat">
+    <div class="msg me">нарисуй кота-космонавта на Луне 🚀</div>
+    <div class="msg bot">Рисую… 🎨 Через пару секунд пришлю.</div>
+    <div class="msg me">а что у меня завтра в календаре?</div>
+    <div class="msg bot">Завтра 2 встречи: в 11:00 созвон с командой и в 18:30 тренировка 💪</div>
+    <div class="msg bot" id="typing"><span class="typing"><b></b><b></b><b></b></span></div>
+  </div>
+</div>
+
+<section id="features"><div class="wrap">
+  <h2 class="up">Всё в одном боте</h2>
+  <p class="sub up">Пишешь как другу — Secret AI сам понимает, что сделать.</p>
+  <div class="grid">
+    <div class="card up" style="--tint:#6d5dfc"><div class="ic">💬</div><h3>Умный чат</h3><p>Отвечает на вопросы, пишет тексты и код, переводит на любые языки, ищет свежее в интернете.</p></div>
+    <div class="card up" style="--tint:#d946ef"><div class="ic">🎨</div><h3>Картинки и видео</h3><p>Нарисует что угодно, отредактирует твоё фото и снимет короткое видео с озвучкой.</p></div>
+    <div class="card up" style="--tint:#14b8a6"><div class="ic">🎙</div><h3>Голос</h3><p>Отправь голосовое — получишь ответ голосом. Понимает кружочки и аудио.</p></div>
+    <div class="card up" style="--tint:#f5a524"><div class="ic">👔</div><h3>ИИ-секретарь</h3><p>Пока ты спишь или занят, вежливо отвечает в твоих личных чатах — и присылает тебе сводку.</p></div>
+    <div class="card up" style="--tint:#3b82f6"><div class="ic">🧩</div><h3>2500+ приложений</h3><p>Gmail, Google Календарь, Таблицы, Notion, GitHub — подключил одной кнопкой и управляешь словами.</p></div>
+    <div class="card up" style="--tint:#ec4899"><div class="ic">🧠</div><h3>Помнит всё</h3><p>Помнит, о чём вы говорили даже месяцы назад, твоё имя, планы и вкусы.</p></div>
+    <div class="card wide up" style="--tint:#22c55e"><div class="ic">🎵</div><h3>Смотрит TikTok за тебя</h3><p>Кинь ссылку — посмотрит видео, пошутит в тему или скажет, что за песня играет.</p></div>
+    <div class="card up" style="--tint:#a855f7"><div class="ic">📱</div><h3>Мини-приложение</h3><p>Красивое приложение внутри Telegram: генерация, подключения, настройки.</p></div>
+  </div>
+</div></section>
+
+<section id="groups"><div class="wrap">
+  <h2 class="up">Душа компании в группе</h2>
+  <p class="sub up">Добавь Secret AI в чат с друзьями — он подстроится под ваш стиль.</p>
+  <div class="band">
+    <div class="chip up"><b>🧠</b><span>Викторина с анимациями и рейтингом</span></div>
+    <div class="chip up"><b>📊</b><span>Итоги дня: болтун дня и фраза дня</span></div>
+    <div class="chip up"><b>😂</b><span>Мемы, цитаты и демотиваторы</span></div>
+    <div class="chip up"><b>🖼</b><span>Картинки бесплатно прямо в чате</span></div>
+  </div>
+</div></section>
+
+<section id="start"><div class="wrap">
+  <h2 class="up">Начать — 10 секунд</h2>
+  <p class="sub up">Никаких регистраций и приложений.</p>
+  <div class="steps">
+    <div class="step up"><h3>Открой бота</h3><p>Нажми «Открыть в Telegram» и затем «Старт».</p></div>
+    <div class="step up"><h3>Напиши что угодно</h3><p>Вопрос, голосовое, фото или «нарисуй…» — он поймёт.</p></div>
+    <div class="step up"><h3>Добавь друзей</h3><p>Позови бота в группу — и начинайте играть в викторину.</p></div>
+  </div>
+</div></section>
+
+<section><div class="wrap">
+  <div class="final up">
+    <img src="/mascot.png" alt="">
+    <h2>Попробуй прямо сейчас</h2>
+    <p class="sub" style="margin-bottom:0">Бесплатно. Работает в любом Telegram.</p>
+    <div class="cta">
+      <a class="btn main" href="https://t.me/__BOT__">Открыть Secret AI</a>
+      <a class="btn ghost" href="https://t.me/__BOT__?startgroup=1">Добавить в группу</a>
+    </div>
+  </div>
+</div></section>
+
+<footer>© Secret AI · @__BOT__</footer>
+
+<script>
+  // Sections slide in as they come into view.
+  const seen = new IntersectionObserver(entries => entries.forEach(e => {
+    if (e.isIntersecting) { e.target.classList.add("in"); seen.unobserve(e.target); }
+  }), { threshold: .15 });
+  document.querySelectorAll(".up").forEach(el => seen.observe(el));
+  // The chat preview plays message by message, then keeps "typing".
+  const msgs = [...document.querySelectorAll("#chat .msg")];
+  const play = new IntersectionObserver(entries => {
+    if (!entries[0].isIntersecting) return;
+    play.disconnect();
+    msgs.forEach((m, i) => setTimeout(() => m.classList.add("show"), 350 + i * 750));
+  }, { threshold: .3 });
+  play.observe(document.getElementById("chat"));
+</script>
+</body>
+</html>

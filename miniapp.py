@@ -3,6 +3,7 @@ import html
 import base64
 import json
 import logging
+import re
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -18,6 +19,8 @@ LOG = logging.getLogger("secret_ai.miniapp")
 WEBAPP = Path(__file__).with_name("webapp")
 PAGE = WEBAPP / "index.html"
 LOGO = WEBAPP / "logo.svg"
+SITE = WEBAPP / "site.html"
+MASCOT = Path(__file__).with_name("assets") / "mascot.png"
 MAX_BODY = 64 * 1024
 MAX_UPLOAD = 16 * 1024 * 1024  # /api/edit: up to 4 photos (resized in the browser)
 MAX_PROMPT = 1500
@@ -129,12 +132,18 @@ def make_handler(config):
 
         def do_HEAD(self):
             path = urlparse(self.path).path
-            self._send(200 if path in ("/", "/health", "/app", "/logo.svg") else 404, b"", "text/plain", head=True)
+            self._send(200 if path in ("/", "/index.html", "/health", "/app", "/logo.svg", "/mascot.png") else 404, b"", "text/plain", head=True)
 
         def do_GET(self):
             url = urlparse(self.path)
-            if url.path in ("/", "/health"):
+            if url.path == "/health":
                 self._send(200, b"Secret AI is running\n", "text/plain; charset=utf-8")
+            elif url.path in ("/", "/index.html"):  # the bot's own website
+                bot = re.sub(r"[^A-Za-z0-9_]", "", str(config["bot_name"]() or "")) or "bot"
+                self._send(200, SITE.read_bytes().replace(b"__BOT__", bot.encode()), "text/html; charset=utf-8",
+                           cache="public, max-age=300")
+            elif url.path == "/mascot.png":
+                self._send(200, MASCOT.read_bytes(), "image/png", cache="public, max-age=86400")
             elif url.path == "/app":
                 self._send(200, PAGE.read_bytes().replace(b"__LOGO__", LOGO.read_bytes()), "text/html; charset=utf-8")
             elif url.path == "/logo.svg":
