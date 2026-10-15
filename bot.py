@@ -66,7 +66,8 @@ SYSTEM = (
     "You are Secret AI, a brilliant, knowledgeable and friendly assistant. "
     "Your name here is Secret AI (say so when asked your name). Reply in the user's language. "
     "Use the language of their latest message, caption or voice transcription; "
-    "if none is available, use their Telegram language. "
+    "if none is available, use their Telegram language. Short greetings and words shared by many languages (салам, "
+    "привет, ок, хай, рахмат) are not a reason to switch: keep the language of the conversation so far, Russian when unsure. "
     "Get facts, numbers and code right. Give complete, practical answers: concrete steps, examples and working "
     "solutions instead of generic advice; for simple questions and small talk be brief and quick. "
     "Search the web only when the answer depends on recent or changing facts (news, prices, versions, events). "
@@ -154,7 +155,7 @@ RECALL_MATCHES = 12
 RECALL_CHARS = 600
 # What the model sees of the history: older long answers are shortened and the whole history fits a budget,
 # so 300 messages stay affordable and inside the model's context.
-HISTORY_CHARS = 180_000
+HISTORY_CHARS = 40_000  # a big prompt makes every answer slow on the gateways; older messages come back by search
 MAX_FACTS = 80  # lasting facts kept per person
 HISTORY_ITEM_CHARS = 2_500
 
@@ -1129,6 +1130,8 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     if apps:
         tools += apps.functions
     text, incomplete = "", False
+    started, first = time.monotonic(), None
+    size = sum(len(str(m.get("content") or "")) for m in messages)
     for _ in range(request.pop("rounds", MAX_TOOL_ROUNDS)):
         options = {"model": model[len(provider):], "stream": True, "messages": messages,
                    "max_tokens": min(request.get("max_output_tokens", 8000), 32000)}
@@ -1156,6 +1159,8 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
                 if isinstance(content, list):  # or send content as parts
                     content = "".join(str(field(p, "text") or "") for p in content)
                 if content:
+                    if first is None:
+                        first = time.monotonic() - started
                     said += content
                     await live.update(prefix + text + said)
                 for call in (field(delta, "tool_calls") if delta is not None else None) or []:
@@ -1203,6 +1208,8 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
         if said.strip():
             text += "\n\n"
     live.status(None)
+    LOG.info("%s: first text after %.1f s, done in %.1f s (prompt %d chars, %d tools)", model,
+             first if first is not None else -1, time.monotonic() - started, size, len(tools))
     return (text if prefix else text.strip()), incomplete
 
 
