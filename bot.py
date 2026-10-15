@@ -1416,8 +1416,15 @@ async def discover_models(app):
             prices[model] = price
         LOG.info("Model: %s (%s)", model, f"{price} credits an answer" if price else "free")
     chosen_models += [m for m in fast + extra if m not in chosen_models]
+    backups = []
+    if ONLY_MODEL:  # one model for now: the first gateway's copy in the menu, the other gateways' copies as backups
+        keep = [m for m in chosen_models if re.search(ONLY_MODEL, m, re.I)]
+        keep.sort(key=lambda m: ONLY_ORDER.index(m.split(":", 1)[0]) if m.split(":", 1)[0] in ONLY_ORDER else len(ONLY_ORDER))
+        chosen_models, backups = keep[:1], keep[1:]
+        prices = {m: p for m, p in prices.items() if m in chosen_models}
+        data["group_fast"] = None  # groups answer with the same model
     free_on = [m for m in chosen_models if m not in prices]
-    data.update(models=chosen_models, premium=prices, fallbacks=free_on)
+    data.update(models=chosen_models, premium=prices, fallbacks=free_on + backups)
     data["chat_default"] = data["model"] = (free_on or chosen_models or [None])[0]
     # The owner's choice of the default for everyone (DEFAULT_PICK), applied once; /speed set can change it later.
     store = data.get("connections")
@@ -1428,20 +1435,18 @@ async def discover_models(app):
     saved = store.get_meta("default_model") if store else None
     if saved in free_on:  # /speed set picked the fastest one
         data["chat_default"] = data["model"] = saved
-        data["fallbacks"] = [saved] + [m for m in free_on if m != saved]
+        data["fallbacks"] = [saved] + [m for m in free_on + backups if m != saved]
     if not chosen_models:
         LOG.warning("No models are offered: the bot tells people it has none yet")
 
 
 # The models the bot offers, all through AnyModel, in menu order: (how to find the id, credits per answer; 0 = free).
 # The first free one is the default for everyone. Empty list: no models (the bot says so).
-MODEL_CATALOG = [
-    (r"grok[-._ ]?4[-._]7", 0),                          # Grok 4.7 (default)
-    (r"claude-sonnet[-._]5(?![-._]?\d)", 0),             # Claude Sonnet 5
-    (r"gemini[-._ ]?4\b.*argon", 0),                     # Gemini 4 Argon
-    (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 3),           # GPT-6 Sol
-]
-DEFAULT_PICK = r"grok[-._ ]?4[-._]7"  # the default model for everyone who hasn't picked one: Grok 4.7
+MODEL_CATALOG = []  # for now: nothing from AnyModel, only DeepSeek (ONLY_MODEL); models get added back here later
+DEFAULT_PICK = r"deepseek"  # the default model for everyone who hasn't picked one: DeepSeek
+# Only models matching this go into the menu (one of them shown, the rest back it up); None: everything found is offered.
+ONLY_MODEL = r"deepseek"
+ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # which gateway's DeepSeek goes first
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
 
@@ -2102,6 +2107,8 @@ def drop_model(data, model, exc):
     data["models"] = [m for m in data["models"] if m != model]
     data["fallbacks"] = [m for m in data.get("fallbacks", []) if m != model]
     data.get("premium", {}).pop(model, None)
+    if not data["models"] and data["fallbacks"]:  # a backup copy of the same model (another gateway) takes its place
+        data["models"] = data["fallbacks"][:1]
     if data.get("chat_default") == model:
         data["chat_default"] = data["model"] = (data["fallbacks"] or data["models"] or [None])[0]
     LOG.warning("%s is not available (%s): removed from the menu until restart", model, type(exc).__name__)
