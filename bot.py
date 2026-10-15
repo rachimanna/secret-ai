@@ -1906,8 +1906,9 @@ async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uptime = f"{minutes // 60} ч {minutes % 60} мин" if minutes >= 60 else f"{minutes} мин"
     text = (f"🔖 Версия: <code>{sha or '?'}</code>" + (f" от {date}" if date else "")
             + (f"\n📝 {html.escape(subject[:150])}" if subject else "") + f"\n⏱ Работает: {uptime}"
-            + ("\n🔄 Обновляется с GitHub сам, раз в 5 минут" if hosting.updates_enabled() else ""))
-    await update.effective_message.reply_text(text, parse_mode="HTML")
+            + ("\n🔄 Обновляется с GitHub сам, раз в 5 минут" if hosting.updates_enabled() else "")
+            + (f"\n🌐 Сайт: {context.bot_data['public_url']}" if context.bot_data.get("public_url") else ""))
+    await update.effective_message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
 
 
 async def mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
