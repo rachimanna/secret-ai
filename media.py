@@ -184,8 +184,9 @@ async def _has_audio(path):
     return b"Audio:" in err
 
 
-async def montage(clips, fmt, voice=None, keep_sound=False, sound_volume=0.22):
+async def montage(clips, fmt, voice=None, keep_sound=False, sound_volume=0.22, seconds=None):
     """Join video clips (bytes) into one MP4 with the same frame and lay an optional voice-over (bytes) on top.
+    seconds: the length ordered; each clip is cut to its share, so 8 scenes of 10 s make 64 s, not 80.
 
     The clips' own sound is dropped unless keep_sound: video models put foreign-language speech there. Returns MP4 bytes.
     """
@@ -193,6 +194,7 @@ async def montage(clips, fmt, voice=None, keep_sound=False, sound_volume=0.22):
     with tempfile.TemporaryDirectory(prefix="secret-ai-video-") as folder:
         folder = Path(folder)
         parts = []
+        share = ["-t", f"{seconds / len(clips):.2f}"] if seconds and clips else []
         for index, data in enumerate(clips):
             source, target = folder / f"clip{index}.mp4", folder / f"part{index}.mp4"
             source.write_bytes(data)
@@ -202,7 +204,7 @@ async def montage(clips, fmt, voice=None, keep_sound=False, sound_volume=0.22):
                           "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
                                  f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30",
                           "-map", "0:v:0", *audio, "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
-                          "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-shortest", str(target))
+                          "-pix_fmt", "yuv420p", "-c:a", "aac", "-ar", "44100", "-ac", "2", "-shortest", *share, str(target))
             parts.append(target)
         listing = folder / "list.txt"
         listing.write_text("".join(f"file '{part.name}'\n" for part in parts))

@@ -16,6 +16,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -189,8 +190,19 @@ def updates_enabled():
     return not on_render() and (HERE / ".git").exists() and os.environ.get("SELF_UPDATE", "1").strip() != "0"
 
 
+def _compile_errors():
+    """The first syntax error in the bot's Python files, or "" when they all compile."""
+    for path in sorted(HERE.glob("*.py")):
+        try:
+            compile(path.read_bytes(), str(path), "exec")
+        except (SyntaxError, ValueError) as exc:
+            return f"{path.name}: {exc}"
+    return ""
+
+
 async def self_update(before_restart):
     """Check GitHub every UPDATE_EVERY seconds; on a new commit pull it, install new requirements and restart."""
+    skipped = {}  # commit -> when it failed: tried again only after an hour, not every few minutes
     while True:
         await asyncio.sleep(UPDATE_EVERY)
         try:
@@ -200,14 +212,34 @@ async def self_update(before_restart):
                 continue
             head = (await asyncio.to_thread(_git, "rev-parse", "HEAD")).stdout.strip()
             latest = (await asyncio.to_thread(_git, "rev-parse", "origin/main")).stdout.strip()
-            if not latest or head == latest:
+            if not latest or head == latest or time.monotonic() - skipped.get(latest, -1e9) < 3600:
                 continue
             changed = (await asyncio.to_thread(_git, "diff", "--name-only", head, latest)).stdout.split()
-            await asyncio.to_thread(_git, "reset", "-q", "--hard", "origin/main")
             if "requirements.txt" in changed:
+                # The new libraries go in BEFORE the new code: if pip fails, the bot keeps running the old version.
+                wanted = (await asyncio.to_thread(_git, "show", f"{latest}:requirements.txt")).stdout
+                with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as listing:
+                    listing.write(wanted)
                 target = ["--prefix", str(HERE / ".local")] if (HERE / ".local").exists() else ["--user"]
-                await asyncio.to_thread(subprocess.run, [sys.executable, "-m", "pip", "install", "-q", "-U", "--no-cache-dir", *target,
-                                                         "-r", str(HERE / "requirements.txt")], timeout=600)
+                try:
+                    installed = await asyncio.to_thread(
+                        subprocess.run, [sys.executable, "-m", "pip", "install", "-q", "-U", "--no-cache-dir", *target,
+                                         "-r", listing.name], capture_output=True, text=True, timeout=600)
+                finally:
+                    os.unlink(listing.name)
+                if installed.returncode:
+                    LOG.warning("Update %s skipped: installing its libraries failed, staying on %s: %s", latest[:7], head[:7],
+                                (installed.stderr or installed.stdout or "").strip()[-300:])
+                    skipped[latest] = time.monotonic()
+                    continue
+            await asyncio.to_thread(_git, "reset", "-q", "--hard", "origin/main")
+            # The new code must at least compile; otherwise go back to the version that was running.
+            broken = await asyncio.to_thread(_compile_errors)
+            if broken:
+                LOG.warning("Update %s skipped: it doesn't compile (%s), staying on %s", latest[:7], broken[:300], head[:7])
+                await asyncio.to_thread(_git, "reset", "-q", "--hard", head)
+                skipped[latest] = time.monotonic()
+                continue
             LOG.info("Updated to %s, restarting", latest[:7])
         except Exception as exc:
             LOG.warning("Self-update check failed: %s %s", type(exc).__name__, str(exc)[:200])

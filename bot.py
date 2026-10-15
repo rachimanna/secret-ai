@@ -3662,7 +3662,10 @@ async def start_generation(app, user_id, language, kind, prompt, fmt, seconds=5,
            "images": list(images or [])[:4], "chat_id": chat_id or user_id, "reply_id": reply_id}
     entry = {"kind": kind, "prompt": prompt, "state": "running", "at": time.monotonic()}
     log.append(entry)
-    del log[:-10]
+    # Keep the last 10 finished ones, but never drop a running job: it must stay findable for "cancel".
+    finished = [e for e in log if e["state"] != "running"]
+    for old in finished[:-10]:
+        log.remove(old)
     job["entry"] = entry
     task = asyncio.create_task(generation_job(app, job))
     entry["task"] = task
@@ -3773,7 +3776,7 @@ async def make_veo_video(data, job):
     else:
         calls = [hf_generate(data["http"], job["key"], job["model"], prompt, job["fmt"]) for prompt in prompts]
     clips = await asyncio.gather(*calls)
-    return await montage(list(clips), job["fmt"], keep_sound=True)
+    return await montage(list(clips), job["fmt"], keep_sound=True, seconds=job["seconds"])
 
 
 async def voice_over(data, job, scenes):
@@ -3804,7 +3807,8 @@ async def make_kling_video(data, job):
                            KLING_SECONDS, data.get("kling_api") or KLING_API)
             for scene in scenes])
     voice = await voice_over(data, job, scenes)
-    return await montage(list(clips), job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0)
+    return await montage(list(clips), job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0,
+                         seconds=job["seconds"])
 
 
 async def make_free_video(data, job):
@@ -3846,7 +3850,7 @@ async def make_video(data, job):
         response.raise_for_status()
         clips.append(response.content)
     voice = await voice_over(data, job, scenes)
-    return await montage(clips, job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0)
+    return await montage(clips, job["fmt"], voice, keep_sound=True, sound_volume=0.5 if voice else 1.0, seconds=job["seconds"])
 
 
 async def add_sound(data, job, url, scene):
@@ -3910,11 +3914,11 @@ async def generation_job(app, job):
     user_id, ru, kind = job["user_id"], job["language"] == "ru", job["kind"]
     chat, answer = job.get("chat_id") or user_id, {"reply_parameters": reply_to(job.get("reply_id"))}
     status = None
-    try:
-        status = await bot.send_message(chat, waiting_text(job), **answer)
-    except TelegramError:
-        pass
-    try:
+    try:  # from the very first step: a cancel while "Рисую…" is being sent still refunds and ends the job
+        try:
+            status = await bot.send_message(chat, waiting_text(job), **answer)
+        except TelegramError:
+            pass
         # No caption: the prompt is the model's own (often English) description, not something to show.
         caption = None
         if kind == "photo" and (job.get("images") or job["model"] == OPENAI_IMAGE):
