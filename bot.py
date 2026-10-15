@@ -46,12 +46,13 @@ import mcpbridge
 import miniapp
 import persist
 import secretary as sec
+import speech
 import welcome
 from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, ANYMODEL_FISH, fish_speech, fish_voice_id, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
+                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, voice_message, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (GITHUB_TOOLS, Connections, GitHub, GitHubError, Toolbox, apply_change, delete_repos, describe,
                           describe_deletion, prune_pending)
 
@@ -1016,6 +1017,14 @@ WEB_TOOL = {"type": "function", "function": {
 
 async def web_lookup(data, query):
     """Search the web through the OpenAI model's built-in search; returns a short factual digest with sources."""
+    if not data.get("openai"):
+        try:
+            return await quick_answer(data, data["search_model"], "Today is " + time.strftime("%Y-%m-%d") + ". Search the "
+                                      "web and report the facts that answer the query: exact numbers with units and dates, "
+                                      "and the source links. No small talk.", query, max_tokens=1500) or "Nothing found."
+        except Exception as exc:
+            LOG.warning("Web search with %s failed: %s", data.get("search_model"), type(exc).__name__)
+            return "Web search is unavailable right now; answer from what you know and say the data may be outdated."
     try:
         request = dict(model=data["model"], store=False, max_output_tokens=1500, tools=[{"type": "web_search"}], input=query)
         if data.get("reasoning"):
@@ -1094,7 +1103,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     messages = chat_messages(request.get("instructions"), request["input"])
     no_tools = context.bot_data.setdefault("no_tools", set())
     tools = chat_tools(toolbox) if provider not in no_tools else []
-    if provider not in no_tools and context.bot_data.get("web_search") and context.bot_data.get("client"):
+    if provider not in no_tools and (context.bot_data.get("web_search") or context.bot_data.get("search_model")):
         tools.append(WEB_TOOL)
     # Connected apps are remote MCP servers, which only OpenAI calls by itself: here the bot does it for the model.
     servers = [d for d in toolbox.definitions() if d.get("type") == "mcp"] if toolbox and provider not in no_tools else []
@@ -1170,11 +1179,12 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 async def discover_models(app):
     """Offer newer models only if this account really has them, so the picker never lists one that fails."""
     data = app.bot_data
-    try:
-        openai_ids = {m.id for m in (await data["client"].models.list()).data}
-    except Exception as exc:
-        LOG.warning("OpenAI model list unavailable: %s", type(exc).__name__)
-        openai_ids = set()
+    openai_ids = set()
+    if data.get("openai"):
+        try:
+            openai_ids = {m.id for m in (await data["client"].models.list()).data}
+        except Exception as exc:
+            LOG.warning("OpenAI model list unavailable: %s", type(exc).__name__)
     abacus_ids = set()
     if data.get("abacus"):
         try:
@@ -1194,7 +1204,9 @@ async def discover_models(app):
     if not data.get("image_model"):
         data["image_model"] = images[-1] if images else "gpt-image-1"
     gpt = GPT_PICK if GPT_PICK in openai_ids else ABACUS_PREFIX + GPT_PICK if GPT_PICK in abacus_ids else None
-    if not gpt:
+    if not gpt and not data.get("openai"):
+        LOG.info("%s is not on RouteLLM and OpenAI is off: not offered", GPT_PICK)
+    elif not gpt:
         LOG.warning("%s is not on the OpenAI key or RouteLLM; offering %s instead", GPT_PICK, data["model"])
         gpt = data["model"]
     gemini, any_ids = None, []
@@ -1203,7 +1215,8 @@ async def discover_models(app):
             any_ids = [m.id for m in (await data["anymodel_chat"].models.list()).data]
         except Exception as exc:
             LOG.warning("AnyModel model list unavailable: %s", type(exc).__name__)
-    claude = OPUS if data.get("anymodel_chat") else None
+    # Opus only through Abacus (a paid model, below); the old AnyModel Opus stays only when CHAT_MODEL asks for it.
+    claude = OPUS if data.get("anymodel_chat") and data.get("chat_override", "").startswith(ANYMODEL_PREFIX) and "opus" in data.get("chat_override", "") else None
     if claude and any_ids and claude[len(ANYMODEL_PREFIX):] not in any_ids:
         # The catalog spells it differently, or doesn't have it: take the closest Claude Opus it has.
         wanted = claude.rsplit("opus-", 1)[1]
@@ -1224,16 +1237,36 @@ async def discover_models(app):
     if deepseek:
         deepseek = ANYMODEL_PREFIX + deepseek
         LOG.info("DeepSeek on AnyModel: %s", deepseek)
+    # Sonnet through AnyModel; Abacus only if AnyModel isn't set up.
     sonnet = None
-    if data.get("abacus"):
-        found = sorted((i for i in abacus_ids if SONNET_55.search(i)), key=lambda i: ("thinking" in i.lower(), len(i)))
+    pick = lambda ids: sorted((i for i in ids if SONNET_55.search(i)), key=lambda i: ("thinking" in i.lower(), "/" not in i, len(i)))
+    if data.get("anymodel_chat"):
+        found = pick(any_ids)
+        sonnet = ANYMODEL_PREFIX + (found[0] if found else "claude-sonnet-5-5")
+        LOG.info("Claude Sonnet 5.5 on AnyModel: %s%s", sonnet, "" if found else " (not in the list, trying the usual id)")
+    elif data.get("abacus"):
+        found = pick(abacus_ids)
         sonnet = ABACUS_PREFIX + (found[0] if found else "claude-sonnet-5-5")
-        LOG.info("Claude Sonnet 5.5 on Abacus: %s%s", sonnet, "" if found else " (not in the list, trying the usual id)")
+        LOG.info("Claude Sonnet 5.5 on Abacus: %s", sonnet)
+    # Web search without OpenAI: a search model (Perplexity Sonar…) on a gateway, if there is one.
+    data["search_model"] = None
+    if not data.get("openai") and data.get("web_wanted"):
+        for prefix, ids in ((ANYMODEL_PREFIX, any_ids), (ABACUS_PREFIX, abacus_ids)):
+            hits = sorted((i for i in ids if re.search(r"sonar|perplexity", i, re.I) and not re.search(r"reason|deep", i, re.I)), key=len)
+            if hits:
+                data["search_model"] = prefix + hits[0]
+                LOG.info("Web search through %s", data["search_model"])
+                break
+        else:
+            LOG.warning("No search model on AnyModel or Abacus: web search is off")
     free = list(dict.fromkeys(m for m in (gemini, sonnet, claude, gpt, deepseek) if m))  # the first one is the default
+    free = free or [data["model"]]
     data["premium"] = {m: price for m, price in find_premium(openai_ids, abacus_ids, any_ids).items() if m not in free}
     data["models"] = free + list(data["premium"])
     chosen = data.get("chat_override")
     data["chat_default"] = chosen if chosen in free else free[0]
+    if not data.get("openai"):
+        data["model"] = data["chat_default"]  # every fallback to "the main model" stays off OpenAI
 
 
 # Paid models, like Mira's: each answer costs credits, and credits are only bought with Telegram Stars.
@@ -1259,9 +1292,8 @@ def find_premium(openai_ids, abacus_ids, any_ids):
     OpenAI first."""
     found, prices = {}, premium_prices()
     for key, (pattern, _) in PREMIUM.items():
-        # Claude models come from Anthropic's gateways (Abacus, AnyModel) first, never OpenAI's key unless nothing else has them.
-        sources = ((ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids), ("", openai_ids)) if key in ("fable", "opus") else \
-            (("", openai_ids), (ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids))
+        # Opus only through Abacus; Fable and Astra through Abacus, then AnyModel; OpenAI only when it's switched on.
+        sources = {"opus": ((ABACUS_PREFIX, abacus_ids),)}.get(key, ((ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids), ("", openai_ids)))
         for prefix, ids in sources:
             hits = sorted((i for i in ids if pattern.search(i) and not re.search(r"mini|nano|image|audio|\d{4}-\d\d-\d\d", i)),
                           key=lambda i: ("thinking" in i.lower(), "preview" in i.lower(), len(i)))
@@ -1303,6 +1335,8 @@ async def resolve_abacus_model(app):
 
 async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
+    if not chat_provider(request["model"]) and not context.bot_data.get("openai"):
+        request["model"] = context.bot_data.get("chat_default") or request["model"]  # OpenAI is off: never call it
     request["instructions"] = (request.get("instructions") or "") + model_identity(request["model"])
     if chat_provider(request["model"]):
         answer, incomplete = await chat_answer(context, live, request, toolbox)
@@ -1476,7 +1510,8 @@ async def prepare_welcome(app):
     if store.get_meta("welcome_note") or await restore_welcome(app) or not data.get("tts_model"):
         return
     try:
-        voice = await welcome.speech(data["client"], data["tts_model"], data["tts_voice"], welcome.TEXT["ru"])
+        voice = (await welcome.speech(data["client"], data["tts_model"], data["tts_voice"], welcome.TEXT["ru"]) if data.get("openai")
+                 else await speech.edge_speech(welcome.TEXT["ru"]))
     except Exception as exc:  # no voice, no welcome note
         LOG.warning("Welcome voice failed: %s %s", type(exc).__name__, getattr(exc, "message", "") or str(exc)[:200])
         return
@@ -1770,7 +1805,7 @@ async def media_text(media, client, language=None):
 async def read_question(update, context):
     """Return (question, model content, text to remember) or None if nothing to answer."""
     message = update.effective_message
-    client = context.bot_data["client"]
+    client = context.bot_data["stt"]
     question = message.text or message.caption or ui(update, "Что изображено на фото?", "What is in this photo?")
     media = message.voice or message.audio or message.video_note
     if media:
@@ -1805,7 +1840,7 @@ async def read_tiktok(update, context, question, url):
     message = update.effective_message
     status = await reply(message, ui(update, "🎬 Смотрю видео…", "🎬 Watching the video…"))
     try:
-        text, frames, label = await links.watch(context.bot_data["http"], context.bot_data["client"], url,
+        text, frames, label = await links.watch(context.bot_data["http"], context.bot_data["stt"], url,
                                                  (update.effective_user.language_code or "ru")[:2])
     except Exception as exc:  # a removed video, a private account or tikwm being down
         LOG.warning("TikTok link failed: %s %s", type(exc).__name__, str(exc)[:400])
@@ -2374,12 +2409,16 @@ def group_model(data, chat_id):
 
 async def quick_answer(data, model, instructions, text, max_tokens=2000):
     """A short non-streamed answer from either an OpenAI model or a RouteLLM one."""
+    if not data.get("openai") and not chat_provider(model):  # OpenAI is off: the default chat model does it
+        model = data.get("chat_default") or model
     provider = chat_provider(model)
     if provider and data.get(CHAT_PROVIDERS[provider]):
         response = await data[CHAT_PROVIDERS[provider]].chat.completions.create(
             model=model[len(provider):], max_tokens=max_tokens,
             messages=[{"role": "system", "content": instructions + model_identity(model)}, {"role": "user", "content": text}])
         return response.choices[0].message.content or ""
+    if not data.get("openai"):
+        raise RuntimeError(f"no gateway for {model}")
     response = await data["client"].responses.create(model=data["model"] if provider else model, store=False,
                                                      instructions=instructions, max_output_tokens=max_tokens, input=text)
     return response.output_text or ""
@@ -2568,13 +2607,13 @@ async def demotivator_caption(context, chat_id, hint):
     data = context.bot_data
     lines = data["groups"].lines(chat_id, 60)
     try:
-        response = await data["client"].responses.create(
-            model=data["model"], store=False, max_output_tokens=800, text={"format": {"type": "json_object"}},
+        text = await quick_answer(
+            data, data.get("chat_default") or data["model"], max_tokens=800,
             instructions=("Write a caption for a classic Russian demotivator poster in the language of the chat: 'title' is 1-3 "
                           "words, 'subtitle' is one short ironic line. Funny, based on the chat; no insults about "
-                          'ethnicity, religion, orientation or looks. Return JSON {"title": "...", "subtitle": "..."}.'),
-            input="Chat:\n" + "\n".join(lines) + (f"\n\nPhoto caption or request: {hint}" if hint else ""))
-        caption = json.loads(response.output_text)
+                          'ethnicity, religion, orientation or looks. Return only JSON {"title": "...", "subtitle": "..."}.'),
+            text="Chat:\n" + "\n".join(lines) + (f"\n\nPhoto caption or request: {hint}" if hint else ""))
+        caption = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
         return str(caption.get("title") or "").strip()[:60] or "Ну да", str(caption.get("subtitle") or "").strip()[:140]
     except Exception as exc:  # a catchphrase still makes a demotivator
         LOG.warning("Demotivator caption failed: %s", type(exc).__name__)
@@ -3271,12 +3310,12 @@ async def english_prompt(data, prompt):
     if prompt.isascii():
         return prompt
     try:
-        response = await data["client"].responses.create(
-            model=data["model"], store=False, max_output_tokens=600, input=prompt,
+        text = await quick_answer(
+            data, data.get("chat_default") or data["model"], max_tokens=600, text=prompt,
             instructions=("Rewrite this image request as one detailed English prompt for a text-to-image model: subject, "
                           "style, lighting, composition. Keep every detail the user asked for; quote any text that must "
                           "appear in the image as is. Output only the prompt."))
-        return (response.output_text or "").strip() or prompt
+        return (text or "").strip() or prompt
     except Exception as exc:  # the original prompt still works, just less precisely
         LOG.warning("Prompt translation failed: %s", type(exc).__name__)
         return prompt
@@ -3296,10 +3335,10 @@ async def plan_veo(data, job, count):
         "camera, lighting, style, sound. No on-screen text. " + speech +
         ' Return JSON: {"prompts": ["...", ...]} with exactly ' + str(count) + " prompts.")
     try:
-        response = await data["client"].responses.create(
-            model=data["model"], instructions=instructions, input=job["prompt"], store=False, max_output_tokens=4000,
-            text={"format": {"type": "json_object"}})
-        prompts = [str(p).strip() for p in json.loads(response.output_text)["prompts"] if str(p).strip()][:count]
+        text = await quick_answer(data, data.get("chat_default") or data["model"], instructions + " Return only the JSON.",
+                                  job["prompt"], max_tokens=4000)
+        found = json.loads(re.search(r"\{.*\}", text, re.S).group(0))
+        prompts = [str(p).strip() for p in found["prompts"] if str(p).strip()][:count]
     except Exception as exc:  # planning is a nicety: fall back to the raw idea
         LOG.warning("Veo planning failed: %s", type(exc).__name__)
         prompts = []
@@ -3326,9 +3365,7 @@ async def voice_over(data, job, scenes):
     if not (job["voice"] and narration and data.get("tts_model")):
         return None
     try:
-        speech = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"],
-                                                          input=narration[:4000], response_format="mp3")
-        return speech.content
+        return await speech_audio(data, narration[:4000])
     except Exception as exc:  # a video without voice is still a result
         LOG.warning("Voice-over failed: %s", type(exc).__name__)
         return None
@@ -3416,6 +3453,8 @@ async def paid_image(data, prompt, fmt, images=None):
             LOG.warning("Nano Banana failed: %s; trying GPT Image", exc.code)
         except Exception as exc:  # RouteLLM down or the model id is different: OpenAI still can
             LOG.warning("Nano Banana failed: %s; trying GPT Image", type(exc).__name__)
+    if not data.get("openai"):
+        raise MediaError("failed", "no OpenAI")
     try:
         return await openai_image(data["client"], data.get("image_model") or "gpt-image-1", prompt, fmt, images)
     except BadRequestError as exc:
@@ -3626,10 +3665,14 @@ async def speech_audio(data, text):
                 return audio
         except Exception as exc:  # the usual voice still answers
             LOG.warning("AnyModel voice failed: %s %s", type(exc).__name__, str(exc)[:200])
-    audio = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"], input=text,
-                                                     response_format="opus")
-    LOG.info("Voice reply: OpenAI voice %s", data["tts_voice"])
-    return audio.content
+    if data.get("openai"):
+        audio = await data["client"].audio.speech.create(model=data["tts_model"], voice=data["tts_voice"], input=text,
+                                                         response_format="opus")
+        LOG.info("Voice reply: OpenAI voice %s", data["tts_voice"])
+        return audio.content
+    audio = await voice_message(await speech.edge_speech(text))
+    LOG.info("Voice reply: Microsoft voice")
+    return audio
 
 
 async def confirm_deletion(update, context, query, pid, change):
@@ -3971,6 +4014,8 @@ async def shutdown(app):
         except Exception as exc:
             LOG.warning("Final database save failed: %s", type(exc).__name__)
     await app.bot_data["client"].close()
+    if hasattr(app.bot_data.get("stt"), "close"):
+        await app.bot_data["stt"].close()
     await app.bot_data["http"].aclose()
     app.bot_data["pipedream"].http.close()
     app.bot_data["direct"].http.close()
@@ -4356,8 +4401,11 @@ def main():
         logging.getLogger(name).setLevel(logging.INFO)
     hosting.load_env()  # bot hosting panels (h1cloud…) have no environment settings: a .env file instead
     token, key = os.environ.get("TELEGRAM_TOKEN", "").strip(), os.environ.get("OPENAI_API_KEY", "").strip()
-    if not token or not key:
-        raise SystemExit("Set TELEGRAM_TOKEN and OPENAI_API_KEY environment variables.")
+    if not token:
+        raise SystemExit("Set the TELEGRAM_TOKEN environment variable.")
+    # OpenAI is off unless asked for (OPENAI_ENABLED=1 with a key): chat goes through Abacus and AnyModel, voices are
+    # recognized by a local Whisper and spoken by AnyModel or Microsoft's free voices.
+    use_openai = bool(key) and os.environ.get("OPENAI_ENABLED", "0").strip() == "1"
     try:
         allowed = parse_allowed(os.environ.get("ALLOWED_USERS", ""))
         port = int(hosting.default_port())
@@ -4395,7 +4443,11 @@ def main():
     app = Application.builder().token(token).concurrent_updates(True).post_init(post_init).post_shutdown(shutdown).build()
     app.bot_data.update(
         connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
-        client=AsyncOpenAI(api_key=key, timeout=120, max_retries=2),
+        client=AsyncOpenAI(api_key=key or "off", timeout=120, max_retries=2), openai=use_openai,
+        stt=AsyncOpenAI(api_key=key, timeout=120, max_retries=2) if use_openai else speech.LocalWhisper(
+            AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
+                        base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API, timeout=120)
+            if os.environ.get("ANYMODEL_API_KEY", "").strip() else None),
         memory=Memory(database), allowed=allowed, snapshots=snapshots, codex=codex.CodexStore(connections), codex_jobs={},
         model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
@@ -4429,7 +4481,8 @@ def main():
         abacus_model=os.environ.get("ABACUS_MODEL", "").strip(),
         abacus_image=os.environ.get("ABACUS_IMAGE_MODEL", "").strip(),
         image_model=os.environ.get("OPENAI_IMAGE_MODEL", "").strip(),
-        web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0",
+        web_search=os.environ.get("WEB_SEARCH", "1").strip() != "0" and use_openai,
+        web_wanted=os.environ.get("WEB_SEARCH", "1").strip() != "0",
         # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},

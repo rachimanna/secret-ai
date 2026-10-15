@@ -18,7 +18,7 @@ Telegram-бот на Python: текстовые диалоги через OpenAI
 | Имя | Значение |
 | --- | --- |
 | `TELEGRAM_TOKEN` | Обязательно: токен от @BotFather |
-| `OPENAI_API_KEY` | Обязательно: ключ OpenAI API с доступом к модели и доступным балансом |
+| `OPENAI_API_KEY` | Необязательно. OpenAI выключен, пока не задан `OPENAI_ENABLED=1`: чат идёт через Abacus (Opus, Fable) и AnyModel (Sonnet), голосовые распознаёт локальный Whisper (`WHISPER_MODEL`, по умолчанию `base`), озвучка — голос AnyModel или бесплатный голос Microsoft (`EDGE_VOICE`, по умолчанию `ru-RU-DmitryNeural`), поиск в интернете — модель Perplexity Sonar на AnyModel/Abacus, если она есть |
 | `OPENAI_MODEL` | По умолчанию `gpt-5.6-luna`; для фото нужна vision-модель |
 | `ALLOWED_USERS` | Telegram ID через запятую, например `123456789,987654321`. Пусто — доступ всем |
 | `PORT` | HTTP-порт, по умолчанию `10000`; на Render задаётся платформой |
