@@ -228,6 +228,15 @@ class GroupStore:
             self.db.execute("INSERT INTO group_info(chat_id, model) VALUES (?, ?) ON CONFLICT(chat_id) DO UPDATE SET "
                             "model=excluded.model", (chat_id, model))
 
+    def forget(self, chat_id):
+        """Everything the bot keeps about a group: messages, stickers, settings, games, summaries."""
+        tables = [row[0] for row in self.db.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+        with self.db:
+            for table in ("group_messages", "group_media", "group_info", "group_members", "group_sent", "group_phrases",
+                          "game_scores", "game_asked", "group_digest"):
+                if table in tables:
+                    self.db.execute(f"DELETE FROM {table} WHERE chat_id=?", (chat_id,))
+
     def groups_for(self, user_id):
         rows = self.db.execute("SELECT i.chat_id, i.title, i.level, i.model FROM group_members m JOIN group_info i "
                                "USING(chat_id) WHERE m.user_id=? ORDER BY m.last DESC LIMIT 30", (user_id,)).fetchall()

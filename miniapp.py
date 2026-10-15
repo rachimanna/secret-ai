@@ -316,6 +316,16 @@ def make_handler(config):
                     self._send(403, {"error": "group_admin"})
                     return
                 self._send(200, {"groups": bridge.groups(uid)})
+            elif path == "/api/groups/delete":
+                try:
+                    chat_id = int(data.get("chat_id"))
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "bad request"})
+                    return
+                if not bridge.delete_group(uid, chat_id):
+                    self._send(403, {"error": "group_admin"})
+                    return
+                self._send(200, {"groups": bridge.groups(uid)})
             elif path == "/api/groups/model":
                 try:
                     chat_id = int(data.get("chat_id"))

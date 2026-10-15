@@ -143,6 +143,17 @@
   .row.more { color: var(--accent); font-weight: 500; min-height: 56px; }
   .row.more .ic { width: 32px; height: 32px; color: var(--accent); }
   .row.danger { color: var(--danger); }
+  /* swipe a group left: a red trash appears; deleting slides the row out and folds it */
+  .swipe { position: relative; overflow: hidden; max-height: 200px; transition: max-height .32s cubic-bezier(.4,0,.2,1), opacity .32s; }
+  .swipe.gone { max-height: 0 !important; opacity: 0; }
+  .swipe + .swipe .row::before, .swipe + .row::before { content: ""; position: absolute; top: 0; left: 62px; right: 16px; height: 1px; background: var(--line); }
+  .swipe .row { touch-action: pan-y; will-change: transform; }
+  .swipe .row.anim { transition: transform .28s cubic-bezier(.2,.8,.2,1), background-color .25s; }
+  .swipe-del { position: absolute; top: 0; right: 0; bottom: 0; width: 0; display: flex; align-items: center; justify-content: center;
+               flex-direction: column; gap: 3px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 600; overflow: hidden; }
+  .swipe-del.anim { transition: width .28s cubic-bezier(.2,.8,.2,1); }
+  .swipe-del svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .swipe-del span { white-space: nowrap; }
   .badge { font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 8px; letter-spacing: .02em; text-transform: uppercase; }
   .badge.new { background: linear-gradient(135deg, #6d5dfc, #8b5cf6); color: #fff; }
   .badge.on { background: rgba(52,199,89,.18); color: var(--ok); }
@@ -578,7 +589,9 @@ const T = {
     secSteps: ["@BotFather → бот → Bot Settings → Business Mode → включить", "Telegram → Настройки → Telegram для бизнеса → Чат-боты", "Выбрать этого бота и разрешить «Отвечать на сообщения»"],
     groupsTitle: "Мои группы", groupsSub: "Где я шучу, кидаю мемы и делаю цитаты", groupsEmpty: "Добавь меня в группу с друзьями",
     groupsEmptySub: "Буду подкалывать, кидать мемы из TikTok, делать цитаты и демотиваторы", addToGroup: "Добавить в группу",
-    gStats: (m, s) => `${m} сообщ. в памяти · ${s} стикеров и гифок`, levelTitle: "Сглыпа-режим: как часто я вбрасываю сам",
+    gStats: (m, s) => `${m} сообщ. · ${s} стикеров`, gDelete: "Удалить",
+    gDeleteAsk: t => `Удалить «${t}»? Я выйду из группы и забуду всю её переписку, стикеры и настройки.`, gDeleted: "Группа удалена",
+    errGroupDelete: "Удалить группу может только её админ или создатель", levelTitle: "Сглыпа-режим: как часто я вбрасываю сам",
     levels: { off: "Выкл", rare: "Редко", normal: "Обычно", often: "Часто" }, adminOnly: "Менять могут только админы группы.",
     gModelTitle: "Модель в этой группе", gModelDefault: "По умолчанию",
     phrasesTitle: "Любимые фразы чата", gMemory: "в памяти", gStickers: "стикеров", gMemes: "мемов", errGroupAdmin: "Это могут менять только админы группы",
@@ -639,7 +652,9 @@ const T = {
     secSteps: ["@BotFather → bot → Bot Settings → Business Mode → turn on", "Telegram → Settings → Telegram Business → Chatbots", "Pick this bot and allow it to reply to messages"],
     groupsTitle: "My groups", groupsSub: "Where I joke, post memes and make quotes", groupsEmpty: "Add me to a group with friends",
     groupsEmptySub: "I'll tease, post TikTok memes, make quotes and demotivators", addToGroup: "Add to a group",
-    gStats: (m, s) => `${m} messages remembered · ${s} stickers and gifs`, levelTitle: "How often I chime in on my own",
+    gStats: (m, s) => `${m} messages · ${s} stickers`, gDelete: "Delete",
+    gDeleteAsk: t => `Delete “${t}”? I'll leave the group and forget its messages, stickers and settings.`, gDeleted: "Group deleted",
+    errGroupDelete: "Only the group's admins or owner can delete it", levelTitle: "How often I chime in on my own",
     levels: { off: "Off", rare: "Rare", normal: "Normal", often: "Often" }, adminOnly: "Only group admins can change this.",
     gModelTitle: "Model in this group", gModelDefault: "Default",
     phrasesTitle: "The chat's catchphrases", gMemory: "remembered", gStickers: "stickers", gMemes: "memes", errGroupAdmin: "Only group admins can change this",
@@ -826,6 +841,7 @@ const ICON = {
   search: '<svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>',
   close: '<svg class="i" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>',
   bolt: '<svg viewBox="0 0 24 24" width="14" height="14"><path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor"/></svg>',
+  trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/></svg>',
 };
 const SYM = {
   mode: '<svg class="i" viewBox="0 0 24 24"><path d="M12 3l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.4 6.8 19.1l1-5.8L3.5 9.2l5.9-.9z"/></svg>',
@@ -998,14 +1014,72 @@ function addToGroup() {
 }
 function renderGroups() {
   const groups = state.groups || [];
-  $("home-groups").innerHTML = groups.length ? groups.map((g, i) => `<button class="row press" data-group="${i}">
+  $("home-groups").innerHTML = groups.length ? groups.map((g, i) => `<div class="swipe" data-swipe="${i}">
+      <button class="swipe-del" aria-label="${T.gDelete}">${ICON.trash}<span>${T.gDelete}</span></button>
+      <button class="row press" data-group="${i}">
       <div class="ic emoji">💬</div>
       <div class="body"><div class="t">${esc(g.title)}</div><div class="d">${T.gStats(g.messages, g.stickers)}</div></div>
-      <span class="val">${T.levels[g.level]}</span>${ICON.chev}</button>`).join("") + `<button class="row more press" id="add-group"><div class="ic">${ICON.plus}</div><div class="body">${T.addToGroup}</div></button>`
+      <span class="val">${T.levels[g.level]}</span>${ICON.chev}</button></div>`).join("") + `<button class="row more press" id="add-group"><div class="ic">${ICON.plus}</div><div class="body">${T.addToGroup}</div></button>`
     : `<button class="row press" id="add-group"><div class="ic emoji">🤝</div>
         <div class="body"><div class="t">${T.groupsEmpty}</div><div class="d">${T.groupsEmptySub}</div></div>${ICON.chev}</button>`;
   $("add-group").onclick = addToGroup;
-  $("home-groups").querySelectorAll("[data-group]").forEach(b => b.onclick = () => openGroupSheet(groups[+b.dataset.group]));
+  $("home-groups").querySelectorAll("[data-swipe]").forEach(el => swipeRow(el, groups[+el.dataset.swipe]));
+}
+
+/* Swipe a group row left to reveal the trash; past half way it stays open, a tap closes it. */
+const SWIPE_OPEN = 88;
+let openSwipe = null;
+function swipeRow(el, g) {
+  const row = el.querySelector(".row"), del = el.querySelector(".swipe-del");
+  let x0 = 0, y0 = 0, dx = 0, base = 0, dragging = false, decided = false, moved = false;
+  const set = (x, animate) => {
+    row.classList.toggle("anim", animate); del.classList.toggle("anim", animate);
+    row.style.transform = x ? `translateX(${x}px)` : ""; del.style.width = `${-x}px`;
+  };
+  const close = () => { set(0, true); if (openSwipe === close) openSwipe = null; };
+  row.addEventListener("touchstart", e => {
+    if (openSwipe && openSwipe !== close) openSwipe();
+    const t = e.touches[0]; x0 = t.clientX; y0 = t.clientY; dx = 0; dragging = true; decided = false; moved = false;
+    base = row.style.transform ? -SWIPE_OPEN : 0;
+  }, { passive: true });
+  row.addEventListener("touchmove", e => {
+    if (!dragging) return;
+    const t = e.touches[0], mx = t.clientX - x0, my = t.clientY - y0;
+    if (!decided) {
+      if (Math.abs(mx) < 8 && Math.abs(my) < 8) return;
+      decided = true;
+      if (Math.abs(my) > Math.abs(mx)) { dragging = false; return; }  // a vertical scroll, not a swipe
+    }
+    moved = true;
+    dx = Math.min(0, base + mx);
+    if (dx < -SWIPE_OPEN) dx = -SWIPE_OPEN + (dx + SWIPE_OPEN) * .3;  // a little rubber band past the trash
+    set(dx, false);
+  }, { passive: true });
+  row.addEventListener("touchend", () => {
+    if (!dragging) return;
+    dragging = false;
+    if (!moved) return;
+    if (dx < -SWIPE_OPEN / 2) { set(-SWIPE_OPEN, true); openSwipe = close; haptic("light"); } else close();
+  });
+  row.onclick = e => {
+    if (moved) { moved = false; return; }
+    if (row.style.transform) { close(); return; }
+    openGroupSheet(g);
+  };
+  del.onclick = () => {
+    haptic("warning");
+    const go = async ok => {
+      if (!ok) { close(); return; }
+      try {
+        const data = await api("/api/groups/delete", { chat_id: g.id });
+        set(-el.offsetWidth, true);  // slide out, then fold the gap
+        setTimeout(() => el.classList.add("gone"), 180);
+        setTimeout(() => { state.groups = data.groups; renderGroups(); }, 520);
+        haptic("success"); toast(T.gDeleted);
+      } catch (e) { close(); toast(e.code === "group_admin" ? T.errGroupDelete : errorText(e)); haptic("error"); }
+    };
+    tg?.showConfirm ? tg.showConfirm(T.gDeleteAsk(g.title), go) : go(window.confirm(T.gDeleteAsk(g.title)));
+  };
 }
 function openGroupSheet(g) {
   openSheet(`<div class="head"><div class="big letter" style="background:linear-gradient(135deg,#3b2f9e,#f472b6)">${esc((g.title || "?")[0])}</div>

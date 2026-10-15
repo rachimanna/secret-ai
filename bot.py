@@ -3880,6 +3880,25 @@ class Bridge:
             return True
         return self._run(write())
 
+    def delete_group(self, user_id, chat_id):
+        """A group's admin removes it: the bot leaves the group and forgets it. Returns False if not allowed."""
+        async def remove():
+            try:
+                member = await self.app.bot.get_chat_member(chat_id, user_id)
+            except TelegramError:
+                return False
+            if member.status not in ("administrator", "creator"):
+                return False
+            try:
+                await self.app.bot.leave_chat(chat_id)
+            except TelegramError as exc:  # already removed: forgetting is still right
+                LOG.info("Leaving group %s: %s", chat_id, type(exc).__name__)
+            self.app.bot_data["groups"].forget(chat_id)
+            for key in ("group_count", "group_due", "group_surprised", "group_spoke"):
+                self.app.bot_data.get(key, {}).pop(chat_id, None)
+            return True
+        return self._run(remove())
+
     def set_group_model(self, user_id, chat_id, model):
         """Admins choose the group's model ('' = default). Returns False if not allowed."""
         async def write():
