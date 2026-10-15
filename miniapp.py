@@ -10,10 +10,12 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 
+import codex
+
 from apps import PipedreamError, featured
 from mcp_oauth import DIRECT_APPS, MCPAuthError, direct_catalog
 from media import PACKS
-from integrations import GITHUB_API, check_init_data, check_mcp, github_headers, read_state, sign_state
+from integrations import GITHUB_API, GitHubError, check_init_data, check_mcp, github_headers, read_state, sign_state
 
 LOG = logging.getLogger("secret_ai.miniapp")
 WEBAPP = Path(__file__).with_name("webapp")
@@ -202,6 +204,55 @@ def make_handler(config):
                 LOG.warning("Mini App request %s failed: %s", path, type(exc).__name__)
                 self._send(500, {"error": "server"})
 
+        def _codex(self, action, user, data):
+            """Codex mode: tasks are read straight from the store, the work runs on the bot's loop."""
+            bridge, uid, store = config["bridge"], user["id"], config["codex"]()
+            task_id = str(data.get("id") or "")[:20]
+            if action == "state":
+                github = config["store"].get(uid, "github")
+                self._send(200, {"tasks": [codex.public(t) for t in store.list(uid)],
+                                 "github": github[0]["meta"].get("login", "") if github else None,
+                                 "can_run": config["store"].get_meta("owner") == uid})
+            elif action == "task":
+                task = store.get(task_id, uid)
+                if not task:
+                    self._send(404, {"error": "not found"})
+                    return
+                self._send(200, {"task": dict(codex.public(task, full=True), change=codex.change_view(task.get("change")))})
+            elif action == "start":
+                mode = "repo" if data.get("mode") == "repo" else "project"
+                prompt = str(data.get("prompt") or "").strip()[:4000]
+                if not prompt:
+                    self._send(400, {"error": "prompt"})
+                    return
+                task, error = bridge.codex_start(user, mode, prompt, str(data.get("repo") or "")[:120])
+                self._send(200 if task else 409, {"task": codex.public(task)} if task else {"error": error})
+            elif action == "stop":
+                self._send(200, {"ok": bridge.codex_stop(uid, task_id)})
+            elif action == "apply":
+                try:
+                    task = bridge.codex_apply(uid, task_id)
+                except GitHubError as exc:
+                    self._send(409, {"error": "github", "detail": str(exc)[:200]})
+                    return
+                self._send(200, {"task": codex.public(task)})
+            elif action == "repos":
+                try:
+                    self._send(200, {"repos": bridge.codex_repos(uid)})
+                except GitHubError as exc:
+                    self._send(409, {"error": "github", "detail": str(exc)[:200]})
+            elif action == "send":
+                self._send(200, {"ok": bridge.codex_send(uid, task_id)})
+            elif action == "site":
+                url = bridge.codex_site(uid, task_id)
+                self._send(200 if url else 409, {"url": url} if url else {"error": "no page"})
+            elif action == "delete":
+                bridge.codex_stop(uid, task_id)
+                store.delete(task_id, uid)
+                self._send(200, {"ok": True})
+            else:
+                self._send(404, {"error": "not found"})
+
         def _route(self, path, user, data):
             store, uid, bridge = config["store"], user["id"], config["bridge"]
             language = "ru" if (user.get("language_code") or "ru").startswith("ru") else "en"
@@ -349,6 +400,8 @@ def make_handler(config):
                     self._send(403, {"error": "group_admin"})
                     return
                 self._send(200, {"groups": bridge.groups(uid)})
+            elif path.startswith("/api/codex/"):
+                self._codex(path[len("/api/codex/"):], user, data)
             elif path == "/api/settings":
                 bridge.update(uid, persona=data.get("persona"), model=data.get("model"))
                 self._send(200, {"settings": bridge.settings(uid)})

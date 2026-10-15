@@ -11,6 +11,7 @@ import re
 import sqlite3
 import tempfile
 import time
+from types import SimpleNamespace
 from collections import defaultdict
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -36,6 +37,7 @@ from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           PreCheckoutQueryHandler, TypeHandler, filters)
 
+import codex
 import digest
 import game
 import hosting
@@ -50,8 +52,8 @@ from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, ANYMODEL_FISH, fish_speech, fish_voice_id, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
                    VIDEO_PRICES, MediaError, OPENAI_IMAGE, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
-from integrations import (Connections, GitHubError, Toolbox, apply_change, delete_repos, describe, describe_deletion,
-                          prune_pending)
+from integrations import (GITHUB_TOOLS, Connections, GitHub, GitHubError, Toolbox, apply_change, delete_repos, describe,
+                          describe_deletion, prune_pending)
 
 LOG = logging.getLogger("secret_ai")
 SYSTEM = (
@@ -1100,7 +1102,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     if apps:
         tools += apps.functions
     text, incomplete = "", False
-    for _ in range(MAX_TOOL_ROUNDS):
+    for _ in range(request.pop("rounds", MAX_TOOL_ROUNDS)):
         options = {"model": model[len(provider):], "stream": True, "messages": messages,
                    "max_tokens": min(request.get("max_output_tokens", 8000), 32000)}
         if tools:
@@ -1310,7 +1312,7 @@ async def generate(context, live, toolbox=None, **request):
     if context.bot_data.get("reasoning"):
         request["reasoning"] = {"effort": context.bot_data["reasoning"]}
     answer, incomplete = "", False
-    for _ in range(MAX_TOOL_ROUNDS):
+    for _ in range(request.pop("rounds", MAX_TOOL_ROUNDS)):
         prefix = answer + "\n\n" if answer.strip() else ""
         try:
             response = await model_round(context, live, prefix, request)
@@ -4128,11 +4130,182 @@ class Bridge:
             return True
         return self._run(write())
 
+    def codex_start(self, tg_user, mode, prompt, repo=""):
+        async def start():
+            return codex_start(self.app, tg_user, mode, prompt, repo)
+        return self._run(start())
+
+    def codex_stop(self, user_id, task_id):
+        async def stop():
+            task = self.app.bot_data["codex"].get(task_id, user_id)
+            job = self.app.bot_data["codex_jobs"].get(task_id)
+            if task and job:
+                job.cancel()
+            return bool(task and job)
+        return self._run(stop())
+
+    def codex_apply(self, user_id, task_id):
+        return self._run(codex_apply(self.app, user_id, task_id))
+
+    def codex_repos(self, user_id):
+        return self._run(codex_repos(self.app, user_id))
+
+    def codex_send(self, user_id, task_id):
+        return self._run(codex_send(self.app, user_id, task_id))
+
+    def codex_site(self, user_id, task_id):
+        """Publish a project task's index.html and return its link."""
+        task = self.app.bot_data["codex"].get(task_id, user_id)
+        files = (task or {}).get("files") or {}
+        page = files.get("index.html") or next((t for p, t in files.items() if p.endswith(".html")), None)
+        if not page or not self.app.bot_data["public_url"]:
+            return None
+        site_id = self.app.bot_data["connections"].save_site(page.encode())
+        return f"{self.app.bot_data['public_url']}/s/{site_id}"
+
     def reset(self, user_id):
         async def clear():
             async with self.app.bot_data["locks"][user_id]:
                 self.app.bot_data["memory"].reset(user_id)
         self._run(clear())
+
+
+# ----- Codex mode (Mini App): an agent that works on a task by itself -----
+CODEX_PARALLEL = 1  # running tasks per person (the owner: 3)
+CODEX_PRICE = 3  # a task on a paid model costs this many answers
+
+
+class RepoTools:
+    """The GitHub tools of a Toolbox for one repository task: read, list, prepare one commit (nothing destructive)."""
+
+    def __init__(self, toolbox):
+        self.toolbox, self.proposals = toolbox, toolbox.proposals
+
+    def definitions(self):
+        return [t for t in GITHUB_TOOLS if t["name"] in ("github_list_files", "github_read_file", "github_propose_changes")]
+
+    def status(self, name, args):
+        return self.toolbox.status(name, args)
+
+    async def run(self, name, args):
+        return await self.toolbox.run(name, args)
+
+
+def codex_owner(data, user_id):
+    return data["connections"].get_meta("owner") == user_id
+
+
+async def run_codex(app, task_id, language, charged=0):
+    data, store = app.bot_data, app.bot_data["codex"]
+    task = store.get(task_id)
+    user_id = task["user_id"]
+    context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
+    live = codex.TaskLive(store, task_id, language)
+    branch = f"codex/{codex.slug(task['prompt'])}-{task_id[:4]}"
+    if task["mode"] == "repo":
+        await data["github_apps"].fresh_token(data["http"], user_id)
+        tools = RepoTools(Toolbox(data["http"], data["connections"], data["pending"], user_id, language))
+    else:
+        tools = codex.Workspace(store, task_id, can_run=codex_owner(data, user_id), language=language)
+    ru = language == "ru"
+    live.status("Изучаю задачу" if ru else "Reading the task")
+    try:
+        answer, _ = await generate(
+            context, live, tools, model=task["model"], store=False, max_output_tokens=32000, rounds=codex.ROUNDS,
+            instructions=codex.instructions(task["mode"], task["repo"], branch, codex_owner(data, user_id), language),
+            input=[{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] else "") + task["prompt"]}])
+    except asyncio.CancelledError:
+        store.update(task_id, status=codex.STATUS_STOPPED, step="")
+        raise
+    except Exception as exc:
+        LOG.warning("Codex task failed: %s %s", type(exc).__name__, str(exc)[:200])
+        if charged:
+            data["memory"].gen_refund(user_id, "credits", charged)
+        store.update(task_id, status=codex.STATUS_FAILED, step="", error=f"{type(exc).__name__}: {str(exc)[:300]}")
+        return
+    finally:
+        data["codex_jobs"].pop(task_id, None)
+    change = None
+    if task["mode"] == "repo" and tools.proposals:
+        change = data["pending"].pop(tools.proposals[-1], None)
+        if change and change["branch"] == change["default"]:  # Codex never writes to the main branch: a branch and a PR
+            change.update(branch=branch, branch_exists=False, pull_request=True)
+    store.update(task_id, status=codex.STATUS_DONE, step="", summary=(answer or "").strip()[:8000], change=change)
+    try:
+        title = task["prompt"][:60] + ("…" if len(task["prompt"]) > 60 else "")
+        await app.bot.send_message(user_id, (f"✅ Codex: «{title}» готово. Открой Secret AI → Codex." if ru else
+                                             f"✅ Codex: “{title}” is done. Open Secret AI → Codex."))
+    except TelegramError:
+        pass
+
+
+def codex_start(app, tg_user, mode, prompt, repo):
+    """Start a task; returns (task, None) or (None, error code)."""
+    data, user_id = app.bot_data, tg_user["id"]
+    language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
+    store = data["codex"]
+    running = [t for t in store.list(user_id) if t["status"] == codex.STATUS_RUNNING]
+    if len(running) >= (3 if codex_owner(data, user_id) else CODEX_PARALLEL):
+        return None, "busy"
+    if mode == "repo":
+        if not data["connections"].get(user_id, "github"):
+            return None, "github"
+        repo = repo.strip()
+    model = user_model(data, user_id)
+    price = data.get("premium", {}).get(model)
+    charged = 0
+    if price and not codex_owner(data, user_id):
+        charged = price * CODEX_PRICE
+        if not data["memory"].gen_charge(user_id, "chat", charged):
+            return None, "credits"
+    task = store.create(user_id, mode, prompt, repo if mode == "repo" else "", model)
+    job = asyncio.create_task(run_codex(app, task["id"], language, charged))
+    data["codex_jobs"][task["id"]] = job
+    return task, None
+
+
+async def codex_apply(app, user_id, task_id):
+    """Commit a repository task's change on its branch and open the pull request."""
+    data, store = app.bot_data, app.bot_data["codex"]
+    task = store.get(task_id, user_id)
+    if not task or not task.get("change") or task["status"] != codex.STATUS_DONE:
+        raise GitHubError("nothing to apply")
+    await data["github_apps"].fresh_token(data["http"], user_id)
+    commit, pull = await apply_change(data["http"], data["connections"], task["change"])
+    store.update(task_id, status=codex.STATUS_APPLIED, result={"commit": commit, "pull": pull})
+    return store.get(task_id)
+
+
+async def codex_repos(app, user_id):
+    data = app.bot_data
+    github = data["connections"].get(user_id, "github")
+    if not github:
+        return []
+    await data["github_apps"].fresh_token(data["http"], user_id)
+    github = data["connections"].get(user_id, "github")
+    repos = await GitHub(data["http"], github[0]["token"]).call("GET", "/user/repos", params={"sort": "updated", "per_page": 50})
+    return [{"name": r["full_name"], "private": r["private"], "branch": r["default_branch"]} for r in repos]
+
+
+async def codex_send(app, user_id, task_id):
+    """A project task's files into the chat: one file as is, several as a zip."""
+    import zipfile
+    task = app.bot_data["codex"].get(task_id, user_id)
+    files = (task or {}).get("files") or {}
+    if not files:
+        return False
+    if len(files) == 1:
+        path, text = next(iter(files.items()))
+        await app.bot.send_document(user_id, InputFile(text.encode(), filename=path.rsplit("/", 1)[-1]), caption="Codex · " + path)
+        return True
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for path, text in files.items():
+            archive.writestr(path, text)
+    name = codex.slug(task["prompt"]) + ".zip"
+    await app.bot.send_document(user_id, InputFile(buffer.getvalue(), filename=name),
+                                caption=f"📦 Codex · {len(files)}")
+    return True
 
 
 def main():
@@ -4181,7 +4354,7 @@ def main():
     app.bot_data.update(
         connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key, timeout=120, max_retries=2),
-        memory=Memory(database), allowed=allowed, snapshots=snapshots,
+        memory=Memory(database), allowed=allowed, snapshots=snapshots, codex=codex.CodexStore(connections), codex_jobs={},
         model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
@@ -4259,7 +4432,7 @@ def main():
     handler = miniapp.make_handler({
         "token": token, "allowed": allowed, "store": connections, "public_url": public_url,
         "github": github_apps, "direct": direct, "bot_name": lambda: app.bot_data.get("bot_name") or "bot",
-        "bridge": Bridge(app), "pipedream": pipedream})
+        "bridge": Bridge(app), "pipedream": pipedream, "codex": lambda: app.bot_data["codex"]})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
