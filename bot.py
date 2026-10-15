@@ -1952,6 +1952,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
     instructions += recall_note(memory.recall(user_id, saved_question, oldest))
     model = user_model(context.bot_data, user_id)
     price = context.bot_data.get("premium", {}).get(model)
+    if price and context.bot_data["connections"].get_meta("owner") == user_id:
+        price = None  # the owner talks to every model without limits
     if price and not memory.gen_charge(user_id, "chat", price):
         await live.finish(*await premium_offer(context, update, model, price))
         return
@@ -4003,7 +4005,8 @@ class Bridge:
         async def read():
             data, memory = self.app.bot_data, self.app.bot_data["memory"]
             return {"persona": memory.persona(user_id), "model": user_model(data, user_id),
-                    "models": data["models"], "premium": data.get("premium", {}), "credits": memory.gen_info(user_id)[1],
+                    "models": data["models"],
+                    "premium": {} if data["connections"].get_meta("owner") == user_id else data.get("premium", {}), "credits": memory.gen_info(user_id)[1],
                     "messages": memory.count(user_id),
                     "personas": [{"id": pid, "emoji": p[0], "ru": p[1], "en": p[2]} for pid, p in PERSONAS.items()]}
         return self._run(read())
