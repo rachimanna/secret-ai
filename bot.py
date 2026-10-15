@@ -986,7 +986,7 @@ EXTRA_PROVIDERS = {
                [(r"deepseek-(v\d|chat)", None), (r"qwen-?3", None)], ""),
     "openrouter": ("https://openrouter.ai/api/v1",           # openrouter.ai: only its ":free" models
                    [(r"deepseek", None), (r"qwen", None)], ":free"),
-    "tokenharbor": ("https://api.tokenharbor.ai/v1",         # tokenharbor.ai: its ":free" models (TOKENHARBOR_BASE if the URL differs)
+    "tokenharbor": ("https://tokenharbor.ai/v1",         # tokenharbor.ai: its ":free" models (TOKENHARBOR_BASE if the URL differs)
                     [(r"deepseek", "deepseek-v4.1-flash:free"), (r"mimo", "mimo-v2.6-flash:free")], ":free"),
 }
 CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "groq:": "groq", "cerebras:": "cerebras",
