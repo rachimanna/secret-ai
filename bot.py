@@ -1439,9 +1439,6 @@ MODEL_CATALOG = [
     (r"grok[-._ ]?4[-._]7", 0),                          # Grok 4.7 (default)
     (r"claude-sonnet[-._]5(?![-._]?\d)", 0),             # Claude Sonnet 5
     (r"gemini[-._ ]?4\b.*argon", 0),                     # Gemini 4 Argon
-    (r"opus[-._ ]?5[-._]5(?![-._]?\d)", 5),              # Claude Opus 5.5
-    (r"opus[-._ ]?4[-._]8(?![-._]?\d)", 4),              # Claude Opus 4.8
-    (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?astra", 4),         # GPT-6 Astra
     (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 3),           # GPT-6 Sol
 ]
 DEFAULT_PICK = r"grok[-._ ]?4[-._]7"  # the default model for everyone who hasn't picked one: Grok 4.7
