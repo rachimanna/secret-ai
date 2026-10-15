@@ -280,12 +280,15 @@ class Memory:
 
     def remember(self, user_id, add=(), forget=()):
         """Add facts (no duplicates) and drop the ones containing any of the forget phrases; keeps the newest MAX_FACTS."""
-        known = {f.casefold() for f in self.facts(user_id)}
+        def fold(text):  # in Python: SQLite's lower() leaves Cyrillic as it is ("Берлине" never matched "берлине")
+            return text.casefold().replace("ё", "е")
         with self.db:
-            for phrase in forget:
-                if phrase.strip():
-                    self.db.execute("DELETE FROM facts WHERE user_id=? AND instr(lower(fact), lower(?)) > 0",
-                                    (user_id, phrase.strip()))
+            phrases = [fold(p.strip()) for p in forget if p.strip()]
+            if phrases:
+                rows = self.db.execute("SELECT id, fact FROM facts WHERE user_id=?", (user_id,)).fetchall()
+                gone = [(row_id,) for row_id, fact in rows if any(p in fold(fact) for p in phrases)]
+                self.db.executemany("DELETE FROM facts WHERE id=?", gone)
+            known = {f.casefold() for f in self.facts(user_id)}
             for fact in add:
                 fact = " ".join(fact.split())[:300]
                 if fact and fact.casefold() not in known:
@@ -2174,8 +2177,17 @@ APP_WORDS = re.compile(
     r"trello|slack|linear|jira|asana|figma|dropbox|контакт|crm|сделк|клиент|прилож|подключ|интеграц|mcp", re.I)
 
 
+APPS_FOLLOW_UP = 600  # seconds after an apps request when short follow-ups ("теперь удали второй") keep the apps
+
+
 def wants_apps(bot_data, user_id, text):
-    """Does this message need the connected apps? Their names, or words about mail, calendars, files, tasks…"""
+    """Does this message need the connected apps? Their names, words about mail, calendars, files, tasks… or it comes
+    soon after a message that did: a follow-up names no app, but it continues the same work."""
+    return apps_named(bot_data, user_id, text) or bot_data.setdefault("apps_until", {}).get(user_id, 0) > time.monotonic()
+
+
+def apps_named(bot_data, user_id, text):
+    """The message itself is about the apps (only this opens the follow-up window, so small talk lets it close)."""
     text = text or ""
     names = bot_data.setdefault("app_names", {}).get(user_id) or []
     return bool(APP_WORDS.search(text)) or any(name.lower()[:5] in text.lower() for name in names if len(name) >= 4)
@@ -2250,6 +2262,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
                                        app_tools(context.bot_data, user_id, taken) if use_apps else empty)
         if use_apps:
             context.bot_data.setdefault("app_names", {})[user_id] = list(apps[1])
+        if apps_named(context.bot_data, user_id, saved_question):
+            context.bot_data.setdefault("apps_until", {})[user_id] = time.monotonic() + APPS_FOLLOW_UP
         LOG.info("Prepared in %.1f s (apps %s)", time.monotonic() - prepared, "loaded" if use_apps else "skipped")
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
@@ -3253,27 +3267,29 @@ async def secretary_answer(context, message):
     if not conn:
         conn = sec.save_connection(store, await context.bot.get_business_connection(conn_id))
     chat_id, sender, activity = message.chat.id, message.from_user, data["biz_activity"]
+    # One person may write to several owners: each owner's chat with them has its own history and timing.
+    key = (conn["user_id"], chat_id)
     said = describe_message(message) or "…"
     if sender and sender.id == conn["user_id"]:
         activity.owner_wrote(sender.id)  # the owner is here: stay quiet in all chats for a while
-        activity.log(chat_id, f"{conn.get('name', 'Owner')} (owner): {said}")
+        activity.log(key, f"{conn.get('name', 'Owner')} (owner): {said}")
         return
     name = speaker(sender) if sender else "?"
     if name.strip(" ?") == "":  # no name we can show: the chat's own title or @username
         name = (message.chat.full_name or (f"@{message.chat.username}" if message.chat.username else "")
                 or f"id {chat_id}")[:40]
-    activity.log(chat_id, f"{name}: {said}")
+    activity.log(key, f"{name}: {said}")
     current = sec.settings(store, conn["user_id"])
     if (not current["enabled"] or not conn["enabled"] or not conn["can_reply"] or message.chat.type != "private"
-            or (sender and sender.is_bot) or not activity.may_answer(conn["user_id"], chat_id)):
+            or (sender and sender.is_bot) or not activity.may_answer(conn["user_id"], key)):
         return
-    activity.answered_now(chat_id)
+    activity.answered_now(key)
     try:
         await context.bot.send_chat_action(chat_id, ChatAction.TYPING, business_connection_id=conn_id)
     except TelegramError:
         pass
     instructions = sec.instructions(conn.get("name", "the owner"), current["rules"])
-    chat = "Chat (oldest first):\n" + "\n".join(activity.lines.get(chat_id, [])) + f"\n\nAnswer {name}'s last message."
+    chat = "Chat (oldest first):\n" + "\n".join(activity.lines.get(key, [])) + f"\n\nAnswer {name}'s last message."
     text = ""
     # The bot's main chat model first (what answers in the private chat), plain OpenAI as the fallback.
     for model in dict.fromkeys([data.get("chat_default") or data["model"], data["model"]]):
@@ -3285,10 +3301,16 @@ async def secretary_answer(context, message):
         if text:
             break
     if not text:
-        activity.answered.pop(chat_id, None)  # nothing was sent: the next message may try again
+        activity.answered.pop(key, None)  # nothing was sent: the next message may try again
+        return
+    # The answer took a while: send it only if the secretary is still on and the owner hasn't stepped in meanwhile.
+    now, conn_now = sec.settings(store, conn["user_id"]), sec.connection(store, conn_id)
+    if (not now["enabled"] or not conn_now or not conn_now["enabled"] or not conn_now["can_reply"]
+            or activity.owner_online(conn["user_id"])):
+        activity.answered.pop(key, None)
         return
     await send_signed(context, chat_id, text[:3500], conn_id, message.message_id)
-    activity.log(chat_id, f"AI secretary: {text}")
+    activity.log(key, f"AI secretary: {text}")
     activity.remember(conn["user_id"], name, said, text)
     if current.get("notify", True):
         try:
@@ -4706,6 +4728,13 @@ def codex_owner(data, user_id):
     return data["connections"].get_meta("owner") == user_id
 
 
+def codex_model(data, model):
+    """Codex needs a model that calls the project tools: the Cursor CLI can't, so its tasks use the default model."""
+    if model and model.startswith(cursor.PREFIX):
+        return data.get("chat_default") if not (data.get("chat_default") or "").startswith(cursor.PREFIX) else None
+    return model
+
+
 def codex_can_run(data, user_id):
     """The run tool: the owner only, and only where the sandbox works."""
     return codex_owner(data, user_id) and codex.sandbox_ready()
@@ -4729,7 +4758,7 @@ async def run_codex(app, task_id, language, charged=0):
             tools = codex.Workspace(store, task_id, can_run=can_run, language=language)
         live.status("Изучаю задачу" if ru else "Reading the task")
         answer, _ = await generate(
-            context, live, tools, model=task["model"], store=False, max_output_tokens=32000, rounds=codex.ROUNDS,
+            context, live, tools, model=codex_model(data, task["model"]), store=False, max_output_tokens=32000, rounds=codex.ROUNDS,
             instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language),
             input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
                                                                           else "") + task["prompt"]}])
@@ -4785,7 +4814,7 @@ def codex_start(app, tg_user, mode, prompt, repo, thread=None):
         repo = repo.strip()
         if not repo:
             return None, "repo"
-    model = user_model(data, user_id)
+    model = codex_model(data, user_model(data, user_id))
     if not model:
         return None, "models"
     price = data.get("premium", {}).get(model)

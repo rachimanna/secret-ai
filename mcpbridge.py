@@ -10,6 +10,8 @@ import logging
 import re
 import time
 
+import httpx
+
 LOG = logging.getLogger("secret_ai.mcp")
 PROTOCOL = "2025-03-26"
 CACHE_SECONDS = 600
@@ -19,7 +21,18 @@ _cache = {}  # (url, headers) -> (expires, session id, [tools])
 
 
 class McpError(Exception):
-    pass
+    def __init__(self, text, status=None):
+        super().__init__(text)
+        self.status = status  # the HTTP status, when the server answered with an error
+
+
+def _not_done(exc):
+    """Errors after which the tool surely did NOT run, so calling again can't do anything twice: the connection never
+    opened, or the server rejected the session (an expired session: HTTP 404, or an error that names the session).
+    A timeout or a lost answer is never one of them: the action may already have happened."""
+    if isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)):
+        return True
+    return isinstance(exc, McpError) and (exc.status == 404 or (exc.status in (400, 401) and "session" in str(exc).lower()))
 
 
 def _key(server):
@@ -52,7 +65,7 @@ class Server:
         if notify:
             return None
         if response.status_code >= 400:
-            raise McpError(f"{method}: HTTP {response.status_code}")
+            raise McpError(f"{method}: HTTP {response.status_code} {response.text[:120]}", response.status_code)
         if "text/event-stream" in response.headers.get("content-type", ""):
             messages = [json.loads(line[5:].strip()) for line in response.text.splitlines()
                         if line.startswith("data:") and line[5:].strip().startswith("{")]
@@ -110,8 +123,10 @@ class Bridge:
         server, tool, _ = self.routes[name]
         try:
             return await server.call(tool, arguments)
-        except Exception:
-            # the session may have expired: open a new one and try once more
+        except Exception as exc:
+            if not _not_done(exc):  # it may have run already (a document made, a message sent): never repeat it
+                raise
+            # the session expired or the connection never opened: open a new one and try once more
             await server.open()
             _cache.pop(_key({"server_url": server.url, "headers": server.headers}), None)
             return await server.call(tool, arguments)
