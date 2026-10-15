@@ -12,3 +12,4 @@ venv/
 deploy/.env
 bin/
 .local/
+promo/*.mp4
