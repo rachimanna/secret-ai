@@ -455,10 +455,95 @@ def seconds(delay):
     return delay.total_seconds() if hasattr(delay, "total_seconds") else delay
 
 
+# ---------- premium emoji: the owner sends the bot custom emoji once, the bot puts them in its texts and buttons ----------
+PREMIUM_EMOJI = {}  # the plain emoji (😀) -> the id of the owner's chosen custom emoji in its place
+PREMIUM_MAX = 90  # Telegram takes at most ~100 custom emoji in one message
+
+
+def emoji_key(char):
+    """The emoji without the variation selector, so ❤ and ❤️ are the same."""
+    return char.replace("\ufe0f", "")
+
+
+def premium_entities(text, start=0):
+    """MessageEntity list that turns the known plain emoji in text into the owner's custom ones."""
+    if not PREMIUM_EMOJI or not text:
+        return []
+    found, offset, index = [], 0, 0
+    keys = sorted(PREMIUM_EMOJI, key=len, reverse=True)
+    while index < len(text) and len(found) < PREMIUM_MAX:
+        for key in keys:
+            plain = text[index:index + len(key) + 1]
+            matched = key if text.startswith(key, index) else None
+            if matched:
+                length = len(key) + (1 if text[index + len(key):index + len(key) + 1] == "\ufe0f" else 0)
+                piece = text[index:index + length]
+                found.append(MessageEntity(MessageEntity.CUSTOM_EMOJI, start + offset, utf16_len(piece),
+                                           custom_emoji_id=PREMIUM_EMOJI[key]))
+                offset += utf16_len(piece)
+                index += length
+                break
+        else:
+            offset += utf16_len(text[index])
+            index += 1
+    return found
+
+
+def premium_button(button):
+    """A button whose text starts with a known emoji gets the custom one as its icon (the plain one leaves the text)."""
+    text = button.text or ""
+    for key, emoji_id in PREMIUM_EMOJI.items():
+        if emoji_key(text).startswith(key) and not button.icon_custom_emoji_id:
+            rest = text[len(key):].lstrip("\ufe0f").strip()
+            fields = {name: getattr(button, name) for name in ("url", "callback_data", "web_app", "login_url", "copy_text",
+                                                                 "switch_inline_query", "switch_inline_query_current_chat",
+                                                                 "switch_inline_query_chosen_chat", "pay", "style")
+                      if getattr(button, name, None) is not None}
+            return InlineKeyboardButton(rest or text, icon_custom_emoji_id=emoji_id, **fields)
+    return button
+
+
+def premium_markup(markup):
+    if not PREMIUM_EMOJI or not isinstance(markup, InlineKeyboardMarkup):
+        return markup
+    return InlineKeyboardMarkup([[premium_button(b) for b in row] for row in markup.inline_keyboard])
+
+
+def premium_off(exc):
+    """Telegram refused custom emoji (the owner has no Premium any more): plain ones from now on."""
+    if PREMIUM_EMOJI and any(word in str(exc).lower() for word in ("emoji", "entit", "document", "icon")):
+        LOG.warning("Premium emoji refused by Telegram (%s); using plain ones", getattr(exc, "message", exc))
+        PREMIUM_EMOJI.clear()
+        return True
+    return False
+
+
+async def rich_edit(query, text, reply_markup=None):
+    """Edit a message (a button press) with the premium emoji in its text and buttons."""
+    try:
+        return await query.edit_message_text(text, reply_markup=premium_markup(reply_markup),
+                                              entities=premium_entities(text) or None)
+    except BadRequest as exc:
+        if not premium_off(exc):
+            raise
+        return await query.edit_message_text(text, reply_markup=reply_markup)
+
+
 async def reply(message, text, reply_markup=None, entities=None):
+    if entities is None and PREMIUM_EMOJI:
+        entities = premium_entities(text) or None
+    if PREMIUM_EMOJI:
+        reply_markup = premium_markup(reply_markup)
     for attempt in range(3):
         try:
             return await message.reply_text(text, parse_mode=None, reply_markup=reply_markup, entities=entities)
+        except BadRequest as exc:
+            if attempt == 0 and premium_off(exc):
+                entities, reply_markup = None, reply_markup and InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(b.text, **{k: getattr(b, k) for k in ("url", "callback_data", "web_app") if getattr(b, k, None)})
+                      for b in row] for row in reply_markup.inline_keyboard]) if isinstance(reply_markup, InlineKeyboardMarkup) else reply_markup
+                continue
+            raise
         except RetryAfter as exc:
             if attempt == 2:
                 raise
@@ -2018,9 +2103,9 @@ async def promo_step(target, w, edit=False):
     if w.get("typing"):
         text += "\n\n✏️ Напиши число сообщением."
     if edit:
-        await target.edit_message_text(text, reply_markup=markup)
+        await rich_edit(target, text, markup)
     else:
-        await target.reply_text(text, reply_markup=markup)
+        await reply(target, text, markup)
 
 
 def promo_list_view(memory):
@@ -2049,10 +2134,10 @@ async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     owner = data["connections"].get_meta("owner") == user_id
     data.setdefault("promo_wizard", {}).pop(user_id, None)
-    await update.effective_message.reply_text(
+    await reply(update.effective_message,
         ("🎁 Промокоды" + ("\n\nСоздавай коды на кредиты для своих пользователей." if owner else
                           "\n\nЕсть промокод? Нажми кнопку и отправь его.")) if ru else
-        "🎁 Promo codes", reply_markup=promo_menu(owner, ru))
+        "🎁 Promo codes", promo_menu(owner, ru))
 
 
 async def promo_button_press(update, context, query, action):
@@ -2064,13 +2149,13 @@ async def promo_button_press(update, context, query, action):
     if action == "enter":
         wizards[user_id] = {"step": "redeem"}
         await query.answer()
-        await query.edit_message_text("🎟 Отправь промокод сообщением." if ru else "🎟 Send the code as a message.",
+        await rich_edit(query, "🎟 Отправь промокод сообщением." if ru else "🎟 Send the code as a message.",
                                       reply_markup=InlineKeyboardMarkup([[promo_button("❌ Отмена", "pr:cancel", "danger")]]))
         return
     if action == "cancel":
         wizards.pop(user_id, None)
         await query.answer()
-        await query.edit_message_text("Отменено." if ru else "Cancelled.")
+        await rich_edit(query, "Отменено." if ru else "Cancelled.")
         return
     if not owner:
         await query.answer()
@@ -2083,14 +2168,14 @@ async def promo_button_press(update, context, query, action):
     if action == "list":
         await query.answer()
         text, markup = promo_list_view(data["memory"])
-        await query.edit_message_text(text, reply_markup=markup)
+        await rich_edit(query, text, reply_markup=markup)
         return
     if action.startswith("del:"):
         code = promo_clean(action[4:])
         data["memory"].promo_delete(code)
         await query.answer(f"Удалён {code}")
         text, markup = promo_list_view(data["memory"])
-        await query.edit_message_text(text, reply_markup=markup)
+        await rich_edit(query, text, reply_markup=markup)
         return
     if not w or w["step"] == "redeem":
         await query.answer("Начни заново: /promo")
@@ -2111,7 +2196,7 @@ async def promo_button_press(update, context, query, action):
         data["memory"].promo_create(w["code"], w["credits"], w["people"], w["days"] or None)
         wizards.pop(user_id, None)
         await query.answer("Создан ✅")
-        await query.edit_message_text(f"✅ Промокод создан!\n\n{promo_summary(w)}\n\n"
+        await rich_edit(query, f"✅ Промокод создан!\n\n{promo_summary(w)}\n\n"
                                       f"Как активировать: /promo {w['code']} или Mini App → Генерация → Промокод.",
                                       reply_markup=InlineKeyboardMarkup([[promo_button("📋 Мои промокоды", "pr:list", "primary")],
                                                                          [promo_button("➕ Ещё один", "pr:new", "success")]]))
@@ -2208,6 +2293,41 @@ async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data.pop("owner_code", None)
     LOG.info("Bot owner set: %s", user_id)
     await send(update.effective_message, ui(update, "👑 Готово, теперь ты владелец бота.", "👑 Done, you're the bot's owner now."))
+
+
+def learn_premium(context, message):
+    """The owner's custom emoji in a message: remembered as the bot's own for those plain emoji. Returns what was learned."""
+    learned = []
+    for entity in (*(message.entities or ()), *(message.caption_entities or ())):
+        if entity.type != MessageEntity.CUSTOM_EMOJI or not entity.custom_emoji_id:
+            continue
+        plain = emoji_key(message.parse_entity(entity) if message.text else message.parse_caption_entity(entity))
+        if plain and len(plain) <= 8:
+            PREMIUM_EMOJI[plain] = entity.custom_emoji_id
+            learned.append(plain)
+    if learned:
+        context.bot_data["connections"].set_meta("premium_emoji", PREMIUM_EMOJI)
+    return learned
+
+
+async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/emoji: how to give the bot premium emoji, and the ones it uses. /emoji reset forgets them."""
+    if not await authorized(update, context):
+        return
+    store = context.bot_data["connections"]
+    if store.get_meta("owner") != update.effective_user.id:
+        await send(update.effective_message, "Это может только владелец бота.")
+        return
+    if context.args and context.args[0].lower() in ("reset", "сброс", "clear"):
+        PREMIUM_EMOJI.clear()
+        store.set_meta("premium_emoji", {})
+        await send(update.effective_message, "Забыл все премиум-эмодзи, теперь обычные.")
+        return
+    known = " ".join(PREMIUM_EMOJI) or "пока нет"
+    await send(update.effective_message,
+               "✨ Премиум-эмодзи бота\n\nОтправь мне сообщение с премиум-эмодзи — можно сразу много, например "
+               "✅ ❌ 🎁 💎 ⭐ 🔥 🎨 🎬 👑 ⚡ 📋 🗑 ➕ 🎲 🎟 ⏱ 🔖 📝 🌐 🧹 ⚠️ 🤖 — и я буду ставить их вместо обычных во всех "
+               "своих сообщениях и на кнопках.\n\nУже знаю: " + known + "\n\n/emoji reset — вернуть обычные.")
 
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4384,6 +4504,13 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await authorized(update, context):
         return
     message = update.effective_message
+    if (message.entities or message.caption_entities) and context.bot_data["connections"].get_meta("owner") == update.effective_user.id:
+        learned = learn_premium(context, message)
+        rest = re.sub(r"[\s\W_]", "", message.text or message.caption or "", flags=re.UNICODE)
+        if learned and not rest:  # only emoji: a lesson, not a question
+            await send(message, f"✨ Запомнил премиум-эмодзи: {' '.join(learned)}\nТеперь они у меня в сообщениях и на кнопках. "
+                                f"Всего: {len(PREMIUM_EMOJI)}. Список — /emoji")
+            return
     if message.text and await promo_typed(update, context):
         return
     if message.text and await secretary_switch(update, context, message.text):
@@ -4750,9 +4877,9 @@ def error_text(error):
 
 COMMANDS = {
     "ru": [("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
-           ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
+           ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
     "en": [("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
-           ("export", "Download history"), ("promo", "Enter a promo code"), ("myid", "My Telegram ID"), ("version", "Bot version")],
+           ("export", "Download history"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
 
@@ -4826,6 +4953,7 @@ async def post_init(app):
             and os.environ.get("KEEP_AWAKE", "1").strip() != "0"):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     owner_code(app.bot_data)  # no owner yet: the console shows the code for /owner
+    PREMIUM_EMOJI.update(app.bot_data["connections"].get_meta("premium_emoji") or {})
     await resolve_abacus_model(app)
     await discover_models(app)
     app.bot_data["previews_task"] = asyncio.create_task(gentemplates.draw_previews(app.bot_data, free_image))
@@ -5380,6 +5508,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("emoji", emoji_command))
     app.add_handler(CommandHandler("promo", promo_command))
     app.add_handler(CommandHandler("owner", owner_command))
     app.add_handler(CommandHandler(["version", "v"], version_command))
