@@ -210,9 +210,12 @@ def make_handler(config):
             task_id = str(data.get("id") or "")[:20]
             if action == "state":
                 github = config["store"].get(uid, "github")
-                self._send(200, {"tasks": [codex.public(t) for t in store.list(uid)],
+                self._send(200, {"chats": store.threads(uid),
                                  "github": github[0]["meta"].get("login", "") if github else None,
                                  "can_run": config["store"].get_meta("owner") == uid})
+            elif action == "thread":
+                tasks = store.thread(str(data.get("thread") or "")[:20], uid)
+                self._send(200, {"tasks": [dict(codex.public(t, full=True), change=codex.change_view(t.get("change"))) for t in tasks]})
             elif action == "task":
                 task = store.get(task_id, uid)
                 if not task:
@@ -225,7 +228,8 @@ def make_handler(config):
                 if not prompt:
                     self._send(400, {"error": "prompt"})
                     return
-                task, error = bridge.codex_start(user, mode, prompt, str(data.get("repo") or "")[:120])
+                task, error = bridge.codex_start(user, mode, prompt, str(data.get("repo") or "")[:120],
+                                                 str(data.get("thread") or "")[:20] or None)
                 self._send(200 if task else 409, {"task": codex.public(task)} if task else {"error": error})
             elif action == "stop":
                 self._send(200, {"ok": bridge.codex_stop(uid, task_id)})
@@ -246,9 +250,10 @@ def make_handler(config):
             elif action == "site":
                 url = bridge.codex_site(uid, task_id)
                 self._send(200 if url else 409, {"url": url} if url else {"error": "no page"})
-            elif action == "delete":
-                bridge.codex_stop(uid, task_id)
-                store.delete(task_id, uid)
+            elif action == "delete":  # a whole chat
+                for task in store.thread(str(data.get("thread") or "")[:20], uid):
+                    bridge.codex_stop(uid, task["id"])
+                    store.delete(task["id"], uid)
                 self._send(200, {"ok": True})
             else:
                 self._send(404, {"error": "not found"})

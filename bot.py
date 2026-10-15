@@ -4130,9 +4130,9 @@ class Bridge:
             return True
         return self._run(write())
 
-    def codex_start(self, tg_user, mode, prompt, repo=""):
+    def codex_start(self, tg_user, mode, prompt, repo="", thread=None):
         async def start():
-            return codex_start(self.app, tg_user, mode, prompt, repo)
+            return codex_start(self.app, tg_user, mode, prompt, repo, thread)
         return self._run(start())
 
     def codex_stop(self, user_id, task_id):
@@ -4201,7 +4201,8 @@ async def run_codex(app, task_id, language, charged=0):
     user_id = task["user_id"]
     context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
     live = codex.TaskLive(store, task_id, language)
-    branch = f"codex/{codex.slug(task['prompt'])}-{task_id[:4]}"
+    earlier = [t for t in store.thread(task["thread"], user_id) if t["id"] != task_id and t["created"] <= task["created"]]
+    branch = task.get("branch") or f"codex/{codex.slug(task['prompt'])}-{task_id[:4]}"
     if task["mode"] == "repo":
         await data["github_apps"].fresh_token(data["http"], user_id)
         tools = RepoTools(Toolbox(data["http"], data["connections"], data["pending"], user_id, language))
@@ -4213,7 +4214,8 @@ async def run_codex(app, task_id, language, charged=0):
         answer, _ = await generate(
             context, live, tools, model=task["model"], store=False, max_output_tokens=32000, rounds=codex.ROUNDS,
             instructions=codex.instructions(task["mode"], task["repo"], branch, codex_owner(data, user_id), language),
-            input=[{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] else "") + task["prompt"]}])
+            input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
+                                                                          else "") + task["prompt"]}])
     except asyncio.CancelledError:
         store.update(task_id, status=codex.STATUS_STOPPED, step="")
         raise
@@ -4239,18 +4241,31 @@ async def run_codex(app, task_id, language, charged=0):
         pass
 
 
-def codex_start(app, tg_user, mode, prompt, repo):
-    """Start a task; returns (task, None) or (None, error code)."""
+def codex_start(app, tg_user, mode, prompt, repo, thread=None):
+    """Start a task (a new chat, or the next message of `thread`); returns (task, None) or (None, error code)."""
     data, user_id = app.bot_data, tg_user["id"]
     language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
     store = data["codex"]
     running = [t for t in store.list(user_id) if t["status"] == codex.STATUS_RUNNING]
     if len(running) >= (3 if codex_owner(data, user_id) else CODEX_PARALLEL):
         return None, "busy"
+    files, branch = {}, ""
+    if thread:
+        chat = store.thread(thread, user_id)
+        if not chat:
+            return None, "thread"
+        if chat[-1]["status"] == codex.STATUS_RUNNING:
+            return None, "busy"
+        mode, repo = chat[0]["mode"], chat[0]["repo"]
+        files = chat[-1].get("files") or {}  # a project goes on from its latest files
+        applied = [t for t in chat if t["status"] == codex.STATUS_APPLIED and t.get("change")]
+        branch = applied[-1]["change"]["branch"] if applied else (chat[-1].get("branch") or "")
     if mode == "repo":
         if not data["connections"].get(user_id, "github"):
             return None, "github"
         repo = repo.strip()
+        if not repo:
+            return None, "repo"
     model = user_model(data, user_id)
     price = data.get("premium", {}).get(model)
     charged = 0
@@ -4258,7 +4273,9 @@ def codex_start(app, tg_user, mode, prompt, repo):
         charged = price * CODEX_PRICE
         if not data["memory"].gen_charge(user_id, "chat", charged):
             return None, "credits"
-    task = store.create(user_id, mode, prompt, repo if mode == "repo" else "", model)
+    task = store.create(user_id, mode, prompt, repo if mode == "repo" else "", model, thread=thread, files=files, branch=branch)
+    if mode == "repo" and not branch:
+        store.update(task["id"], branch=f"codex/{codex.slug(prompt)}-{task['id'][:4]}")
     job = asyncio.create_task(run_codex(app, task["id"], language, charged))
     data["codex_jobs"][task["id"]] = job
     return task, None

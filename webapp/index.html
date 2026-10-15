@@ -568,71 +568,105 @@
   .stat-row div { background: var(--card); border: 0; box-shadow: var(--rim); }
   .footer { margin-top: 34px; }
 
-  /* ================= Codex ================= */
-  .cx-hero { position: relative; margin: 10px 0 18px; padding: 20px 18px 18px; border-radius: 26px; overflow: hidden; box-shadow: var(--rim), var(--lift);
-             background: radial-gradient(90% 120% at 100% 0%, rgba(47,213,240,.22), transparent 55%),
-                         radial-gradient(80% 120% at 0% 100%, rgba(123,107,255,.3), transparent 60%), #0c0c16; }
-  :root[data-theme="light"] .cx-hero { background: radial-gradient(90% 120% at 100% 0%, rgba(47,213,240,.25), transparent 55%),
-                         radial-gradient(80% 120% at 0% 100%, rgba(123,107,255,.3), transparent 60%), #1a1830; }
-  .cx-hero::after { content: ""; position: absolute; inset: 0; pointer-events: none; opacity: .35;
-                    background-image: linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
-                    background-size: 18px 18px; -webkit-mask-image: linear-gradient(120deg, #000, transparent 70%); mask-image: linear-gradient(120deg, #000, transparent 70%); }
-  .cx-hero .cx-logo { display: inline-flex; align-items: center; gap: 8px; font: 700 12px/1 ui-monospace, "SF Mono", Menlo, monospace; color: #9ff0ff;
-                      padding: 6px 10px; border-radius: 10px; background: rgba(47,213,240,.12); box-shadow: inset 0 0 0 1px rgba(47,213,240,.3); }
-  .cx-hero .cx-logo i { width: 7px; height: 7px; border-radius: 50%; background: #2fd5f0; box-shadow: 0 0 10px #2fd5f0; animation: blink 1.6s steps(1) infinite; }
-  .cx-hero h1 { margin: 14px 0 6px; font-size: 34px; font-weight: 800; letter-spacing: -.045em; color: #fff; }
-  .cx-hero h1 span { background: var(--brand); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .cx-hero p { margin: 0; color: rgba(235,235,250,.66); font-size: 14px; line-height: 1.45; max-width: 330px; }
-  .seg.two { grid-template-columns: 1fr 1fr; }
-  .cx-box { border-radius: 22px; background: var(--card); box-shadow: var(--rim); padding: 6px; margin-bottom: 12px; }
-  .cx-box textarea { width: 100%; min-height: 118px; border: 0; outline: none; resize: none; background: none; color: var(--text);
-                     font-family: inherit; font-size: 15px; line-height: 1.45; padding: 12px 12px 6px; }
-  .cx-box textarea::placeholder { color: var(--hint-2); }
-  .cx-bar { display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 10px; }
-  .cx-bar .meta { flex: 1; min-width: 0; color: var(--hint); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cx-go { height: 40px; padding: 0 16px; border-radius: 20px; display: inline-flex; align-items: center; gap: 7px; font-weight: 700; font-size: 15px; color: #fff;
-           background: var(--brand); box-shadow: 0 10px 22px -8px rgba(123,107,255,.85); flex: none; }
-  .cx-go:disabled { filter: saturate(.3) brightness(.7); }
-  .cx-go svg { width: 16px; height: 16px; }
-  .cx-repo { display: flex; align-items: center; gap: 10px; width: 100%; padding: 12px 14px; border-radius: 18px; background: var(--card); box-shadow: var(--rim);
-             margin-bottom: 10px; text-align: left; }
-  .cx-repo b { flex: 1; min-width: 0; font: 600 14.5px ui-monospace, "SF Mono", Menlo, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .cx-repo .k { color: var(--hint); font-size: 12px; }
-  .cx-ideas { display: flex; gap: 8px; overflow-x: auto; margin: 0 -16px 22px; padding: 0 16px; scrollbar-width: none; }
-  .cx-ideas::-webkit-scrollbar { display: none; }
-  .cx-ideas button { flex: none; padding: 8px 12px; border-radius: 14px; font-size: 13px; color: var(--text); background: var(--card); box-shadow: var(--rim); white-space: nowrap; }
-  .cx-task { display: block; width: 100%; text-align: left; padding: 14px 16px; position: relative; }
-  .cx-task + .cx-task { border-top: 1px solid var(--line); }
-  .cx-task .top { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--hint); margin-bottom: 5px; }
-  .cx-task .p { font-size: 15px; font-weight: 600; letter-spacing: -.01em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-  .cx-task .cx-step { margin-top: 6px; font: 12.5px ui-monospace, "SF Mono", Menlo, monospace; color: #9ff0ff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .cx-st { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 8px; font-weight: 700; font-size: 11px; letter-spacing: .02em; }
+  /* ================= Codex: a chat with a coding agent ================= */
+  body[data-tab="codex"] main { padding-top: calc(var(--safe-top) + 4px); }
+  body[data-tab="codex"]::after { height: calc(var(--safe-bottom) + 230px); background: linear-gradient(to bottom, transparent, var(--bg) 34%); }
+  .cx-head { position: sticky; top: calc(var(--safe-top) + 4px); z-index: 6; display: flex; align-items: center; gap: 8px; padding: 8px 0 10px; margin: 0 -2px;
+             background: linear-gradient(to bottom, var(--bg) 70%, transparent); }
+  .cx-ib { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center; flex: none; background: var(--card); box-shadow: var(--rim); color: var(--text); }
+  .cx-ib svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .cx-title { flex: 1; min-width: 0; text-align: center; padding: 2px 4px; }
+  .cx-title b { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; font-size: 16.5px; font-weight: 750; letter-spacing: -.02em; }
+  .cx-title b span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cx-title b i { font-style: normal; font-size: 10px; color: var(--hint); }
+  .cx-title small { display: block; margin-top: 2px; color: var(--hint); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #cx-thread { padding: 6px 0 calc(var(--safe-bottom) + 210px); min-height: 60vh; }
+  .cx-empty { text-align: center; padding: 9vh 4px 10px; }
+  .cx-orb { width: 74px; height: 74px; margin: 0 auto 18px; border-radius: 24px; display: grid; place-items: center; color: #fff; position: relative;
+            background: var(--brand); box-shadow: 0 18px 40px -12px rgba(123,107,255,.8), inset 0 1px 0 rgba(255,255,255,.35); }
+  .cx-orb svg { width: 36px; height: 36px; stroke-width: 1.9; }
+  .cx-orb::after { content: ""; position: absolute; inset: -10px; border-radius: 30px; border: 1px solid rgba(139,123,255,.35); animation: ring 2.4s ease-out infinite; }
+  .cx-empty h2 { margin: 0 0 8px; font-size: 25px; font-weight: 800; letter-spacing: -.035em; }
+  .cx-empty p { margin: 0 auto 20px; max-width: 300px; color: var(--hint); font-size: 14.5px; line-height: 1.45; }
+  .cx-modes { display: inline-flex; padding: 4px; gap: 4px; border-radius: 16px; background: var(--card); box-shadow: var(--rim); margin-bottom: 14px; }
+  .cx-modes button { height: 36px; padding: 0 14px; border-radius: 12px; font-size: 14px; font-weight: 650; color: var(--hint); transition: background .25s, color .25s; }
+  .cx-modes button.on { background: var(--brand); color: #fff; box-shadow: 0 8px 18px -8px rgba(123,107,255,.85); }
+  .cx-chipline { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+  .cx-chipline button { padding: 8px 12px; border-radius: 14px; font-size: 13px; color: var(--text); background: var(--card); box-shadow: var(--rim); }
+  .cx-repo-chip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; padding: 9px 14px; border-radius: 14px; margin-bottom: 14px;
+                  background: var(--card); box-shadow: var(--rim); font: 600 13.5px ui-monospace, "SF Mono", Menlo, monospace; }
+  .cx-repo-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* messages */
+  .cx-msg { display: flex; gap: 10px; margin: 0 0 16px; animation: rise .4s var(--ease) both; }
+  .cx-msg.me { justify-content: flex-end; }
+  .cx-msg.me .bubble { max-width: 84%; padding: 11px 14px; border-radius: 20px 20px 6px 20px; background: var(--brand); color: #fff; font-size: 15px; line-height: 1.42;
+                       white-space: pre-wrap; word-break: break-word; box-shadow: 0 10px 24px -12px rgba(123,107,255,.9); }
+  .cx-ava { width: 30px; height: 30px; flex: none; border-radius: 10px; display: grid; place-items: center; color: #fff; background: var(--brand); margin-top: 2px; }
+  .cx-ava svg { width: 17px; height: 17px; stroke-width: 2; }
+  .cx-ai { flex: 1; min-width: 0; }
+  .cx-ai .who { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--hint); margin: 6px 0 8px; }
+  .cx-ai .who b { color: var(--text); font-weight: 700; }
+  .cx-sum { white-space: pre-wrap; word-break: break-word; font-size: 15px; line-height: 1.5; margin: 0 0 12px; }
+  .cx-think { display: inline-flex; gap: 4px; padding: 4px 0 10px; }
+  .cx-think i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); animation: dots 1.2s ease-in-out infinite; }
+  .cx-think i:nth-child(2) { animation-delay: .15s; } .cx-think i:nth-child(3) { animation-delay: .3s; }
+  @keyframes dots { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: 1; transform: translateY(-4px); } }
+  .cx-st { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 8px; font-weight: 700; font-size: 10.5px; letter-spacing: .03em; }
   .cx-st::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
   .cx-st.running { color: #2fd5f0; background: rgba(47,213,240,.12); }
   .cx-st.running::before { animation: blink 1s steps(1) infinite; }
   .cx-st.done { color: #b4a9ff; background: rgba(139,123,255,.15); }
   .cx-st.applied { color: #3ee0a0; background: rgba(62,224,160,.13); }
   .cx-st.failed, .cx-st.stopped { color: #ff7a6e; background: rgba(255,90,80,.12); }
-  .cx-log { margin: 0 0 14px; padding: 12px 14px; border-radius: 18px; background: #07070d; box-shadow: var(--rim);
-            font: 12.5px/1.6 ui-monospace, "SF Mono", Menlo, monospace; color: #c8c8dc; max-height: 220px; overflow: auto; }
+  .cx-log { margin: 0 0 12px; padding: 10px 12px; border-radius: 16px; background: #07070d; box-shadow: var(--rim);
+            font: 12px/1.65 ui-monospace, "SF Mono", Menlo, monospace; color: #c8c8dc; max-height: 190px; overflow: auto; }
   .cx-log div::before { content: "✓ "; color: #3ee0a0; }
   .cx-log div.now::before { content: "▸ "; color: #2fd5f0; }
   .cx-log div.now { color: #fff; }
-  .cx-sum { white-space: pre-wrap; font-size: 14.5px; line-height: 1.5; margin: 0 2px 14px; }
-  .cx-file { border-radius: 16px; background: var(--card); box-shadow: var(--rim); margin-bottom: 8px; overflow: hidden; }
-  .cx-file summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 11px 14px; cursor: pointer; font: 600 13px ui-monospace, "SF Mono", Menlo, monospace; }
+  .cx-target { font: 12px ui-monospace, "SF Mono", Menlo, monospace; color: var(--hint); margin: 0 0 8px; word-break: break-all; }
+  .cx-file { border-radius: 14px; background: var(--card); box-shadow: var(--rim); margin-bottom: 8px; overflow: hidden; }
+  .cx-file summary { list-style: none; display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; font: 600 12.5px ui-monospace, "SF Mono", Menlo, monospace; }
   .cx-file summary::-webkit-details-marker { display: none; }
   .cx-file summary b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
   .cx-file .add { color: #3ee0a0; } .cx-file .del { color: #ff7a6e; }
-  .cx-file pre { margin: 0; padding: 10px 0; max-height: 360px; overflow: auto; background: #07070d; font: 11.5px/1.55 ui-monospace, "SF Mono", Menlo, monospace; color: #d6d6e6; }
-  .cx-file pre span { display: block; padding: 0 14px; white-space: pre; }
+  .cx-file pre { margin: 0; padding: 8px 0; max-height: 340px; overflow: auto; background: #07070d; font: 11.5px/1.55 ui-monospace, "SF Mono", Menlo, monospace; color: #d6d6e6; }
+  .cx-file pre span { display: block; padding: 0 12px; white-space: pre; }
   .cx-file pre .a { background: rgba(62,224,160,.12); color: #9ff5cf; }
   .cx-file pre .r { background: rgba(255,90,80,.12); color: #ffb3ab; }
   .cx-file pre .h { color: #7fdcf0; }
-  .cx-target { font: 12.5px ui-monospace, "SF Mono", Menlo, monospace; color: var(--hint); margin: 0 2px 10px; }
-  .cx-actions { display: grid; gap: 8px; margin-top: 12px; }
-  .cx-links a { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-radius: 16px; background: var(--card); box-shadow: var(--rim);
-                color: var(--text); text-decoration: none; font-weight: 600; margin-bottom: 8px; }
+  .cx-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .cx-act { height: 38px; padding: 0 14px; border-radius: 13px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 650;
+            background: var(--card); box-shadow: var(--rim); color: var(--text); }
+  .cx-act.main { background: var(--brand); color: #fff; box-shadow: 0 10px 22px -10px rgba(123,107,255,.9); }
+  .cx-act:disabled { opacity: .55; }
+  .cx-err { padding: 10px 12px; border-radius: 14px; background: rgba(255,90,80,.1); color: #ffb3ab; font-size: 13.5px; margin-bottom: 10px; }
+  /* composer above the tab bar */
+  .cx-composer { display: none; position: fixed; z-index: 21; left: 50%; transform: translateX(-50%); width: min(528px, calc(100vw - 24px));
+                 bottom: calc(var(--safe-bottom) + 14px + 66px + 10px); }
+  body[data-tab="codex"] .cx-composer { display: block; }
+  .cx-model { display: flex; align-items: center; gap: 8px; width: 100%; padding: 8px 12px; margin-bottom: 8px; border-radius: 16px; font-size: 14.5px; font-weight: 700;
+              text-align: left; background: rgba(22,22,34,.82); box-shadow: var(--rim); backdrop-filter: blur(24px) saturate(170%); -webkit-backdrop-filter: blur(24px) saturate(170%); }
+  :root[data-theme="light"] .cx-model { background: rgba(255,255,255,.88); }
+  .cx-model .mi { width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center; background: var(--brand-soft); color: var(--accent); flex: none; }
+  .cx-model .mi svg { width: 14px; height: 14px; }
+  .cx-model .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cx-model .pr { color: #ffb36b; font-size: 13.5px; font-weight: 700; }
+  .cx-model .pr.free { color: #3ee0a0; }
+  .cx-model .ar { color: var(--hint); font-size: 10px; }
+  .cx-input { display: flex; align-items: flex-end; gap: 6px; padding: 6px; border-radius: 26px; background: rgba(22,22,34,.82); box-shadow: var(--rim), 0 18px 40px -16px rgba(0,0,0,.85);
+              backdrop-filter: blur(24px) saturate(170%); -webkit-backdrop-filter: blur(24px) saturate(170%); }
+  :root[data-theme="light"] .cx-input { background: rgba(255,255,255,.88); }
+  .cx-input .clip { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; flex: none; color: var(--hint); }
+  .cx-input .clip svg { width: 21px; height: 21px; }
+  .cx-input textarea { flex: 1; min-width: 0; min-height: 40px; max-height: 130px; border: 0; outline: none; resize: none; background: none; color: var(--text);
+                       font-family: inherit; font-size: 15.5px; line-height: 1.35; padding: 10px 2px; }
+  .cx-input textarea::placeholder { color: var(--hint); }
+  .cx-send { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; flex: none; color: #fff; background: var(--brand);
+             box-shadow: 0 8px 18px -6px rgba(123,107,255,.9); transition: transform .3s var(--spring), filter .2s; }
+  .cx-send svg { width: 19px; height: 19px; stroke-width: 2.4; }
+  .cx-send.stop { background: #fff; color: #111; box-shadow: none; }
+  .cx-send:disabled { filter: grayscale(.6) brightness(.7); }
+  .cx-chat-row .cx-st { margin-left: auto; }
 
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>
@@ -731,6 +765,7 @@
   <button class="tab" data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-t="tabSettings"></span></button>
 </nav>
 
+<div class="cx-composer" id="cx-composer"></div>
 <div class="scrim" id="scrim"></div>
 <div class="sheet glass" id="sheet" role="dialog" aria-modal="true"></div>
 <div class="toast glass" id="toast"></div>
@@ -744,18 +779,17 @@ const T = {
   ru: {
     hello: n => n ? `Привет, ${n}!` : "Привет!", heroSub: "Ваш личный ИИ-агент. Подключите приложения — и просто пишите, что сделать.",
     paidModel: n => `${n} кредитов за ответ · покупка за ⭐`, paidLow: n => `Платная модель: ${n} кредитов за ответ. Пополни за звёзды в «Генерация»`,
-    cx: { sub: "Агент-программист: сам читает код, пишет, проверяет и делает pull request. Ты только ставишь задачу.",
-          repo: "Мой репозиторий", project: "Новый проект", pick: "Выбери репозиторий", noGh: "Подключи GitHub, чтобы Codex работал с твоим кодом",
-          connect: "Подключить GitHub", go: "Запустить", tasks: "Задачи", none: "Пока задач нет — поставь первую",
-          phRepo: "Что сделать в репозитории? Например: добавь тёмную тему и исправь баг с логином", phProject: "Что построить? Например: игра «змейка» на HTML или Telegram-бот на Python",
-          ideasRepo: ["Найди и исправь баги", "Напиши тесты", "Добавь README", "Отрефактори код", "Ускорь работу"],
-          ideasProject: ["Сайт-портфолио", "Игра «змейка»", "Telegram-бот на Python", "Лендинг кофейни", "Калькулятор на JS"],
-          canRun: "запускает и проверяет код", noRun: "пишет код", st: { running: "РАБОТАЕТ", done: "ГОТОВО", applied: "PR СОЗДАН", failed: "ОШИБКА", stopped: "ОСТАНОВЛЕН" },
-          newProject: "Новый проект", files: n => `${n} файл.`, stop: "Остановить", pr: "🚀 Создать pull request", applying: "Создаю…",
-          openPr: "Открыть pull request", openCommit: "Открыть коммит", send: "📦 Прислать файлы в чат", site: "🌐 Открыть сайт", sent: "Отправил в чат",
-          retry: "Повторить", del: "Удалить задачу", changes: "Изменения", report: "Отчёт", progress: "Ход работы",
-          errBusy: "Уже идёт задача — дождись её или останови", errGh: "Сначала подключи GitHub", errCredits: "Не хватает кредитов для платной модели",
-          errRestart: "Бот перезапустился во время работы — запусти заново", started: "Codex взялся за работу" },
+    cx: { help: "Чем помочь?", subProject: "Опиши, что построить — Codex напишет весь проект, проверит и отдаст файлы или сайт.",
+          subRepo: "Поставь задачу по твоему репозиторию — Codex прочитает код, внесёт правки и откроет pull request.",
+          project: "Новый проект", repo: "Репозиторий", pick: "Выбери репозиторий", noGh: "Подключи GitHub", newChat: "Новый чат", chats: "Чаты Codex",
+          noChats: "Чатов пока нет", ph: "Сообщение…", phMore: "Уточни или попроси доработать…", free: "бесплатно", unlimited: "∞ безлимит", perAnswer: n => `💎 ${n} / задача`,
+          ideasRepo: ["Найди и исправь баги", "Напиши тесты", "Добавь README", "Отрефактори код"],
+          ideasProject: ["Игра «змейка»", "Сайт-портфолио", "Telegram-бот на Python", "Лендинг кофейни"],
+          st: { running: "РАБОТАЕТ", done: "ГОТОВО", applied: "PR СОЗДАН", failed: "ОШИБКА", stopped: "ОСТАНОВЛЕН" },
+          pr: "🚀 Создать PR", applying: "Создаю…", openPr: "🔗 Pull request", openCommit: "Коммит", send: "📦 В чат", site: "🌐 Сайт", sent: "Отправил в чат",
+          retry: "↻ Повторить", delAsk: "Удалить этот чат?", files: n => `${n} файл.`, models: "Модель для Codex",
+          errBusy: "Codex ещё работает — дождись или останови", errGh: "Сначала подключи GitHub", errCredits: "Не хватает кредитов для платной модели",
+          errRepo: "Сначала выбери репозиторий", errRestart: "Бот перезапустился во время работы — нажми «Повторить»", modeTitle: "Режим" },
     secTitle: "ИИ-секретарь", secOn: "Отвечает за тебя", secOff: "Выключен", secNotConnected: "Не подключён — нажми, чтобы настроить",
     secLead: "Отвечает людям в твоей личке, пока ты занят. Внизу каждого ответа — подпись «ИИ-ассистент». Как только ты сам кому-то пишешь, он замолкает на 10 минут.",
     secRules: "Как отвечать", secRulesPh: "Например: привет, я занят или сплю, отвечу позже, это ИИ", secNotify: "Присылать мне, кому и что ответил",
@@ -826,18 +860,17 @@ const T = {
   en: {
     hello: n => n ? `Hi, ${n}!` : "Hi!", heroSub: "Your personal AI agent. Connect apps — then just tell it what to do.",
     paidModel: n => `${n} credits an answer · bought with ⭐`, paidLow: n => `Paid model: ${n} credits an answer. Top up with Stars in “Generation”`,
-    cx: { sub: "A coding agent: reads the code, writes it, checks it and opens a pull request. You just set the task.",
-          repo: "My repository", project: "New project", pick: "Pick a repository", noGh: "Connect GitHub so Codex can work on your code",
-          connect: "Connect GitHub", go: "Run", tasks: "Tasks", none: "No tasks yet — set the first one",
-          phRepo: "What to do in the repository? E.g.: add a dark theme and fix the login bug", phProject: "What to build? E.g.: a snake game in HTML or a Telegram bot in Python",
-          ideasRepo: ["Find and fix bugs", "Write tests", "Add a README", "Refactor the code", "Make it faster"],
-          ideasProject: ["Portfolio site", "Snake game", "Telegram bot in Python", "Coffee shop landing", "JS calculator"],
-          canRun: "runs and tests code", noRun: "writes code", st: { running: "WORKING", done: "READY", applied: "PR OPENED", failed: "ERROR", stopped: "STOPPED" },
-          newProject: "New project", files: n => `${n} files`, stop: "Stop", pr: "🚀 Create pull request", applying: "Creating…",
-          openPr: "Open pull request", openCommit: "Open commit", send: "📦 Send files to the chat", site: "🌐 Open the site", sent: "Sent to the chat",
-          retry: "Retry", del: "Delete task", changes: "Changes", report: "Report", progress: "Progress",
-          errBusy: "A task is already running — wait or stop it", errGh: "Connect GitHub first", errCredits: "Not enough credits for the paid model",
-          errRestart: "The bot restarted during the work — run it again", started: "Codex is on it" },
+    cx: { help: "How can I help?", subProject: "Describe what to build — Codex writes the whole project, checks it and gives you the files or a site.",
+          subRepo: "Give a task for your repository — Codex reads the code, makes the changes and opens a pull request.",
+          project: "New project", repo: "Repository", pick: "Pick a repository", noGh: "Connect GitHub", newChat: "New chat", chats: "Codex chats",
+          noChats: "No chats yet", ph: "Message…", phMore: "Clarify or ask for more…", free: "free", unlimited: "∞ unlimited", perAnswer: n => `💎 ${n} / task`,
+          ideasRepo: ["Find and fix bugs", "Write tests", "Add a README", "Refactor the code"],
+          ideasProject: ["Snake game", "Portfolio site", "Telegram bot in Python", "Coffee shop landing"],
+          st: { running: "WORKING", done: "READY", applied: "PR OPENED", failed: "ERROR", stopped: "STOPPED" },
+          pr: "🚀 Create PR", applying: "Creating…", openPr: "🔗 Pull request", openCommit: "Commit", send: "📦 To chat", site: "🌐 Site", sent: "Sent to the chat",
+          retry: "↻ Retry", delAsk: "Delete this chat?", files: n => `${n} files`, models: "Model for Codex",
+          errBusy: "Codex is still working — wait or stop it", errGh: "Connect GitHub first", errCredits: "Not enough credits for the paid model",
+          errRepo: "Pick a repository first", errRestart: "The bot restarted during the work — press Retry", modeTitle: "Mode" },
     secTitle: "AI secretary", secOn: "Answering for you", secOff: "Off", secNotConnected: "Not connected — tap to set up",
     secLead: "Answers people in your personal chats while you're busy, signed “AI assistant”. As soon as you write to someone yourself, it goes quiet for 10 minutes.",
     secRules: "How to answer", secRulesPh: "E.g.: hi, I'm busy or asleep, will answer later, this is an AI", secNotify: "Tell me whom it answered and what",
@@ -1289,50 +1322,167 @@ function playSetupDemo() {
   };
   requestAnimationFrame(frame);
 }
-/* ---------------- Codex ---------------- */
-const cx = { mode: "project", repo: "", tasks: [], github: null, canRun: false, loaded: false, timer: null, open: null, draft: "" };
-try { cx.mode = localStorage.getItem("cx-mode") || "project"; cx.repo = localStorage.getItem("cx-repo") || ""; } catch (e) {}
+/* ---------------- Codex: a chat with a coding agent ---------------- */
+const CX_ICON = '<svg class="i" viewBox="0 0 24 24"><path d="m8 9-3 3 3 3M16 9l3 3-3 3M13.5 6.5l-3 11"/></svg>';
+const cx = { mode: "project", repo: "", chats: [], thread: null, tasks: [], github: null, canRun: false, loaded: false, timer: null, draft: "", open: new Set() };
+try { cx.mode = localStorage.getItem("cx-mode") || "project"; cx.repo = localStorage.getItem("cx-repo") || ""; cx.thread = localStorage.getItem("cx-thread") || null; } catch (e) {}
+const cxSave = () => { try { localStorage.setItem("cx-mode", cx.mode); localStorage.setItem("cx-repo", cx.repo); cx.thread ? localStorage.setItem("cx-thread", cx.thread) : localStorage.removeItem("cx-thread"); } catch (e) {} };
 const cxAgo = t => { const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60));
-  return m < 1 ? (lang === "ru" ? "только что" : "just now") : m < 60 ? `${m} ${lang === "ru" ? "мин" : "min"}` : m < 1440 ? `${Math.round(m / 60)} ${lang === "ru" ? "ч" : "h"}` : `${Math.round(m / 1440)} ${lang === "ru" ? "дн" : "d"}`; };
+  return m < 1 ? (lang === "ru" ? "сейчас" : "now") : m < 60 ? `${m} ${lang === "ru" ? "мин" : "min"}` : m < 1440 ? `${Math.round(m / 60)} ${lang === "ru" ? "ч" : "h"}` : `${Math.round(m / 1440)} ${lang === "ru" ? "дн" : "d"}`; };
+const cxRunning = () => cx.tasks.some(t => t.status === "running");
 async function loadCodex() {
-  try { const d = await api("/api/codex/state"); Object.assign(cx, { tasks: d.tasks, github: d.github, canRun: d.can_run, loaded: true }); }
-  catch (e) { cx.loaded = true; }
-  if ($("cx-tasks")) renderCodexTasks(); else renderCodex();
+  try {
+    const d = await api("/api/codex/state");
+    Object.assign(cx, { chats: d.chats, github: d.github, canRun: d.can_run, loaded: true });
+    if (cx.thread && !cx.chats.some(c => c.thread === cx.thread)) { cx.thread = null; cxSave(); }
+    cx.tasks = cx.thread ? (await api("/api/codex/thread", { thread: cx.thread })).tasks : [];
+  } catch (e) { cx.loaded = true; }
+  renderCodex();
   clearTimeout(cx.timer);
-  if (cx.tasks.some(t => t.status === "running")) cx.timer = setTimeout(async () => { await loadCodex(); if (cx.open) openCodexTask(cx.open, true); }, 2500);
+  if (cxRunning() && document.body.dataset.tab === "codex") cx.timer = setTimeout(loadCodex, 2200);
 }
 function renderCodex() {
-  const C = T.cx, repoMode = cx.mode === "repo";
-  const model = state?.settings ? shortModel(state.settings.model) : "";
-  $("codex").innerHTML = `<div class="cx-hero"><span class="cx-logo"><i></i>codex · ${esc(model)}</span>
-      <h1><span>Codex</span></h1><p>${C.sub}</p></div>
-    <div class="seg two" id="cx-mode"><button data-mode="repo" class="${repoMode ? "on" : ""}">${C.repo}</button><button data-mode="project" class="${repoMode ? "" : "on"}">${C.project}</button></div>
-    ${repoMode && !cx.github ? `<div class="cx-box" style="padding:16px;text-align:center"><div style="font-size:34px">🐙</div><p class="small" style="margin:6px 0 12px">${C.noGh}</p>
-        <button class="btn" id="cx-gh">${C.connect}</button></div>` : `
-      ${repoMode ? `<button class="cx-repo press" id="cx-repo">${GH_ICON}<b>${esc(cx.repo || C.pick)}</b><span class="k">@${esc(cx.github)}</span>${ICON.chev}</button>` : ""}
-      <div class="cx-box"><textarea id="cx-prompt" maxlength="4000" placeholder="${repoMode ? C.phRepo : C.phProject}">${esc(cx.draft)}</textarea>
-        <div class="cx-bar"><span class="meta">${cx.canRun && !repoMode ? "⚙️ " + C.canRun : "✍️ " + C.noRun}</span>
-          <button class="cx-go press" id="cx-go"><svg class="i" viewBox="0 0 24 24"><path d="M6 4l14 8-14 8z" fill="currentColor" stroke="none"/></svg>${C.go}</button></div></div>
-      <div class="cx-ideas">${(repoMode ? C.ideasRepo : C.ideasProject).map(t => `<button class="press" data-idea="${esc(t)}">${esc(t)}</button>`).join("")}</div>`}
-    <div class="section" style="margin-top:6px"><h2>${C.tasks}</h2><div class="list" id="cx-tasks" style="margin-top:12px"></div></div>`;
-  renderCodexTasks();
-  $("cx-mode").onclick = e => { const b = e.target.closest("[data-mode]"); if (!b || b.dataset.mode === cx.mode) return;
-    cx.draft = $("cx-prompt")?.value || cx.draft; cx.mode = b.dataset.mode; try { localStorage.setItem("cx-mode", cx.mode); } catch (err) {} haptic("select"); renderCodex(); };
-  $("cx-gh")?.addEventListener("click", () => openGitHubSheet());
-  $("cx-repo")?.addEventListener("click", pickRepo);
-  $("cx-prompt")?.addEventListener("input", e => { cx.draft = e.target.value; });
-  document.querySelectorAll("[data-idea]").forEach(b => b.onclick = () => { const f = $("cx-prompt"); f.value = b.dataset.idea; cx.draft = f.value; f.focus(); haptic("light"); });
-  $("cx-go")?.addEventListener("click", startCodex);
+  const C = T.cx, first = cx.tasks[0], mode = first ? first.mode : cx.mode, repo = first ? first.repo : cx.repo;
+  const title = first ? first.prompt : C.newChat;
+  const sub = mode === "repo" ? `🐙 ${repo || C.pick}` : `✨ ${C.project}`;
+  const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 140;
+  $("codex").innerHTML = `<div class="cx-head">
+      <button class="cx-ib press" id="cx-list" aria-label="chats"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
+      <button class="cx-title press" id="cx-title"><b><span>${esc(title)}</span>${first ? "" : "<i>▼</i>"}</b><small>${esc(sub)}</small></button>
+      ${first ? `<button class="cx-ib press" id="cx-del" aria-label="delete">${ICON.trash}</button>` : ""}
+      <button class="cx-ib press" id="cx-new" aria-label="new"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>
+    <div id="cx-thread">${first ? cx.tasks.map(cxMessage).join("") : cxEmpty(mode)}</div>`;
+  renderComposer();
+  $("cx-list").onclick = openCodexChats;
+  $("cx-new").onclick = () => { cx.thread = null; cx.tasks = []; cxSave(); haptic("light"); renderCodex(); $("cx-text")?.focus(); };
+  $("cx-title").onclick = () => { if (!first) openCodexMode(); };
+  $("cx-del")?.addEventListener("click", () => {
+    const go = async () => { await api("/api/codex/delete", { thread: cx.thread }).catch(() => {}); cx.thread = null; cx.tasks = []; cxSave(); loadCodex(); };
+    tg?.showConfirm ? tg.showConfirm(C.delAsk, ok => ok && go()) : confirm(C.delAsk) && go();
+  });
+  document.querySelectorAll("#cx-thread [data-idea]").forEach(b => b.onclick = () => { $("cx-text").value = b.dataset.idea; cx.draft = b.dataset.idea; cxGrow(); $("cx-text").focus(); haptic("light"); });
+  document.querySelectorAll("#cx-thread [data-mode]").forEach(b => b.onclick = () => { cx.mode = b.dataset.mode; cxSave(); haptic("select"); renderCodex(); });
+  $("cx-repo-chip")?.addEventListener("click", () => cx.github ? pickRepo() : openGitHubSheet());
+  document.querySelectorAll("#cx-thread details[data-key]").forEach(d => d.addEventListener("toggle", () => d.open ? cx.open.add(d.dataset.key) : cx.open.delete(d.dataset.key)));
+  document.querySelectorAll("#cx-thread [data-link]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); openLink(a.dataset.link); }));
+  document.querySelectorAll("#cx-thread [data-act]").forEach(b => b.onclick = () => codexAction(b.dataset.act, b.dataset.id, b));
+  document.querySelectorAll(".cx-log").forEach(l => l.scrollTop = l.scrollHeight);
+  if (atBottom && first) window.scrollTo(0, document.body.scrollHeight);
 }
-function renderCodexTasks() {
-  const box = $("cx-tasks"); if (!box) return;
+function cxEmpty(mode) {
+  const C = T.cx, repoMode = mode === "repo";
+  return `<div class="cx-empty"><div class="cx-orb">${CX_ICON}</div><h2>${C.help}</h2><p>${repoMode ? C.subRepo : C.subProject}</p>
+    <div class="cx-modes"><button data-mode="project" class="${repoMode ? "" : "on"}">✨ ${C.project}</button><button data-mode="repo" class="${repoMode ? "on" : ""}">🐙 ${C.repo}</button></div><br>
+    ${repoMode ? `<button class="cx-repo-chip press" id="cx-repo-chip">${GH_ICON}<span>${esc(cx.github ? (cx.repo || C.pick) : C.noGh)}</span><span style="color:var(--hint)">▾</span></button>` : ""}
+    <div class="cx-chipline">${(repoMode ? C.ideasRepo : C.ideasProject).map(t => `<button class="press" data-idea="${esc(t)}">${esc(t)}</button>`).join("")}</div></div>`;
+}
+function cxDiff(patch) {
+  return patch.split("\n").map(l => `<span class="${l.startsWith("+") ? "a" : l.startsWith("-") ? "r" : l.startsWith("@@") ? "h" : ""}">${esc(l) || " "}</span>`).join("");
+}
+function cxMessage(t) {
+  const C = T.cx, running = t.status === "running", ch = t.change, log = t.log || [], files = Object.entries(t.files || {});
+  const det = (key, head, body) => `<details class="cx-file" data-key="${key}" ${cx.open.has(key) ? "open" : ""}><summary>${head}</summary><pre>${body}</pre></details>`;
+  const lastOfThread = t === cx.tasks[cx.tasks.length - 1];
+  return `<div class="cx-msg me"><div class="bubble">${esc(t.prompt)}</div></div>
+    <div class="cx-msg"><div class="cx-ava">${CX_ICON}</div><div class="cx-ai">
+      <div class="who"><b>Codex</b><span class="cx-st ${t.status}">${C.st[t.status] || t.status}</span><span>${esc(prettyModel(t.model || ""))} · ${cxAgo(t.created)}</span></div>
+      ${log.length ? `<div class="cx-log">${log.map((l, i) => `<div class="${running && i === log.length - 1 ? "now" : ""}">${esc(l.text)}</div>`).join("")}</div>` : ""}
+      ${running && !t.summary ? `<div class="cx-think"><i></i><i></i><i></i></div>` : ""}
+      ${t.summary ? `<div class="cx-sum">${esc(t.summary)}</div>` : ""}
+      ${t.error ? `<div class="cx-err">⚠️ ${esc(t.error === "restart" ? C.errRestart : t.error)}</div>` : ""}
+      ${ch ? `<div class="cx-target">${esc(ch.repo)} · ${esc(ch.base)} → ${esc(ch.branch)}</div>` + ch.files.map(f => det(`${t.id}:${f.path}`,
+        `<b>${f.kind === "new" ? "🆕" : f.kind === "delete" ? "🗑" : "✏️"} ${esc(f.path)}</b><span class="add">+${f.added}</span><span class="del">−${f.removed}</span>`, cxDiff(f.patch))).join("") : ""}
+      ${!running && files.length && lastOfThread ? files.map(([p, text]) => det(`${t.id}:${p}`, `<b>📄 ${esc(p)}</b><span style="color:var(--hint)">${text.split("\n").length}</span>`,
+        esc(text).split("\n").map(l => `<span>${l || " "}</span>`).join(""))).join("") : ""}
+      <div class="cx-acts">
+        ${t.status === "done" && ch ? `<button class="cx-act main press" data-act="apply" data-id="${t.id}">${C.pr}</button>` : ""}
+        ${t.result?.pull ? `<a class="cx-act main" href="#" data-link="${esc(t.result.pull)}">${C.openPr}</a>` : ""}
+        ${t.result?.commit ? `<a class="cx-act" href="#" data-link="${esc(t.result.commit)}">${C.openCommit}</a>` : ""}
+        ${!running && lastOfThread && files.some(([p]) => p.endsWith(".html")) ? `<button class="cx-act main press" data-act="site" data-id="${t.id}">${C.site}</button>` : ""}
+        ${!running && lastOfThread && files.length ? `<button class="cx-act press" data-act="send" data-id="${t.id}">${C.send}</button>` : ""}
+        ${["failed", "stopped"].includes(t.status) && lastOfThread ? `<button class="cx-act press" data-act="retry" data-id="${t.id}">${C.retry}</button>` : ""}
+      </div></div></div>`;
+}
+function renderComposer() {
+  const C = T.cx, s = state?.settings || {}, running = cxRunning();
+  const price = (s.premium || {})[s.model], owner = state?.gen?.owner;
+  $("cx-composer").innerHTML = `<button class="cx-model press" id="cx-model"><span class="mi">${CX_ICON}</span><span class="nm">${esc(prettyModel(s.model || ""))}</span>
+      <span class="pr ${price ? "" : "free"}">${owner ? C.unlimited : price ? C.perAnswer(price * 3) : C.free}</span><span class="ar">▼</span></button>
+    <div class="cx-input"><button class="clip press" id="cx-clip" aria-label="mode"><svg class="i" viewBox="0 0 24 24"><path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7"/></svg></button>
+      <textarea id="cx-text" rows="1" maxlength="4000" placeholder="${cx.tasks.length ? C.phMore : C.ph}">${esc(cx.draft)}</textarea>
+      <button class="cx-send press ${running ? "stop" : ""}" id="cx-send" aria-label="send">${running
+        ? '<svg class="i" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
+        : '<svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>'}</button></div>`;
+  $("cx-text").addEventListener("input", e => { cx.draft = e.target.value; cxGrow(); });
+  $("cx-text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCodex(); });
+  $("cx-send").onclick = () => running ? stopCodex() : sendCodex();
+  $("cx-model").onclick = openCodexModels;
+  $("cx-clip").onclick = () => cx.tasks.length ? openCodexChats() : openCodexMode();
+  cxGrow();
+}
+function cxGrow() { const t = $("cx-text"); if (!t) return; t.style.height = "auto"; t.style.height = Math.min(130, t.scrollHeight) + "px"; }
+async function sendCodex() {
+  const C = T.cx, text = ($("cx-text")?.value || "").trim();
+  if (!text) { $("cx-text").focus(); return; }
+  if (!cx.thread && cx.mode === "repo") { if (!cx.github) return openGitHubSheet(); if (!cx.repo) return pickRepo(); }
+  $("cx-send").disabled = true;
+  try {
+    const { task } = await api("/api/codex/start", { mode: cx.mode, prompt: text, repo: cx.repo, thread: cx.thread || "" });
+    cx.thread = task.thread; cx.draft = ""; cxSave(); haptic("success");
+    await loadCodex(); window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+  } catch (e) {
+    toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits, repo: C.errRepo }[e.code] || T.err); haptic("error");
+    if ($("cx-send")) $("cx-send").disabled = false;
+  }
+}
+async function stopCodex() {
+  const t = cx.tasks.find(x => x.status === "running"); if (!t) return;
+  haptic("medium"); await api("/api/codex/stop", { id: t.id }).catch(() => {}); setTimeout(loadCodex, 500);
+}
+async function codexAction(act, id, b) {
   const C = T.cx;
-  box.innerHTML = cx.tasks.length ? cx.tasks.map(t => `<button class="cx-task press" data-task="${t.id}">
-      <div class="top"><span class="cx-st ${t.status}">${C.st[t.status] || t.status}</span><span>${esc(t.mode === "repo" ? t.repo : C.newProject)}</span><span>· ${cxAgo(t.created)}</span>
-        ${t.files_count ? `<span>· ${C.files(t.files_count)}</span>` : ""}</div>
-      <div class="p">${esc(t.prompt)}</div>${t.status === "running" && t.step ? `<div class="cx-step">▸ ${esc(t.step)}</div>` : ""}</button>`).join("")
-    : `<div class="empty" style="padding:26px">${cx.loaded ? C.none : "…"}</div>`;
-  box.querySelectorAll("[data-task]").forEach(b => b.onclick = () => openCodexTask(b.dataset.task));
+  if (act === "apply") {
+    b.disabled = true; b.textContent = C.applying;
+    try { await api("/api/codex/apply", { id }); haptic("success"); loadCodex(); } catch (e) { toast(T.err); b.disabled = false; b.textContent = C.pr; haptic("error"); }
+  } else if (act === "site") { try { openLink((await api("/api/codex/site", { id })).url); } catch (e) { toast(T.err); } }
+  else if (act === "send") { try { await api("/api/codex/send", { id }); toast(C.sent, "📦"); haptic("success"); } catch (e) { toast(T.err); } }
+  else if (act === "retry") {
+    const t = cx.tasks.find(x => x.id === id);
+    try { await api("/api/codex/start", { mode: t.mode, prompt: t.prompt, repo: t.repo, thread: cx.thread }); loadCodex(); }
+    catch (e) { toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits }[e.code] || T.err); }
+  }
+}
+function openCodexChats() {
+  const C = T.cx;
+  openSheet(`<div class="head"><h3>${C.chats}</h3></div>
+    <button class="btn" id="cx-sheet-new" style="margin-bottom:14px">＋ ${C.newChat}</button>
+    <div class="list">${cx.chats.length ? cx.chats.map(c => `<button class="row press cx-chat-row" data-thread="${c.thread}">
+        <div class="ic emoji">${c.mode === "repo" ? "🐙" : "✨"}</div>
+        <div class="body"><div class="t"><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(c.title)}</span></div>
+          <div class="d">${esc(c.mode === "repo" ? c.repo : C.project)} · ${cxAgo(c.updated)}${c.count > 1 ? ` · ${c.count} 💬` : ""}</div></div>
+        <span class="cx-st ${c.status}">${C.st[c.status] || ""}</span></button>`).join("") : `<div class="empty">${C.noChats}</div>`}</div>`);
+  $("cx-sheet-new").onclick = () => { closeSheet(); cx.thread = null; cx.tasks = []; cxSave(); renderCodex(); };
+  document.querySelectorAll("#sheet [data-thread]").forEach(b => b.onclick = () => { cx.thread = b.dataset.thread; cx.open.clear(); cxSave(); closeSheet(); loadCodex().then(() => window.scrollTo(0, document.body.scrollHeight)); });
+}
+function openCodexMode() {
+  const C = T.cx;
+  openSheet(`<div class="head"><h3>${C.modeTitle}</h3></div><div class="list">
+    <button class="row press" data-m="project"><div class="ic emoji">✨</div><div class="body"><div class="t">${C.project}</div><div class="d">${C.subProject}</div></div>${cx.mode === "project" ? ICON.check : ""}</button>
+    <button class="row press" data-m="repo"><div class="ic emoji">🐙</div><div class="body"><div class="t">${C.repo}${cx.repo ? ` · <span style="font-family:ui-monospace,Menlo,monospace;font-size:13px">${esc(cx.repo)}</span>` : ""}</div><div class="d">${C.subRepo}</div></div>${cx.mode === "repo" ? ICON.check : ""}</button></div>`);
+  document.querySelectorAll("#sheet [data-m]").forEach(b => b.onclick = () => {
+    cx.mode = b.dataset.m; cxSave(); haptic("select"); closeSheet(); renderCodex();
+    if (cx.mode === "repo") setTimeout(() => cx.github ? pickRepo() : openGitHubSheet(), 350);
+  });
+}
+function openCodexModels() {
+  const C = T.cx, s = state.settings, paid = s.premium || {};
+  openSheet(`<div class="head"><h3>${C.models}</h3></div><div class="list">${s.models.map(m => `<button class="row press" data-model="${esc(m)}">
+      <div class="ic sym">${CX_ICON}</div><div class="body"><div class="t">${esc(prettyModel(m))}</div><div class="d">${paid[m] ? C.perAnswer(paid[m] * 3) : C.free}</div></div>
+      ${m === s.model ? `<span style="color:var(--accent)">${ICON.check}</span>` : ""}</button>`).join("")}</div>`);
+  document.querySelectorAll("#sheet [data-model]").forEach(b => b.onclick = async () => {
+    try { state.settings = (await api("/api/settings", { model: b.dataset.model })).settings; renderHeader(); renderSettings(); haptic("select"); closeSheet(); renderComposer(); }
+    catch (e) { toast(errorText(e)); }
+  });
 }
 async function pickRepo() {
   openSheet(`<div class="head"><h3>${T.cx.pick}</h3></div><div class="list" id="cx-repos"><div class="empty">…</div></div>`);
@@ -1340,77 +1490,9 @@ async function pickRepo() {
     const { repos } = await api("/api/codex/repos");
     $("cx-repos").innerHTML = repos.length ? repos.map(r => `<button class="row compact press" data-repo="${esc(r.name)}"><div class="ic sym">${GH_ICON}</div>
         <div class="body"><div class="t" style="font-family:ui-monospace,Menlo,monospace;font-size:14px">${esc(r.name)}</div><div class="d">${r.private ? "🔒 private" : "public"} · ${esc(r.branch)}</div></div>
-        ${r.name === cx.repo ? `<span class="check" style="color:var(--accent)">${ICON.check}</span>` : ""}</button>`).join("") : `<div class="empty">—</div>`;
-    $("cx-repos").querySelectorAll("[data-repo]").forEach(b => b.onclick = () => {
-      cx.repo = b.dataset.repo; try { localStorage.setItem("cx-repo", cx.repo); } catch (e) {} haptic("select"); closeSheet(); renderCodex(); });
+        ${r.name === cx.repo ? `<span style="color:var(--accent)">${ICON.check}</span>` : ""}</button>`).join("") : `<div class="empty">—</div>`;
+    $("cx-repos").querySelectorAll("[data-repo]").forEach(b => b.onclick = () => { cx.repo = b.dataset.repo; cx.mode = "repo"; cxSave(); haptic("select"); closeSheet(); renderCodex(); });
   } catch (e) { $("cx-repos").innerHTML = `<div class="empty">${T.err}</div>`; }
-}
-async function startCodex() {
-  const prompt = ($("cx-prompt")?.value || "").trim(), C = T.cx;
-  if (!prompt) { $("cx-prompt").focus(); haptic("error"); return; }
-  if (cx.mode === "repo" && !cx.repo) { pickRepo(); return; }
-  const b = $("cx-go"); b.disabled = true;
-  try {
-    await api("/api/codex/start", { mode: cx.mode, prompt, repo: cx.repo });
-    cx.draft = ""; $("cx-prompt").value = ""; toast(C.started, "⚡"); haptic("success");
-    await loadCodex();
-  } catch (e) { toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits }[e.code] || T.err); haptic("error"); }
-  b.disabled = false;
-}
-function cxDiff(patch) {
-  return patch.split("\n").map(l => `<span class="${l.startsWith("+") ? "a" : l.startsWith("-") ? "r" : l.startsWith("@@") ? "h" : ""}">${esc(l) || " "}</span>`).join("");
-}
-async function openCodexTask(id, refresh = false) {
-  let t;
-  try { t = (await api("/api/codex/task", { id })).task; } catch (e) { if (!refresh) toast(T.err); return; }
-  if (refresh && (cx.open !== id || !$("cx-sheet"))) return;
-  cx.open = id;
-  const C = T.cx, ch = t.change, running = t.status === "running";
-  const keepScroll = refresh ? $("sheet").scrollTop : 0;
-  const log = t.log || [];
-  const html = `<div id="cx-sheet"><div class="head" style="text-align:left;padding:10px 4px 6px">
-      <div class="top" style="display:flex;gap:8px;align-items:center;color:var(--hint);font-size:12.5px;margin-bottom:8px"><span class="cx-st ${t.status}">${C.st[t.status] || t.status}</span>
-        <span>${esc(t.mode === "repo" ? t.repo : C.newProject)} · ${cxAgo(t.created)}</span></div>
-      <h3 style="font-size:19px;line-height:1.3">${esc(t.prompt)}</h3></div>
-    ${log.length ? `<div class="small" style="margin:10px 4px 6px">${C.progress}</div><div class="cx-log" id="cx-log">${log.map((l, i) =>
-      `<div class="${running && i === log.length - 1 ? "now" : ""}">${esc(l.text)}</div>`).join("")}</div>` : ""}
-    ${t.summary ? `<div class="small" style="margin:4px 4px 6px">${C.report}</div><div class="cx-sum">${esc(t.summary)}</div>` : ""}
-    ${t.error ? `<div class="notice glass" style="color:#ff9b92">⚠️ ${esc(t.error === "restart" ? C.errRestart : t.error)}</div>` : ""}
-    ${ch ? `<div class="small" style="margin:4px 4px 6px">${C.changes}</div><div class="cx-target">${esc(ch.repo)} · ${esc(ch.base)} → ${esc(ch.branch)}<br>💬 ${esc(ch.message)}</div>
-      ${ch.files.map(f => `<details class="cx-file"><summary><b>${f.kind === "new" ? "🆕" : f.kind === "delete" ? "🗑" : "✏️"} ${esc(f.path)}</b><span class="add">+${f.added}</span><span class="del">−${f.removed}</span></summary>
-        <pre>${cxDiff(f.patch)}</pre></details>`).join("")}` : ""}
-    ${t.files && Object.keys(t.files).length ? `<div class="small" style="margin:4px 4px 6px">${C.files(Object.keys(t.files).length)}</div>
-      ${Object.entries(t.files).map(([p, text]) => `<details class="cx-file"><summary><b>📄 ${esc(p)}</b><span style="color:var(--hint)">${text.split("\n").length}</span></summary>
-        <pre>${esc(text).split("\n").map(l => `<span>${l || " "}</span>`).join("")}</pre></details>`).join("")}` : ""}
-    ${t.result?.pull || t.result?.commit ? `<div class="cx-links">${t.result.pull ? `<a href="#" data-link="${esc(t.result.pull)}">🚀 ${C.openPr}</a>` : ""}
-      ${t.result.commit ? `<a href="#" data-link="${esc(t.result.commit)}">🔗 ${C.openCommit}</a>` : ""}</div>` : ""}
-    <div class="cx-actions">
-      ${running ? `<button class="btn secondary" id="cx-stop">⏹ ${C.stop}</button>` : ""}
-      ${t.status === "done" && ch ? `<button class="btn" id="cx-apply">${C.pr}</button>` : ""}
-      ${t.status === "done" && t.files && Object.keys(t.files).some(p => p.endsWith(".html")) ? `<button class="btn" id="cx-site">${C.site}</button>` : ""}
-      ${t.files && Object.keys(t.files).length && !running ? `<button class="btn secondary" id="cx-send">${C.send}</button>` : ""}
-      ${["failed", "stopped"].includes(t.status) ? `<button class="btn secondary" id="cx-retry">↻ ${C.retry}</button>` : ""}
-      ${!running ? `<button class="btn ghost" id="cx-del">${C.del}</button>` : ""}
-    </div></div>`;
-  if (refresh) {
-    $("sheet").querySelector("#cx-sheet").outerHTML = html;
-    $("sheet").querySelectorAll("[data-link]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); openLink(a.dataset.link); }));
-    $("sheet").scrollTop = keepScroll;
-  } else openSheet(html, () => { cx.open = null; });
-  const logBox = $("cx-log"); if (logBox) logBox.scrollTop = logBox.scrollHeight;
-  $("cx-stop")?.addEventListener("click", async () => { await api("/api/codex/stop", { id }).catch(() => {}); haptic("medium"); setTimeout(loadCodex, 600); });
-  $("cx-apply")?.addEventListener("click", async e => {
-    const b = e.currentTarget; b.disabled = true; b.textContent = C.applying;
-    try { await api("/api/codex/apply", { id }); haptic("success"); await loadCodex(); openCodexTask(id, true); }
-    catch (err) { toast(T.err); b.disabled = false; b.textContent = C.pr; haptic("error"); }
-  });
-  $("cx-site")?.addEventListener("click", async () => { try { openLink((await api("/api/codex/site", { id })).url); } catch (e) { toast(T.err); } });
-  $("cx-send")?.addEventListener("click", async () => { try { await api("/api/codex/send", { id }); toast(C.sent, "📦"); haptic("success"); } catch (e) { toast(T.err); } });
-  $("cx-retry")?.addEventListener("click", async () => {
-    try { await api("/api/codex/start", { mode: t.mode, prompt: t.prompt, repo: t.repo }); closeSheet(); toast(C.started, "⚡"); loadCodex(); }
-    catch (e) { toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits }[e.code] || T.err); }
-  });
-  $("cx-del")?.addEventListener("click", async () => { await api("/api/codex/delete", { id }).catch(() => {}); closeSheet(); loadCodex(); });
 }
 
 function addToGroup() {

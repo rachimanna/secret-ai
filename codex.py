@@ -17,7 +17,7 @@ import tempfile
 import time
 import uuid
 
-MAX_TASKS = 30  # kept per person
+MAX_TASKS = 120  # messages kept per person
 MAX_FILES = 60
 MAX_FILE = 200_000
 MAX_LOG = 80
@@ -41,10 +41,13 @@ class CodexStore:
                     task.update(status=STATUS_FAILED, error="restart")
                     self.db.execute("UPDATE codex_tasks SET data=? WHERE id=?", (json.dumps(task), tid))
 
-    def create(self, user_id, mode, prompt, repo="", model=""):
-        task = {"id": uuid.uuid4().hex[:10], "user_id": user_id, "mode": mode, "prompt": prompt, "repo": repo, "model": model,
-                "status": STATUS_RUNNING, "step": "", "log": [], "summary": "", "files": {}, "change": None,
-                "result": {}, "error": "", "created": int(time.time()), "updated": int(time.time())}
+    def create(self, user_id, mode, prompt, repo="", model="", thread=None, files=None, branch=""):
+        """A task is one message of a Codex chat; the chat (thread) is the id of its first task."""
+        task_id = uuid.uuid4().hex[:10]
+        task = {"id": task_id, "thread": thread or task_id, "user_id": user_id, "mode": mode, "prompt": prompt, "repo": repo,
+                "model": model, "branch": branch, "status": STATUS_RUNNING, "step": "", "log": [], "summary": "",
+                "files": dict(files or {}), "change": None, "result": {}, "error": "", "created": int(time.time()),
+                "updated": int(time.time())}
         with self.lock, self.db:
             self.db.execute("INSERT INTO codex_tasks(id, user_id, data, created) VALUES (?, ?, ?, ?)",
                             (task["id"], user_id, json.dumps(task), task["created"]))
@@ -76,6 +79,23 @@ class CodexStore:
             rows = self.db.execute("SELECT data FROM codex_tasks WHERE user_id=? ORDER BY created DESC", (user_id,)).fetchall()
         return [json.loads(r[0]) for r in rows]
 
+    def thread(self, thread, user_id):
+        """The messages of one chat, oldest first."""
+        return sorted((t for t in self.list(user_id) if t.get("thread", t["id"]) == thread), key=lambda t: (t["created"], t["updated"]))
+
+    def threads(self, user_id):
+        """Chats, newest activity first: the first message names the chat, the last one gives its state."""
+        chats = {}
+        for task in self.list(user_id):
+            chats.setdefault(task.get("thread", task["id"]), []).append(task)
+        out = []
+        for thread, tasks in chats.items():
+            tasks.sort(key=lambda t: t["created"])
+            first, last = tasks[0], tasks[-1]
+            out.append({"thread": thread, "title": first["prompt"][:80], "mode": first["mode"], "repo": first["repo"],
+                        "status": last["status"], "step": last.get("step", ""), "count": len(tasks), "updated": last["updated"]})
+        return sorted(out, key=lambda c: -c["updated"])
+
     def delete(self, task_id, user_id):
         with self.lock, self.db:
             self.db.execute("DELETE FROM codex_tasks WHERE id=? AND user_id=?", (task_id, user_id))
@@ -83,7 +103,8 @@ class CodexStore:
 
 def public(task, full=False):
     """What the Mini App sees: the list gets a light version, the details everything."""
-    keys = ("id", "mode", "prompt", "repo", "model", "status", "step", "summary", "result", "error", "created", "updated")
+    keys = ("id", "thread", "mode", "prompt", "repo", "model", "branch", "status", "step", "summary", "result", "error", "created",
+            "updated")
     out = {k: task.get(k) for k in keys}
     out["files_count"] = len(task.get("files") or {}) or len((task.get("change") or {}).get("files") or [])
     if full:
@@ -272,3 +293,19 @@ def change_view(change):
                       "patch": "\n".join(patch)[:30000]})
     return {"repo": change["repo"], "branch": change["branch"], "base": change["default"], "message": change["message"],
             "pull_request": change["pull_request"], "files": files}
+
+
+def history(earlier):
+    """The chat so far for the model: each earlier task and what came of it."""
+    items = []
+    for task in earlier:
+        items.append({"role": "user", "content": task["prompt"]})
+        note = task.get("summary") or task.get("error") or "(no report)"
+        change = task.get("change")
+        if change:
+            files = ", ".join(f["path"] for f in change["files"])
+            note += (f"\n\n[Changes to {files} on branch {change['branch']}: "
+                     + ("committed, pull request opened]" if task["status"] == STATUS_APPLIED else
+                        "prepared but NOT committed; if you change the code again, include these changes in full]"))
+        items.append({"role": "assistant", "content": note[:6000]})
+    return items
