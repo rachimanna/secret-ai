@@ -1320,7 +1320,7 @@ async def discover_models(app):
 
 # The models the bot offers. Empty: no models at all (the owner adds them one by one; until then the bot says so).
 # Keys: "sonnet", "grok", "opus", "fable", "astra", "gemini", "deepseek", "gpt", "cursor".
-ENABLED_MODELS = []
+ENABLED_MODELS = ["cursor"]
 
 
 class NoModels(Exception):
@@ -1969,7 +1969,10 @@ def user_model(bot_data, user_id):
     if chosen and chosen not in bot_data["models"]:  # the same model now served by another gateway (e.g. Opus moved off OpenAI)
         bare = chosen.split(":", 1)[-1].split("/")[-1]
         chosen = next((m for m in bot_data["models"] if m.split(":", 1)[-1].split("/")[-1] == bare), None)
-    return chosen if chosen in bot_data["models"] else bot_data.get("chat_default") or bot_data["model"]
+    if chosen in bot_data["models"]:
+        return chosen
+    # Nothing chosen (or gone): the default model, or the first one this person may use (e.g. the owner's Cursor model).
+    return bot_data.get("chat_default") or next(iter(models_for(bot_data, user_id)), None) or bot_data["model"]
 
 
 async def app_tools(bot_data, user_id, taken):
@@ -3689,7 +3692,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if message.text and await secretary_switch(update, context, message.text):
         return
-    if not context.bot_data.get("models") and not context.bot_data.get("cursor_models"):
+    if not models_for(context.bot_data, update.effective_user.id):
         await send(message, ui(update, "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon."))
         return
     remember_photo(context.bot_data, update.effective_user.id, message)
@@ -3997,6 +4000,8 @@ def error_text(error):
     ru, en = "Не удалось обработать сообщение. Попробуйте ещё раз чуть позже.", "Couldn't process your message. Please try again later."
     if isinstance(error, NoModels):
         ru, en = "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon."
+    elif isinstance(error, cursor.CursorError):
+        ru, en = f"Cursor не ответил: {str(error)[:200]}", f"Cursor didn't answer: {str(error)[:200]}"
     elif isinstance(error, RateLimitError):
         ru, en = "Модель сейчас перегружена или у провайдера закончился лимит. Попробуй чуть позже или выбери другую модель в Secret AI.", "The model is overloaded or its provider's limit is reached. Try later or pick another model in Secret AI."
     elif isinstance(error, (AuthenticationError, NotFoundError, PermissionDeniedError)):

@@ -25,7 +25,7 @@ class CursorError(Exception):
 
 def models():
     """The Cursor models offered in the picker (CURSOR_MODELS, comma-separated)."""
-    wanted = os.environ.get("CURSOR_MODELS", "grok-4.7").split(",")
+    wanted = os.environ.get("CURSOR_MODELS", "grok-4.7-fast").split(",")
     return [PREFIX + m.strip() for m in wanted if m.strip()] if os.environ.get("CURSOR_API_KEY", "").strip() else []
 
 
