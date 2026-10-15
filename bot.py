@@ -131,8 +131,8 @@ GROUP_STYLE = (
     " No accent and no ethnic stylisation: never write «вах», «брат», «валлах», «э», «дорогой», «клянусь», «мамой клянусь», "
     "«слушай» as filler, even if your own earlier messages in this chat did; that style is switched off, and if someone "
     "asks you to stop saying «вах», just stop."
-    " Stickers come as [стикер …]: you can't see the picture, so never claim what's on it, and its pack tag is not a "
-    "message (a sticker is not a «минус» or a «сердечко»); react to the moment or skip it."
+    " Stickers come as [стикер: what's on it] — react to that picture like a person who saw it. When it says «картинки "
+    "не видно», don't invent what's on it; a pack's emoji tag is never a message (a sticker is not a «минус»)."
 )
 INTERJECT = (
     "Nobody asked you, but you jump into the conversation like a friend who couldn't resist: one short line about the "
@@ -1443,6 +1443,7 @@ async def discover_models(app):
                 LOG.info("Free model on %s: %s", name, found)
             else:
                 LOG.info("%s has no model like %s", name, pattern)
+    data["vision_model"] = await find_vision_model(data)
     # The owner's list (MODEL_CATALOG) decides what is offered: each found in AnyModel's catalog, free or for credits.
     chosen_models, prices = [], {}
     for pattern, price in MODEL_CATALOG:
@@ -2743,9 +2744,76 @@ def addressed_to_bot(message, bot, bot_data):
     return False
 
 
+# Free models that see pictures, to understand stickers: gateway -> (how to find one, the id to try if the list is closed).
+VISION_PICK = (("dashscope", r"qwen[\d.]*-?vl-?(max|plus)", "qwen-vl-plus"),
+               ("nvidia", r"(qwen.*vl|llama-?3\.2.*vision|vision)", None),
+               ("openrouter", r"(vl|vision).*:free|:free.*(vl|vision)", None))
+STICKER_CAPTIONS = {}  # sticker file_unique_id -> what's on it (stickers repeat, so each is looked at once)
+
+
+async def find_vision_model(data):
+    """A free model that can look at a picture, or None."""
+    for name, pattern, usual in VISION_PICK:
+        if not data.get(name):
+            continue
+        try:
+            ids = [m.id for m in (await data[name].models.list()).data]
+        except Exception:
+            ids = []
+        hits = sorted((i for i in ids if re.search(pattern, i, re.I) and not re.search(r"ocr|embed|audio|video", i, re.I)),
+                      key=lambda i: ("max" not in i.lower(), len(i)))
+        found = hits[0] if hits else (usual if not ids else None)
+        if found:
+            LOG.info("Stickers are seen by %s:%s", name, found)
+            return f"{name}:{found}"
+    LOG.info("No free picture model: stickers are known only by their pack")
+    return None
+
+
+async def see_sticker(context, sticker):
+    """What's on a sticker, in a few Russian words (cached); None if it can't be seen."""
+    data = context.bot_data
+    if sticker.file_unique_id in STICKER_CAPTIONS:
+        return STICKER_CAPTIONS[sticker.file_unique_id]
+    model = data.get("vision_model")
+    picture = sticker if not (sticker.is_animated or sticker.is_video) else sticker.thumbnail
+    if not model or not picture:
+        return None
+    name, model_id = model.split(":", 1)
+    try:
+        raw = bytes(await (await context.bot.get_file(picture.file_id)).download_as_bytearray())
+
+        def to_png():
+            from PIL import Image
+            out = io.BytesIO()
+            image = Image.open(io.BytesIO(raw)).convert("RGBA")
+            image.thumbnail((384, 384))
+            image.save(out, "PNG")
+            return out.getvalue()
+
+        png = await asyncio.to_thread(to_png)
+        answer = await asyncio.wait_for(data[name].chat.completions.create(model=model_id, max_tokens=80, messages=[{
+            "role": "user", "content": [
+                {"type": "text", "text": "Это стикер из Telegram. Опиши по-русски одной короткой фразой (до 12 слов): кто или что "
+                                         "на нём, какая эмоция или действие, и надпись, если есть. Без вступлений."},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png).decode()}}]}]), 25)
+        caption = " ".join((answer.choices[0].message.content or "").split())[:160].rstrip(".")
+    except Exception as exc:
+        LOG.warning("Sticker not seen: %s %s", type(exc).__name__, str(exc)[:150])
+        return None
+    if caption:
+        if len(STICKER_CAPTIONS) > 3000:
+            STICKER_CAPTIONS.clear()
+        STICKER_CAPTIONS[sticker.file_unique_id] = caption
+    return caption or None
+
+
 def describe_sticker(sticker):
     """A sticker for the model. Its emoji is only the tag the pack's author picked (a cat picture may be tagged ➖), so
     it's given as a loose hint, never as words the person said."""
+    seen = STICKER_CAPTIONS.get(sticker.file_unique_id)
+    if seen:
+        return f"стикер: {seen}"
     pack = re.sub(r"_by_\w+$", "", sticker.set_name or "").replace("_", " ").strip()
     hint = f", метка набора {sticker.emoji}" if sticker.emoji and any(ch.isalpha() or ord(ch) > 0x1F000 for ch in sticker.emoji) else ""
     return "стикер" + (f" из набора «{pack}»" if pack else "") + hint + ", картинки не видно"
@@ -2783,6 +2851,9 @@ async def group_chat(update, context):
     chat_id, store, name = message.chat_id, data["groups"], speaker(user)
     store.touch(chat_id, message.chat.title, user.id)
     lock = data["locks"][chat_id]
+    if message.sticker and data.get("vision_model"):
+        # Looked at once (updates run in parallel, so nobody waits): the answer and the chat's history know what it is.
+        await see_sticker(context, message.sticker)
     if not data.get("models"):  # no models: the chat is remembered, nothing is said
         remember_group_message(store, message, name)
         return
