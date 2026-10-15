@@ -20,7 +20,7 @@ EDGE_VOICE = os.environ.get("EDGE_VOICE", "ru-RU-DmitryNeural").strip() or "ru-R
 RU_VOICES = {"дмитрий": "ru-RU-DmitryNeural", "dmitry": "ru-RU-DmitryNeural",
              "светлана": "ru-RU-SvetlanaNeural", "svetlana": "ru-RU-SvetlanaNeural",
              "дария": "ru-RU-DariyaNeural", "dariya": "ru-RU-DariyaNeural"}
-RU_LABELS = {"дмитрий": "мужской, тёплый (по умолчанию)", "светлана": "женский, спокойный", "дария": "женский, живой"}
+RU_LABELS = {"дмитрий": "мужской, тёплый", "светлана": "женский, спокойный", "дария": "женский, живой"}
 EDGE_VOICES = {"ru": EDGE_VOICE, "en": "en-US-AndrewNeural", "uk": "uk-UA-OstapNeural", "kk": "kk-KZ-DauletNeural",
                "uz": "uz-UZ-SardorNeural", "az": "az-AZ-BabekNeural", "hy": "hy-AM-HaykNeural", "ka": "ka-GE-GiorgiNeural",
                "tr": "tr-TR-AhmetNeural", "de": "de-DE-ConradNeural", "es": "es-ES-AlvaroNeural", "fr": "fr-FR-HenriNeural"}

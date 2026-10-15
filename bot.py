@@ -3176,16 +3176,19 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(message, "Голос бота меняет только владелец.")
         return
     query = " ".join(context.args or []).strip()
-    if query.lower().startswith("fish"):
-        if not data.get("fish_key"):
-            await send(message, "Нужен ключ Fish Audio: FISH_API_KEY в .env.")
-            return
-        voice = fish_voice_id(query[4:].strip())
+    if query.lower().startswith("fish") or query.lower() in ("мой", "my", "реалистичный"):
+        rest = query[4:].strip() if query.lower().startswith("fish") else ""
+        voice = fish_voice_id(rest) if rest else (data.get("fish_voice") or "")
         if not voice:
-            await send(message, "Пришли так: /voice fish <ссылка на голос с fish.audio или его ID>, выключить: /voice fish off")
+            await send(message, "Пришли так: /voice fish <ссылка на голос с fish.audio или его ID>")
             return
-        data["connections"].set_meta("fish_voice", voice)
-        await send(message, "🎙 Голос Fish Audio " + ("выключен" if voice == "off" else "включён: " + voice))
+        if rest:
+            data["connections"].set_meta("fish_voice", voice)
+        data["connections"].set_meta("reply_voice", "fish")
+        try:
+            await speak(context, message, "Вах, брат, вот так я теперь звучу. Как тебе, нормально?")
+        except Exception as exc:
+            await send(message, f"Голос выбран, но озвучить не вышло: {type(exc).__name__}")
         return
     if query:
         voice = speech.RU_VOICES.get(query.lower()) or (query if re.fullmatch(r"[a-z]{2}-[A-Z]{2}-\w+Neural", query) else None)
@@ -3193,16 +3196,23 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send(message, "Такого голоса нет. Напиши /voice — покажу список.")
             return
         data["connections"].set_meta("edge_voice", voice)
+        data["connections"].set_meta("reply_voice", "edge")
         try:
             await speak(context, message, "Вах, брат, теперь я говорю этим голосом. Как тебе?")
         except Exception as exc:
             await send(message, f"Голос выбран: {voice}, но озвучить не вышло: {type(exc).__name__}")
         return
-    current = data["connections"].get_meta("edge_voice") or speech.EDGE_VOICE
+    reply = data["connections"].get_meta("reply_voice") or "fish"
+    fish = data["connections"].get_meta("fish_voice") or data.get("fish_voice") or ""
+    edge = data["connections"].get_meta("edge_voice") or speech.EDGE_VOICE
     names = {v: k for k, v in speech.RU_VOICES.items()}
-    await send(message, f"🎙 Сейчас голос: {names.get(current, current)}\n\nГолоса Microsoft (бесплатные):\n"
-               + "\n".join(f"• /voice {name} — {label}" for name, label in speech.RU_LABELS.items())
-               + "\n\nМожно любой голос Microsoft по id, например /voice en-US-AndrewNeural")
+    current = (f"реалистичный Fish Audio ({'твой голос' if fish == data.get('fish_voice') else fish})" if reply == "fish"
+               else f"Microsoft {names.get(edge, edge)}")
+    await send(message, f"🎙 Сейчас голос: {current}\n\n"
+               "Реалистичные (Fish Audio):\n• /voice мой — твой голос\n"
+               "• /voice fish <ссылка> — любой голос из библиотеки fish.audio (открой fish.audio, выбери голос, скопируй ссылку)\n\n"
+               "Простые (Microsoft, звучат роботнее):\n"
+               + "\n".join(f"• /voice {name} — {label}" for name, label in speech.RU_LABELS.items()))
 
 
 async def secretary_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3800,16 +3810,27 @@ async def owner_voice(data, text):
 
 
 async def speech_audio(data, text):
-    """OGG Opus speech in a free Microsoft neural voice (Dmitry by default, /voice picks another); a Fish Audio voice
-    (FISH_API_KEY + /voice fish …) if the owner set one up."""
-    fish = data["connections"].get_meta("fish_voice") or ""
-    if fish and fish != "off" and data.get("fish_key"):
-        try:
-            audio = await fish_speech(data["http"], data["fish_key"], fish, text, data.get("fish_model", ""))
-            LOG.info("Voice reply: Fish Audio voice %s", fish)
-            return audio
-        except Exception as exc:
-            LOG.warning("Fish Audio voice failed: %s %s", type(exc).__name__, str(exc)[:200])
+    """OGG Opus speech for voice replies. A realistic Fish Audio voice first (the owner's own voice unless /voice fish
+    picked another from fish.audio; /voice дмитрий switches to Microsoft), through FISH_API_KEY or the free Fish route on
+    the AnyModel key; the free Microsoft voice if Fish doesn't answer."""
+    chosen = data["connections"].get_meta("reply_voice") or "fish"
+    fish = data["connections"].get_meta("fish_voice") or data.get("fish_voice") or ""
+    if chosen == "fish" and fish and fish != "off":
+        if data.get("fish_key"):
+            try:
+                audio = await fish_speech(data["http"], data["fish_key"], fish, text, data.get("fish_model", ""))
+                LOG.info("Voice reply: Fish Audio voice %s", fish)
+                return audio
+            except Exception as exc:
+                LOG.warning("Fish Audio voice failed: %s %s", type(exc).__name__, str(exc)[:200])
+        if data.get("anymodel_key"):
+            try:
+                audio = await anymodel_speech(data["http"], data["anymodel_key"], ANYMODEL_FISH, text,
+                                              data.get("anymodel_api") or ANYMODEL_API, reference_id=fish)
+                LOG.info("Voice reply: Fish voice %s (free route)", fish)
+                return audio
+            except Exception as exc:
+                LOG.warning("Fish voice (free route) failed: %s %s", type(exc).__name__, str(exc)[:200])
     voice = data["connections"].get_meta("edge_voice") or None
     if voice and speech.voice_for(text) != speech.EDGE_VOICE and voice.startswith("ru-"):
         voice = None  # a Russian voice can't read English: the matching voice reads it
