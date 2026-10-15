@@ -40,6 +40,7 @@ import digest
 import game
 import hosting
 import links
+import mcpbridge
 import miniapp
 import persist
 import secretary as sec
@@ -1025,6 +1026,11 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     tools = chat_tools(toolbox) if provider not in no_tools else []
     if provider not in no_tools and context.bot_data.get("web_search") and context.bot_data.get("client"):
         tools.append(WEB_TOOL)
+    # Connected apps are remote MCP servers, which only OpenAI calls by itself: here the bot does it for the model.
+    servers = [d for d in toolbox.definitions() if d.get("type") == "mcp"] if toolbox and provider not in no_tools else []
+    apps = await mcpbridge.load(context.bot_data["http"], servers) if servers else None
+    if apps:
+        tools += apps.functions
     text, incomplete = "", False
     for _ in range(MAX_TOOL_ROUNDS):
         options = {"model": model[len(provider):], "stream": True, "messages": messages,
@@ -1072,6 +1078,13 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
             if call["name"] == "web_search":
                 live.status(SEARCH_NOTE)
                 output = await web_lookup(context.bot_data, str(args.get("query") or ""))
+            elif apps and apps.handles(call["name"]):
+                live.status(f"Работаю с {apps.app(call['name'])}")
+                try:
+                    output = await apps.call(call["name"], args)
+                except Exception as exc:
+                    LOG.warning("App tool %s failed: %s %s", call["name"], type(exc).__name__, str(exc)[:200])
+                    output = f"The app didn't answer ({type(exc).__name__}). Tell the user briefly."
             elif toolbox:
                 live.status(toolbox.status(call["name"], args))
                 output = await toolbox.run(call["name"], args)

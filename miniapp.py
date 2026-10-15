@@ -207,6 +207,10 @@ def make_handler(config):
                     cursor, total = None, None
                 else:
                     rest, cursor, total = pipedream.catalog(query, after)
+                    if not query and not after:  # everyday apps (Gmail, Calendar, Drive…) first, with their icons
+                        picks = featured(language)
+                        known = {a["slug"] for a in picks}
+                        rest = picks + [a for a in rest if a["slug"] not in known]
                 taken = {a["slug"] for a in own} | {"linear_app", "jira", "confluence"}  # same services as the direct ones
                 self._send(200, {"apps": own + [a for a in rest if a["slug"] not in taken], "next": cursor, "total": total,
                                  "enabled": pipedream.enabled})

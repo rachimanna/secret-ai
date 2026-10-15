@@ -828,6 +828,8 @@ const DISCOVER = lang === "ru" ? [
   ]],
 ];
 const FEATURED_HOME = ["github", "notion", "linear", "atlassian", "asana", "gmail"];
+// With the app catalog on, everyday apps come first: one tap, allow access, done — like Mira.
+const FEATURED_HOME_ALL = ["gmail", "google_calendar", "google_drive", "google_sheets", "notion", "youtube_data_api", "spotify", "github", "todoist"];
 
 /* ---------------- helpers ---------------- */
 const $ = id => document.getElementById(id);
@@ -1163,7 +1165,7 @@ function appRow(app, i = 0) {
   const on = app.slug === "github" ? state?.github?.connected : connectedSlugs().has(app.slug);
   return `<button class="row press" style="--i:${i}" data-app="${esc(app.slug)}">
     ${appIcon(app)}
-    <div class="body"><div class="t">${esc(app.name)}${!on && (app.direct || app.slug === "github") ? `<span class="badge on">${T.instant}</span>` : ""}</div><div class="d">${esc(app.description || "")}</div></div>
+    <div class="body"><div class="t">${esc(app.name)}${!on && !state?.apps?.enabled && (app.direct || app.slug === "github") ? `<span class="badge on">${T.instant}</span>` : ""}</div><div class="d">${esc(app.description || "")}</div></div>
     <span class="plus ${on ? "on" : ""}" data-plus="${esc(app.slug)}">${on ? ICON.check : ICON.plus}</span></button>`;
 }
 function renderHomeApps() {
@@ -1171,7 +1173,9 @@ function renderHomeApps() {
   if (state.github.connected) mine.unshift({ slug: "github", name: "GitHub", img: GH_LOGO, description: "@" + state.github.login });
   const seen = new Set(mine.map(a => a.slug));
   const pool = catalog.featured.length ? catalog.featured : [];
-  const picks = FEATURED_HOME.map(s => pool.find(a => a.slug === s)).filter(a => a && !seen.has(a.slug)).slice(0, Math.max(2, 5 - mine.length));
+  const order = state.apps.enabled ? FEATURED_HOME_ALL : FEATURED_HOME;
+  const picks = order.map(s => pool.find(a => a.slug === s)).filter(a => a && !seen.has(a.slug))
+    .slice(0, state.apps.enabled ? Math.max(4, 8 - mine.length) : Math.max(2, 5 - mine.length));
   $("home-apps").innerHTML = [...mine, ...picks].map(appRow).join("") +
     `<button class="row more press" id="more-apps"><span class="ic">${ICON.search}</span><span class="body">${T.more}</span></button>`;
   $("more-apps").onclick = () => switchTab("apps");
