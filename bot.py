@@ -983,16 +983,15 @@ def is_abacus(model):
 # list is closed)], what an id must contain). Each found model goes into the menu as a free one.
 EXTRA_PROVIDERS = {
     "nvidia": ("https://integrate.api.nvidia.com/v1",       # build.nvidia.com: DeepSeek, Kimi, Qwen for free
-               [(r"deepseek-(v\d|chat)", None), (r"kimi-k\d", None), (r"qwen-?3", None)], ""),
+               [(r"deepseek-(v\d|chat)", None), (r"qwen-?3", None)], ""),
     "openrouter": ("https://openrouter.ai/api/v1",           # openrouter.ai: only its ":free" models
-                   [(r"deepseek", None), (r"kimi", None), (r"qwen", None)], ":free"),
-    "opencode": ("https://opencode.ai/zen/v1", [(r"kimi[-._]?k2", "kimi-k2.6")], ""),
+                   [(r"deepseek", None), (r"qwen", None)], ":free"),
 }
 CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "groq:": "groq", "cerebras:": "cerebras",
                   **{f"{name}:": name for name in EXTRA_PROVIDERS}}
 # Very fast inference on special chips, free keys: GROQ_API_KEY (console.groq.com), CEREBRAS_API_KEY (cloud.cerebras.ai).
 FAST_PROVIDERS = {"groq": "https://api.groq.com/openai/v1", "cerebras": "https://api.cerebras.ai/v1"}
-FAST_PICK = (r"kimi[-._]?k2", r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
+FAST_PICK = (r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
 OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-6"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
 GPT_PICK = "gpt-6.1-sol"  # the second model in the picker
 
@@ -1410,7 +1409,13 @@ async def discover_models(app):
     free_on = [m for m in chosen_models if m not in prices]
     data.update(models=chosen_models, premium=prices, fallbacks=free_on)
     data["chat_default"] = data["model"] = (free_on or chosen_models or [None])[0]
-    saved = data["connections"].get_meta("default_model") if data.get("connections") else None
+    # The owner's choice of the default for everyone (DEFAULT_PICK), applied once; /speed set can change it later.
+    store = data.get("connections")
+    pick = next((m for m in free_on if re.search(DEFAULT_PICK, m, re.I)), None)
+    if store and pick and store.get_meta("default_pick") != DEFAULT_PICK:
+        store.set_meta("default_model", pick)
+        store.set_meta("default_pick", DEFAULT_PICK)
+    saved = store.get_meta("default_model") if store else None
     if saved in free_on:  # /speed set picked the fastest one
         data["chat_default"] = data["model"] = saved
         data["fallbacks"] = [saved] + [m for m in free_on if m != saved]
@@ -1429,6 +1434,7 @@ MODEL_CATALOG = [
     (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?astra", 4),         # GPT-6 Astra
     (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 3),           # GPT-6 Sol
 ]
+DEFAULT_PICK = r"grok[-._ ]?4[-._]7"  # the default model for everyone who hasn't picked one: Grok 4.7
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
 
