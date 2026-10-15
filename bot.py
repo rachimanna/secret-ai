@@ -2324,6 +2324,8 @@ async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(update.effective_message, "Забыл все премиум-эмодзи, теперь обычные.")
         return
     known = " ".join(PREMIUM_EMOJI) or "пока нет"
+    remember_reply(context, update, "[the bot showed /emoji: how to give it premium (custom) emoji; it uses them instead of "
+                                    "the plain ones in its answers, menus, notifications and buttons; it knows: " + known + "]")
     await send(update.effective_message,
                "✨ Премиум-эмодзи бота\n\nОтправь мне сообщение с премиум-эмодзи — можно сразу много, например "
                "✅ ❌ 🎁 💎 ⭐ 🔥 🎨 🎬 👑 ⚡ 📋 🗑 ➕ 🎲 🎟 ⏱ 🔖 📝 🌐 🧹 ⚠️ 🤖 — и я буду ставить их вместо обычных во всех "
@@ -2759,7 +2761,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
             memory.gen_refund(user_id, "credits", price)
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
-    answer = answer.strip()
+    answer = drop_accent(answer.strip())
     if not answer and toolbox.proposals:
         answer = ui(update, "Подготовил изменения — проверьте и подтвердите ниже.", "Changes are ready — review and confirm below.")
     if not answer:
@@ -3051,6 +3053,15 @@ def group_instructions(update):
 
 
 # The retired accent's filler words, cut out even if the model copies them from its old messages in the chat.
+LEADING_ACCENT = re.compile(r"(?i)^(?:вах|брат|братан|дорогой|слушай,\s*брат)[,!.]*\s+")
+
+
+def drop_accent(text):
+    """Private answers: the retired accent's filler cut out ("Брат, я не понял" -> "Я не понял")."""
+    cleaned = LEADING_ACCENT.sub("", ACCENT_WORDS.sub("", text))
+    return cleaned[:1].upper() + cleaned[1:] if cleaned and text[:1].isupper() else cleaned
+
+
 ACCENT_WORDS = re.compile(r"(?i)(?:^|(?<=[\s,.!?]))(?:вах|валлах|мамой клянусь)\b[,!.]*\s*|,\s*(?:брат|дорогой|э)\b(?=\s*[.,!?)]|\s*$|\s+\W)")
 
 
@@ -4508,8 +4519,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         learned = learn_premium(context, message)
         rest = re.sub(r"[\s\W_]", "", message.text or message.caption or "", flags=re.UNICODE)
         if learned and not rest:  # only emoji: a lesson, not a question
-            await send(message, f"✨ Запомнил премиум-эмодзи: {' '.join(learned)}\nТеперь они у меня в сообщениях и на кнопках. "
-                                f"Всего: {len(PREMIUM_EMOJI)}. Список — /emoji")
+            shown = (f"✨ Запомнил премиум-эмодзи: {' '.join(learned)}\nТеперь они стоят вместо обычных везде, где я их пишу: "
+                     f"в моих ответах, в меню (/promo), уведомлениях и на кнопках. Всего: {len(PREMIUM_EMOJI)}. Список — /emoji")
+            await send(message, shown)
+            remember_reply(context, update, shown)
             return
     if message.text and await promo_typed(update, context):
         return
