@@ -986,6 +986,8 @@ EXTRA_PROVIDERS = {
                [(r"deepseek-(v\d|chat)", None), (r"qwen-?3", None)], ""),
     "openrouter": ("https://openrouter.ai/api/v1",           # openrouter.ai: only its ":free" models
                    [(r"deepseek", None), (r"qwen", None)], ":free"),
+    "tokenharbor": ("https://api.tokenharbor.ai/v1",         # tokenharbor.ai: its ":free" models (TOKENHARBOR_BASE if the URL differs)
+                    [(r"deepseek", "deepseek-v4.1-flash:free"), (r"mimo", "mimo-v2.6-flash:free")], ":free"),
 }
 CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "groq:": "groq", "cerebras:": "cerebras",
                   **{f"{name}:": name for name in EXTRA_PROVIDERS}}
@@ -1103,6 +1105,10 @@ def model_identity(model):
                 f"you, say plainly that you are {pretty.strip()} by DeepSeek, working inside the Secret AI Telegram bot.")
     if "deepseek" in name and "free" in name:
         name = name.replace(":free", "")
+    if "mimo" in name:
+        pretty = "MiMo " + name.split(":")[0].split("mimo-", 1)[-1].replace("-", " ").upper().replace("FLASH", "Flash")
+        return (f" You run on {pretty}, a model made by Xiaomi. If someone asks which model you are or who created you, "
+                f"say plainly that you are {pretty} by Xiaomi, working inside the Secret AI Telegram bot.")
     if "kimi" in name:
         pretty = "Kimi " + "-".join(name.split("kimi-", 1)[-1].split("-")).upper().replace("-", " ")
         return (f" You run on {pretty}, a model made by Moonshot AI. If someone asks which model you are or who created you, "
@@ -1387,7 +1393,7 @@ async def discover_models(app):
             hits = sorted((i for i in ids if re.search(pattern, i, re.I) and must in i
                            and not re.search(r"code|coder|vision|vl\b|r1|reason|distill|embed|guard", i, re.I)),
                           key=lambda i: ([-int(n) for n in (re.findall(r"\d+", i.split("/")[-1]) + ["0"] * 3)[:3]], len(i)))
-            found = hits[0] if hits else (usual if not ids else None)
+            found = hits[0] if hits else (usual if (not ids or usual in ids) else None)
             if found:
                 extra.append(f"{name}:{found}")
                 LOG.info("Free model on %s: %s", name, found)
@@ -2051,7 +2057,7 @@ async def read_tiktok(update, context, question, url):
 
 def model_title(model):
     """claude-opus-5-5 -> Claude Opus 5.5, gpt-6-sol -> GPT-6 Sol, gemini-4-argon -> Gemini 4 Argon."""
-    name = model.split(":", 1)[-1].split("/")[-1]
+    name = model.split(":", 1)[-1].split("/")[-1].removesuffix(":free")
     gpt = re.match(r"gpt-([\d.]+)", name, re.I)
     words = name.split("-")
     out = []
@@ -2061,6 +2067,7 @@ def model_title(model):
         else:
             out.append(word)
     text = " ".join(w if w[:1].isdigit() else w.capitalize() for w in out)
+    text = text.replace("Deepseek", "DeepSeek").replace("Mimo", "MiMo")
     return re.sub(r"^Gpt ([\d.]+)", r"GPT-\1", text) if gpt else text
 
 
@@ -4863,7 +4870,8 @@ def main():
         if os.environ.get("ABACUS_API_KEY", "").strip() else None,
         **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), base_url=url, timeout=60, max_retries=1)
            for name, url in FAST_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
-        **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), base_url=spec[0], timeout=120, max_retries=1)
+        **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), timeout=120, max_retries=1,
+                             base_url=os.environ.get(f"{name.upper()}_BASE", "").strip().rstrip("/") or spec[0])
            for name, spec in EXTRA_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
         anymodel_chat=AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
                                   base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
