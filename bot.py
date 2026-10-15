@@ -11,6 +11,7 @@ import re
 import sqlite3
 import tempfile
 import time
+import traceback
 from types import SimpleNamespace
 from collections import defaultdict
 from http.server import ThreadingHTTPServer
@@ -1131,16 +1132,20 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
-            if choice.delta.content:
-                said += choice.delta.content
+            delta = getattr(choice, "delta", None)  # some gateways end the stream with a chunk without a delta
+            content = getattr(delta, "content", None)
+            if isinstance(content, list):  # or send content as parts
+                content = "".join(p.get("text", "") if isinstance(p, dict) else str(getattr(p, "text", "") or "") for p in content)
+            if content:
+                said += content
                 await live.update(prefix + text + said)
-            for call in choice.delta.tool_calls or []:
+            for call in getattr(delta, "tool_calls", None) or []:
                 slot = calls.setdefault(call.index or 0, {"id": "", "name": "", "arguments": ""})
                 slot["id"] = call.id or slot["id"]
                 if call.function:
                     slot["name"] += call.function.name or ""
                     slot["arguments"] += call.function.arguments or ""
-            finish = choice.finish_reason or finish
+            finish = getattr(choice, "finish_reason", None) or finish
         text += said
         incomplete = finish == "length"
         if not calls:
@@ -2416,7 +2421,11 @@ async def quick_answer(data, model, instructions, text, max_tokens=2000):
         response = await data[CHAT_PROVIDERS[provider]].chat.completions.create(
             model=model[len(provider):], max_tokens=max_tokens,
             messages=[{"role": "system", "content": instructions + model_identity(model)}, {"role": "user", "content": text}])
-        return response.choices[0].message.content or ""
+        message = response.choices[0].message if response.choices else None
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            content = "".join(p.get("text", "") if isinstance(p, dict) else str(getattr(p, "text", "") or "") for p in content)
+        return content or ""
     if not data.get("openai"):
         raise RuntimeError(f"no gateway for {model}")
     response = await data["client"].responses.create(model=data["model"] if provider else model, store=False,
@@ -3872,7 +3881,10 @@ async def unsupported(update, context):
 async def on_error(update, context):
     error = context.error
     # Never log exception bodies: they can contain tokens, URLs or user content.
-    LOG.error("Handler error: %s %s", type(error).__name__, str(error)[:300] if isinstance(error, MODEL_ERRORS) else "")
+    # Where it broke (file:line function) and, for model errors, what the provider said: enough to find a bug.
+    frames = traceback.extract_tb(error.__traceback__) if error else []
+    place = " ← ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in frames[-3:][::-1])
+    LOG.error("Handler error: %s at %s %s", type(error).__name__, place, str(error)[:300] if isinstance(error, MODEL_ERRORS) else "")
     if not isinstance(update, Update) or not update.effective_message or not update.effective_user or update.business_message:
         return
     try:
