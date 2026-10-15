@@ -979,10 +979,17 @@ def is_abacus(model):
 
 
 # Chat-completions gateways: model prefix -> the bot_data key of its client. AnyModel models also get function tools.
+# More gateways for free models (the key is <NAME>_API_KEY): name -> (base URL, [(how to find a model, id to try if the
+# list is closed)], what an id must contain). Each found model goes into the menu as a free one.
+EXTRA_PROVIDERS = {
+    "nvidia": ("https://integrate.api.nvidia.com/v1",       # build.nvidia.com: DeepSeek, Kimi, Qwen for free
+               [(r"deepseek-(v\d|chat)", None), (r"kimi-k\d", None), (r"qwen-?3", None)], ""),
+    "openrouter": ("https://openrouter.ai/api/v1",           # openrouter.ai: only its ":free" models
+                   [(r"deepseek", None), (r"kimi", None), (r"qwen", None)], ":free"),
+    "opencode": ("https://opencode.ai/zen/v1", [(r"kimi[-._]?k2", "kimi-k2.6")], ""),
+}
 CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "groq:": "groq", "cerebras:": "cerebras",
-                  "opencode:": "opencode"}
-# More gateways for single free models: name -> (base URL, the models to take from it, the id to try if the list is closed).
-EXTRA_PROVIDERS = {"opencode": ("https://opencode.ai/zen/v1", (r"kimi[-._]?k2",), "kimi-k2.6")}  # OPENCODE_API_KEY: Kimi
+                  **{f"{name}:": name for name in EXTRA_PROVIDERS}}
 # Very fast inference on special chips, free keys: GROQ_API_KEY (console.groq.com), CEREBRAS_API_KEY (cloud.cerebras.ai).
 FAST_PROVIDERS = {"groq": "https://api.groq.com/openai/v1", "cerebras": "https://api.cerebras.ai/v1"}
 FAST_PICK = (r"kimi[-._]?k2", r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
@@ -1095,6 +1102,8 @@ def model_identity(model):
         pretty = "DeepSeek " + name.split("deepseek", 1)[1].strip("-").replace("-", " ").upper()
         return (f" You run on {pretty.strip()}, a model made by DeepSeek. If someone asks which model you are or who created "
                 f"you, say plainly that you are {pretty.strip()} by DeepSeek, working inside the Secret AI Telegram bot.")
+    if "deepseek" in name and "free" in name:
+        name = name.replace(":free", "")
     if "kimi" in name:
         pretty = "Kimi " + "-".join(name.split("kimi-", 1)[-1].split("-")).upper().replace("-", " ")
         return (f" You run on {pretty}, a model made by Moonshot AI. If someone asks which model you are or who created you, "
@@ -1365,21 +1374,26 @@ async def discover_models(app):
             fast.append(f"{name}:{found}")
             LOG.info("Fast model on %s: %s", name, found)
     data["group_fast"] = fast[0] if fast else None
-    # Extra gateways (OpenCode Zen…): their model goes into the menu as a free one.
+    # Extra gateways (NVIDIA, OpenRouter's free models, OpenCode…): their models go into the menu as free ones.
     extra = []
-    for name, (_, patterns, usual) in EXTRA_PROVIDERS.items():
+    for name, (_, wanted, must) in EXTRA_PROVIDERS.items():
         if not data.get(name):
             continue
         try:
             ids = [m.id for m in (await data[name].models.list()).data]
         except Exception as exc:
-            LOG.warning("%s model list unavailable (%s); trying %s", name, type(exc).__name__, usual)
+            LOG.warning("%s model list unavailable: %s", name, type(exc).__name__)
             ids = []
-        hits = sorted((i for p in patterns for i in ids if re.search(p, i, re.I) and not re.search(r"code|coder|vision", i, re.I)),
-                      key=lambda i: ("free" not in i.lower(), [-int(n) for n in re.findall(r"\d+", i)][:3], len(i)))
-        model = f"{name}:{hits[0] if hits else usual}"
-        extra.append(model)
-        LOG.info("Model on %s: %s%s", name, model, "" if hits else " (not in its list, trying the usual id)")
+        for pattern, usual in wanted:
+            hits = sorted((i for i in ids if re.search(pattern, i, re.I) and must in i
+                           and not re.search(r"code|coder|vision|vl\b|r1|reason|distill|embed|guard", i, re.I)),
+                          key=lambda i: ([-int(n) for n in (re.findall(r"\d+", i.split("/")[-1]) + ["0"] * 3)[:3]], len(i)))
+            found = hits[0] if hits else (usual if not ids else None)
+            if found:
+                extra.append(f"{name}:{found}")
+                LOG.info("Free model on %s: %s", name, found)
+            else:
+                LOG.info("%s has no model like %s", name, pattern)
     # The owner's list (MODEL_CATALOG) decides what is offered: each found in AnyModel's catalog, free or for credits.
     chosen_models, prices = [], {}
     for pattern, price in MODEL_CATALOG:
