@@ -27,6 +27,8 @@ from openai import (
     BadRequestError,
     NotFoundError,
     PermissionDeniedError,
+    APIStatusError,
+    APITimeoutError,
     RateLimitError,
 )
 from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardButton, InlineKeyboardMarkup, InputFile, InputSticker, LabeledPrice, MenuButtonWebApp,
@@ -1256,17 +1258,22 @@ async def discover_models(app):
     if deepseek:
         deepseek = ANYMODEL_PREFIX + deepseek
         LOG.info("DeepSeek on AnyModel: %s", deepseek)
-    # Sonnet through AnyModel; Abacus only if AnyModel isn't set up.
-    sonnet = None
+    # Sonnet through AnyModel when its catalog has it, otherwise through Abacus; never a guessed id that isn't listed.
+    sonnet, sonnet_abacus = None, None
     pick = lambda ids: sorted((i for i in ids if SONNET_55.search(i)), key=lambda i: ("thinking" in i.lower(), "/" not in i, len(i)))
-    if data.get("anymodel_chat"):
-        found = pick(any_ids)
-        sonnet = ANYMODEL_PREFIX + (found[0] if found else "claude-sonnet-5-5")
-        LOG.info("Claude Sonnet 5.5 on AnyModel: %s%s", sonnet, "" if found else " (not in the list, trying the usual id)")
-    elif data.get("abacus"):
+    if any_ids and pick(any_ids):
+        sonnet = ANYMODEL_PREFIX + pick(any_ids)[0]
+        LOG.info("Claude Sonnet 5.5 on AnyModel: %s", sonnet)
+    elif data.get("anymodel_chat"):
+        claudes = [i for i in any_ids if "claude" in i.lower() or "sonnet" in i.lower()]
+        LOG.warning("AnyModel has no Claude Sonnet 5.5 (its Claude models: %s)", ", ".join(claudes[:15]) or "none")
+    if data.get("abacus"):
         found = pick(abacus_ids)
-        sonnet = ABACUS_PREFIX + (found[0] if found else "claude-sonnet-5-5")
-        LOG.info("Claude Sonnet 5.5 on Abacus: %s", sonnet)
+        if found or not abacus_ids:  # an empty list means the catalog didn't load: the usual id still works there
+            sonnet_abacus = ABACUS_PREFIX + (found[0] if found else "claude-sonnet-5-5")
+        sonnet = sonnet or sonnet_abacus
+        if sonnet == sonnet_abacus:
+            LOG.info("Claude Sonnet 5.5 on Abacus: %s", sonnet)
     # Web search without OpenAI: a search model (Perplexity Sonar…) on a gateway, if there is one.
     data["search_model"] = None
     if not data.get("openai") and data.get("web_wanted"):
@@ -1290,6 +1297,8 @@ async def discover_models(app):
             LOG.info("Grok is in neither the Abacus nor the AnyModel catalog")
     free = list(dict.fromkeys(m for m in (gemini, sonnet, claude, gpt, grok, deepseek) if m))  # the first one is the default
     free = free or [data["model"]]
+    # When a model fails, these answer instead, in this order (each tried once).
+    data["fallbacks"] = list(dict.fromkeys(m for m in (sonnet, sonnet_abacus, grok, *free) if m))
     data["premium"] = {m: price for m, price in find_premium(openai_ids, abacus_ids, any_ids).items() if m not in free}
     data["models"] = free + list(data["premium"])
     chosen = data.get("chat_override")
@@ -2049,7 +2058,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
         await live.finish(*await premium_offer(context, update, model, price))
         return
     paid = bool(price)
-    fallback, swapped, attempt = context.bot_data.get("chat_default"), None, model
+    chain = [m for m in context.bot_data.get("fallbacks") or [context.bot_data.get("chat_default")] if m and m != model]
+    swapped, attempt = None, model
     try:
         while True:
             try:
@@ -2060,12 +2070,13 @@ async def respond(update, context, target, content, saved_question, voice=False)
                 break
             except MODEL_ERRORS as exc:
                 LOG.warning("Model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:300])
-                if not fallback or attempt == fallback or live.text.strip():
+                if not chain or live.text.strip():
                     raise
                 if paid:  # the paid model didn't answer: nothing is charged, a free one answers instead
                     memory.gen_refund(user_id, "credits", price)
                     paid = False
-                swapped, attempt = (model_title(attempt), model_title(fallback)), fallback
+                attempt = chain.pop(0)
+                swapped = (model_title(model), model_title(attempt))
     except Stopped:  # what was written so far stays as a message, and in the history
         partial = live.text.strip()
         note = ui(update, "⏹ Остановлено", "⏹ Stopped")
@@ -2091,8 +2102,9 @@ async def respond(update, context, target, content, saved_question, voice=False)
         answer += ui(update, "\n\nОтвет достиг лимита. Напишите «продолжи».", "\n\nOutput limit reached. Ask me to continue.")
     memory.append_turn(user_id, saved_question, answer[:12000])
     if swapped:
-        answer = ui(update, f"⚠️ {swapped[0]} сейчас не отвечает (лимит у провайдера), ответил {swapped[1]}. Кредиты не списаны.\n\n",
-                    f"⚠️ {swapped[0]} isn't answering right now (provider limit), {swapped[1]} answered. No credits charged.\n\n") + answer
+        free = ui(update, " Кредиты не списаны.", " No credits charged.") if price else ""
+        answer = ui(update, f"⚠️ {swapped[0]} сейчас не отвечает, ответил {swapped[1]}.{free}\n\n",
+                    f"⚠️ {swapped[0]} isn't answering right now, {swapped[1]} answered.{free}\n\n") + answer
     text, files = extract_files(answer)
     if speak_only and not files and not toolbox.proposals:
         await live.stop()
@@ -2455,6 +2467,18 @@ def group_model(data, chat_id):
 
 
 async def quick_answer(data, model, instructions, text, max_tokens=2000):
+    """A short non-streamed answer; when the model fails, the next working one (data["fallbacks"]) answers."""
+    chain = [model] + [m for m in data.get("fallbacks") or [] if m != model]
+    for index, candidate in enumerate(chain):
+        try:
+            return await quick_answer_once(data, candidate, instructions, text, max_tokens)
+        except MODEL_ERRORS as exc:
+            if index == len(chain) - 1:
+                raise
+            LOG.warning("Model %s failed (%s); trying %s", candidate, type(exc).__name__, chain[index + 1])
+
+
+async def quick_answer_once(data, model, instructions, text, max_tokens=2000):
     """A short non-streamed answer from either an OpenAI model or a RouteLLM one."""
     if not data.get("openai") and not chat_provider(model):  # OpenAI is off: the default chat model does it
         model = data.get("chat_default") or model
@@ -3935,8 +3959,7 @@ async def on_error(update, context):
         LOG.warning("Error notification could not be delivered")
 
 
-MODEL_ERRORS = (RateLimitError, NotFoundError, PermissionDeniedError, AuthenticationError, BadRequestError, APIConnectionError,
-                cursor.CursorError)
+MODEL_ERRORS = (APIStatusError, APIConnectionError, APITimeoutError, cursor.CursorError)  # any provider failure
 
 
 def error_text(error):
