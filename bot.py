@@ -1320,7 +1320,7 @@ async def discover_models(app):
 
 # The models the bot offers. Empty: no models at all (the owner adds them one by one; until then the bot says so).
 # Keys: "sonnet", "grok", "opus", "fable", "astra", "gemini", "deepseek", "gpt", "cursor".
-ENABLED_MODELS = ["cursor"]
+ENABLED_MODELS = []
 
 
 class NoModels(Exception):
