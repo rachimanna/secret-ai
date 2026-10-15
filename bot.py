@@ -3658,9 +3658,9 @@ def error_text(error):
 
 COMMANDS = {
     "ru": [("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
-           ("export", "Скачать историю"), ("myid", "Мой Telegram ID")],
+           ("export", "Скачать историю"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
     "en": [("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
-           ("export", "Download history"), ("myid", "My Telegram ID")],
+           ("export", "Download history"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
 
