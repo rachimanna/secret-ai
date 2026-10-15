@@ -34,7 +34,7 @@ from fun import LEVELS, GroupStore, ago, MemeError, demotivator, quote_card, tik
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
-                          PreCheckoutQueryHandler, filters)
+                          PreCheckoutQueryHandler, TypeHandler, filters)
 
 import digest
 import game
@@ -633,6 +633,7 @@ class DraftReply:
         self.closed, self.wake = False, asyncio.Event()
         self.tasks = []
         self.note, self.done = None, []
+        self.halted = asyncio.Event()  # the user pressed Telegram's Stop button on this draft
 
     def status(self, note):
         """Show what the bot is doing (e.g. searching the web) with the thinking timer or under the text."""
@@ -640,7 +641,8 @@ class DraftReply:
 
     async def _push(self, text, entities=None):
         # An empty draft is Telegram's own see-through "Thinking… 5s" placeholder (Bot API 10).
-        await self.bot.send_message_draft(self.chat_id, self.draft_id, text or None, entities=entities or None)
+        await self.bot.send_message_draft(self.chat_id, self.draft_id, text or None, entities=entities or None,
+                                          api_kwargs=STOP_BUTTON)
         self.shown, self.pushed = text, time.monotonic()
 
     def frame(self):
@@ -672,9 +674,10 @@ class DraftReply:
     async def _push_thinking(self, text):
         await self.bot.do_api_request("sendRichMessageDraft", api_kwargs={
             "chat_id": self.chat_id, "draft_id": self.draft_id,
-            "rich_message": {"blocks": [{"type": "thinking", "text": text}], "skip_entity_detection": True}})
+            "rich_message": {"blocks": [{"type": "thinking", "text": text}], "skip_entity_detection": True}, **STOP_BUTTON})
 
     async def start(self):
+        LIVE_DRAFTS[(self.chat_id, self.draft_id)] = self
         await self._show_frame()
         self.tasks = [asyncio.create_task(self._loop()), asyncio.create_task(typing_loop(self.target, self.action))]
 
@@ -731,6 +734,7 @@ class DraftReply:
         self.text = text
 
     async def stop(self):
+        LIVE_DRAFTS.pop((self.chat_id, self.draft_id), None)
         self.closed = True
         self.wake.set()
         # Let the draft loop finish its current step so a part is never sent twice.
@@ -783,6 +787,50 @@ class DraftReply:
                 await send(self.target, rest + "\n\n" + note)
         except TelegramError:
             LOG.warning("Could not clean up an interrupted reply")
+
+
+LIVE_DRAFTS = {}  # (chat id, draft id) -> the DraftReply still streaming there
+# Telegram's own Stop button on a streaming draft (Bot API: can_stop); the preview stays until we send the message.
+STOP_BUTTON = {"can_stop": True, "keep_on_stop": True}
+
+
+class Stopped(Exception):
+    """The user pressed Stop while the answer was being written."""
+
+
+async def stop_generation(update, context):
+    """Telegram's stopped_message_generation update: halt the answer behind that draft."""
+    stop = (update.api_kwargs or {}).get("stopped_message_generation")
+    if not isinstance(stop, dict):
+        return
+    try:
+        key = (int((stop.get("chat") or {}).get("id")), int(stop.get("draft_id")))
+    except (TypeError, ValueError):
+        return
+    draft = LIVE_DRAFTS.get(key)
+    if draft:
+        LOG.info("The user stopped an answer")
+        draft.halted.set()
+
+
+async def unless_stopped(live, coro):
+    """Await the answer; raises Stopped (and cancels the work) when the user presses Stop on the draft."""
+    halted = getattr(live, "halted", None)
+    if halted is None:
+        return await coro
+    work, waiter = asyncio.ensure_future(coro), asyncio.ensure_future(halted.wait())
+    try:
+        done, _ = await asyncio.wait({work, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+        work.cancel()
+        waiter.cancel()
+        raise
+    waiter.cancel()
+    if work in done:
+        return work.result()
+    work.cancel()
+    await asyncio.gather(work, return_exceptions=True)
+    raise Stopped
 
 
 class SilentReply:
@@ -1829,10 +1877,18 @@ async def respond(update, context, target, content, saved_question, voice=False)
         oldest = history[-1]["id"] + 1 if history else None
     instructions += recall_note(memory.recall(user_id, saved_question, oldest))
     try:
-        answer, incomplete = await generate(
+        answer, incomplete = await unless_stopped(live, generate(
             context, live, toolbox, model=user_model(context.bot_data, user_id), instructions=instructions,
             input=shown + [{"role": "user", "content": content}],
-            store=False, max_output_tokens=32000)
+            store=False, max_output_tokens=32000))
+    except Stopped:  # what was written so far stays as a message, and in the history
+        partial = live.text.strip()
+        note = ui(update, "⏹ Остановлено", "⏹ Stopped")
+        await live.abort(note)
+        if not partial[live.offset:].strip():
+            await send(target, note)
+        memory.append_turn(user_id, saved_question, (partial[:12000] + " [stopped by the user]").strip())
+        return
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
@@ -4076,6 +4132,7 @@ def main():
         locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},
         biz_activity=sec.Activity())
     # Business updates first: their messages must not reach the regular chat handlers.
+    app.add_handler(TypeHandler(Update, stop_generation, block=False), group=-2)
     app.add_handler(BusinessConnectionHandler(business_connection))
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGES, business_message))
     app.add_handler(CommandHandler("start", start))
@@ -4119,7 +4176,8 @@ def main():
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        app.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query", "business_connection", "business_message"], drop_pending_updates=False, bootstrap_retries=3)
+        app.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query", "business_connection", "business_message",
+                                        "stopped_message_generation"], drop_pending_updates=False, bootstrap_retries=3)
     finally:
         server.shutdown()
         server.server_close()
