@@ -1255,10 +1255,14 @@ def premium_prices():
 
 
 def find_premium(openai_ids, abacus_ids, any_ids):
-    """{model id: credits per answer} for the paid models this account really has (OpenAI, then Abacus, then AnyModel)."""
+    """{model id: credits per answer} for the paid models this account really has: Claude from Abacus/AnyModel first, GPT from
+    OpenAI first."""
     found, prices = {}, premium_prices()
     for key, (pattern, _) in PREMIUM.items():
-        for prefix, ids in (("", openai_ids), (ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids)):
+        # Claude models come from Anthropic's gateways (Abacus, AnyModel) first, never OpenAI's key unless nothing else has them.
+        sources = ((ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids), ("", openai_ids)) if key in ("fable", "opus") else \
+            (("", openai_ids), (ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids))
+        for prefix, ids in sources:
             hits = sorted((i for i in ids if pattern.search(i) and not re.search(r"mini|nano|image|audio|\d{4}-\d\d-\d\d", i)),
                           key=lambda i: ("thinking" in i.lower(), "preview" in i.lower(), len(i)))
             if hits:
@@ -1849,6 +1853,9 @@ async def premium_offer(context, update, model, price):
 
 def user_model(bot_data, user_id):
     chosen = bot_data["memory"].model(user_id)
+    if chosen and chosen not in bot_data["models"]:  # the same model now served by another gateway (e.g. Opus moved off OpenAI)
+        bare = chosen.split(":", 1)[-1].split("/")[-1]
+        chosen = next((m for m in bot_data["models"] if m.split(":", 1)[-1].split("/")[-1] == bare), None)
     return chosen if chosen in bot_data["models"] else bot_data.get("chat_default") or bot_data["model"]
 
 
@@ -1960,11 +1967,23 @@ async def respond(update, context, target, content, saved_question, voice=False)
         await live.finish(*await premium_offer(context, update, model, price))
         return
     paid = bool(price)
+    fallback, swapped, attempt = context.bot_data.get("chat_default"), None, model
     try:
-        answer, incomplete = await unless_stopped(live, generate(
-            context, live, toolbox, model=model, instructions=instructions,
-            input=shown + [{"role": "user", "content": content}],
-            store=False, max_output_tokens=32000))
+        while True:
+            try:
+                answer, incomplete = await unless_stopped(live, generate(
+                    context, live, toolbox, model=attempt, instructions=instructions,
+                    input=shown + [{"role": "user", "content": content}],
+                    store=False, max_output_tokens=32000))
+                break
+            except MODEL_ERRORS as exc:
+                LOG.warning("Model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:300])
+                if not fallback or attempt == fallback or live.text.strip():
+                    raise
+                if paid:  # the paid model didn't answer: nothing is charged, a free one answers instead
+                    memory.gen_refund(user_id, "credits", price)
+                    paid = False
+                swapped, attempt = (model_title(attempt), model_title(fallback)), fallback
     except Stopped:  # what was written so far stays as a message, and in the history
         partial = live.text.strip()
         note = ui(update, "⏹ Остановлено", "⏹ Stopped")
@@ -1989,6 +2008,9 @@ async def respond(update, context, target, content, saved_question, voice=False)
     if incomplete:
         answer += ui(update, "\n\nОтвет достиг лимита. Напишите «продолжи».", "\n\nOutput limit reached. Ask me to continue.")
     memory.append_turn(user_id, saved_question, answer[:12000])
+    if swapped:
+        answer = ui(update, f"⚠️ {swapped[0]} сейчас не отвечает (лимит у провайдера), ответил {swapped[1]}. Кредиты не списаны.\n\n",
+                    f"⚠️ {swapped[0]} isn't answering right now (provider limit), {swapped[1]} answered. No credits charged.\n\n") + answer
     text, files = extract_files(answer)
     if speak_only and not files and not toolbox.proposals:
         await live.stop()
@@ -3807,7 +3829,7 @@ async def unsupported(update, context):
 async def on_error(update, context):
     error = context.error
     # Never log exception bodies: they can contain tokens, URLs or user content.
-    LOG.error("Handler error: %s", type(error).__name__)
+    LOG.error("Handler error: %s %s", type(error).__name__, str(error)[:300] if isinstance(error, MODEL_ERRORS) else "")
     if not isinstance(update, Update) or not update.effective_message or not update.effective_user or update.business_message:
         return
     try:
@@ -3816,13 +3838,16 @@ async def on_error(update, context):
         LOG.warning("Error notification could not be delivered")
 
 
+MODEL_ERRORS = (RateLimitError, NotFoundError, PermissionDeniedError, AuthenticationError, BadRequestError, APIConnectionError)
+
+
 def error_text(error):
     """(Russian, English) explanation of a failed answer."""
     ru, en = "Не удалось обработать сообщение. Попробуйте ещё раз чуть позже.", "Couldn't process your message. Please try again later."
     if isinstance(error, RateLimitError):
-        ru, en = "Достигнут лимит OpenAI или закончился баланс API. Попробуйте позже или сообщите владельцу бота.", "OpenAI rate or billing limit reached. Try later or contact the bot owner."
+        ru, en = "Модель сейчас перегружена или у провайдера закончился лимит. Попробуй чуть позже или выбери другую модель в Secret AI.", "The model is overloaded or its provider's limit is reached. Try later or pick another model in Secret AI."
     elif isinstance(error, (AuthenticationError, NotFoundError, PermissionDeniedError)):
-        ru, en = "Проверьте с владельцем бота ключ OpenAI и доступ к выбранной модели.", "Ask the owner to check the OpenAI key and model access."
+        ru, en = "Выбранная модель недоступна на ключе бота. Выбери другую модель в Secret AI.", "The chosen model isn't available on the bot's key. Pick another model in Secret AI."
     elif isinstance(error, BadRequestError):
         ru, en = "OpenAI отклонил запрос. Попробуйте более короткий текст или другое фото/голосовое.", "OpenAI rejected the request. Try shorter text or different media."
     elif isinstance(error, APIConnectionError):
