@@ -19,6 +19,7 @@ Telegram-бот на Python: текстовые диалоги через OpenAI
 | --- | --- |
 | `TELEGRAM_TOKEN` | Обязательно: токен от @BotFather |
 | `CURSOR_API_KEY` | Необязательно: ключ из cursor.com → Settings → API. Бот сам ставит Cursor CLI и добавляет модели из `CURSOR_MODELS` (по умолчанию `grok-4.7`). Видны только владельцу; `CURSOR_PUBLIC=1` открывает их всем — это личная подписка, Cursor может заблокировать аккаунт за раздачу доступа |
+| `GROQ_API_KEY`, `CEREBRAS_API_KEY` | Необязательно, бесплатно (console.groq.com, cloud.cerebras.ai): очень быстрые модели (Kimi K2, GPT-OSS, Llama). Бот сам берёт лучшую, отвечает ею в группах и держит запасной |
 | `OPENAI_API_KEY` | Необязательно. OpenAI выключен, пока не задан `OPENAI_ENABLED=1`: чат идёт через Abacus (Opus, Fable) и AnyModel (Sonnet), голосовые распознаёт локальный Whisper (`WHISPER_MODEL`, по умолчанию `base`), озвучка — голос AnyModel или бесплатный голос Microsoft (`EDGE_VOICE`, по умолчанию `ru-RU-DmitryNeural`), поиск в интернете — модель Perplexity Sonar на AnyModel/Abacus, если она есть |
 | `OPENAI_MODEL` | По умолчанию `gpt-5.6-luna`; для фото нужна vision-модель |
 | `ALLOWED_USERS` | Telegram ID через запятую, например `123456789,987654321`. Пусто — доступ всем |

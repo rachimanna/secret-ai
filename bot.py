@@ -147,7 +147,8 @@ GROUP_TYPES = ("group", "supergroup")
 # Uninvited posts, like Sglypa: after every N members' messages, N drawn from the group's level.
 GROUP_EVERY = {"rare": (30, 60), "normal": (12, 25), "often": (5, 12)}
 GROUP_RANDOM_PAUSE = 40  # at least this many seconds between two uninvited posts
-USERNAME_REFRESH = 300  # the bot's @username is re-read so a renamed bot still reacts to mentions
+USERNAME_REFRESH = 300
+GROUP_PARALLEL = 3  # answers being written at once in one group (others wait); uninvited remarks still go one by one  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
 HISTORY_LIMIT = 1000  # the newest messages the model reads in full
 KEEP_MESSAGES = 200_000  # kept per person ("forever"); older ones come back by search when the talk touches them
@@ -978,7 +979,10 @@ def is_abacus(model):
 
 
 # Chat-completions gateways: model prefix -> the bot_data key of its client. AnyModel models also get function tools.
-CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat"}
+CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "groq:": "groq", "cerebras:": "cerebras"}
+# Very fast inference on special chips, free keys: GROQ_API_KEY (console.groq.com), CEREBRAS_API_KEY (cloud.cerebras.ai).
+FAST_PROVIDERS = {"groq": "https://api.groq.com/openai/v1", "cerebras": "https://api.cerebras.ai/v1"}
+FAST_PICK = (r"kimi[-._]?k2", r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
 OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-6"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
 GPT_PICK = "gpt-6.1-sol"  # the second model in the picker
 
@@ -1321,6 +1325,21 @@ async def discover_models(app):
     data["chat_default"] = chosen if chosen in free else free[0]
     if not data.get("openai"):
         data["model"] = data["chat_default"]  # every fallback to "the main model" stays off OpenAI
+    # Fast providers (Groq, Cerebras): their best chat model is free, answers groups first and backs the others up.
+    fast = []
+    for name in FAST_PROVIDERS:
+        if not data.get(name):
+            continue
+        try:
+            ids = [m.id for m in (await data[name].models.list()).data]
+        except Exception as exc:
+            LOG.warning("%s model list unavailable: %s", name, type(exc).__name__)
+            continue
+        found = next((i for pattern in FAST_PICK for i in ids if re.search(pattern, i, re.I)), None)
+        if found:
+            fast.append(f"{name}:{found}")
+            LOG.info("Fast model on %s: %s", name, found)
+    data["group_fast"] = fast[0] if fast else None
     # The owner's list (MODEL_CATALOG) decides what is offered: each found in AnyModel's catalog, free or for credits.
     chosen_models, prices = [], {}
     for pattern, price in MODEL_CATALOG:
@@ -1333,6 +1352,7 @@ async def discover_models(app):
         if price:
             prices[model] = price
         LOG.info("Model: %s (%s)", model, f"{price} credits an answer" if price else "free")
+    chosen_models += [m for m in fast if m not in chosen_models]
     free_on = [m for m in chosen_models if m not in prices]
     data.update(models=chosen_models, premium=prices, fallbacks=free_on)
     data["chat_default"] = data["model"] = (free_on or chosen_models or [None])[0]
@@ -2243,7 +2263,7 @@ class GroupReply:
 
     def __init__(self, target, config):
         self.target, self.config = target, config
-        self.text, self.message, self.typing = "", None, None
+        self.text, self.message, self.typing, self.edited = "", None, None, 0.0
 
     def status(self, note):
         pass
@@ -2254,7 +2274,18 @@ class GroupReply:
         self.typing = asyncio.create_task(typing_loop(self.target, ChatAction.TYPING))
 
     async def update(self, text):
+        """The answer shows up as it's written: the "…" message is edited every ~1.5 s (code waits for the end)."""
         self.text = text
+        now = time.monotonic()
+        if not self.message or not text.strip() or "```" in text or len(text) > 3500 or now - self.edited < STREAM_EDIT_INTERVAL + 0.3:
+            return
+        self.edited = now
+        try:
+            await self.message.edit_text(humanize(text) + CURSOR, parse_mode=None)
+        except RetryAfter as exc:
+            self.edited = now + seconds(exc.retry_after)
+        except TelegramError:
+            pass
 
     async def _stop(self):
         if self.typing:
@@ -2357,7 +2388,7 @@ async def group_chat(update, context):
             except Exception as exc:  # an uninvited joke that failed is no reason to bother the chat
                 LOG.warning("Group surprise failed: %s", type(exc).__name__)
         return
-    async with lock:
+    async with data.setdefault("group_slots", {}).setdefault(chat_id, asyncio.Semaphore(GROUP_PARALLEL)):
         if await group_generation(update, context):
             return
         if await meme_request(update, context):
@@ -2563,7 +2594,9 @@ async def group_surprise(context, message, user):
 def group_model(data, chat_id):
     """The model a group talks with: its own choice from the Mini App if still offered, else the bot's default."""
     chosen = data["groups"].model(chat_id)
-    return chosen if chosen and chosen in free_models(data) else data.get("chat_default") or data["model"]
+    if chosen and chosen in free_models(data):
+        return chosen
+    return data.get("group_fast") or data.get("chat_default") or data["model"]  # groups want speed: the fast model first
 
 
 async def quick_answer(data, model, instructions, text, max_tokens=2000):
@@ -4692,6 +4725,8 @@ def main():
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
         abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
         if os.environ.get("ABACUS_API_KEY", "").strip() else None,
+        **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), base_url=url, timeout=60, max_retries=1)
+           for name, url in FAST_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
         anymodel_chat=AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
                                   base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
                                   timeout=180, max_retries=2) if os.environ.get("ANYMODEL_API_KEY", "").strip() else None,

@@ -15,8 +15,8 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 ASSETS = Path(__file__).with_name("assets")
 GROUP_MESSAGES = 300_000  # kept per chat ("forever"); the model sees the last GROUP_CONTEXT and searches the rest
-GROUP_CONTEXT = 600
-GROUP_CONTEXT_CHARS = 120_000  # and at most this much text of them, newest first
+GROUP_CONTEXT = 150
+GROUP_CONTEXT_CHARS = 16_000  # and at most this much text of them, newest first (older ones come back by search)
 MEDIA_PER_KIND = 150
 PHRASES_PER_CHAT = 400
 # How often the bot does something on its own in a group ("Сглыпа-режим"): chance per message nobody addressed to it.
