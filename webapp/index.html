@@ -1004,7 +1004,7 @@ const T = {
     tabAgent: "Агент", tabDiscover: "Открытия", tabGen: "Генерация", tabApps: "Приложения", tabSettings: "Настройки",
     gen: "Генерация", genSub: "Фото, видео и редактирование твоих фото — результат придёт в чат", myGen: "Мои генерации",
     freeToday: (n, max) => `${n} из ${max} фото бесплатно сегодня`, credits: n => `${n} кредитов`, unlimited: "Без ограничений · вы владелец",
-    topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны", showAll: "Показать все", tplPhoto: "Загрузите своё фото", tplPhotoSub: "лучше всего селфи, лицо крупно", tplOr: "или опишите, кого изобразить", tplChange: "Другое фото",
+    topUp: "Пополнить", makePhoto: "Создать фото", makeVideo: "Создать видео", templates: "Шаблоны", promo: "Промокод", promoSub: "Введите код и получите кредиты", promoPh: "Например, START", promoGo: "Активировать", showAll: "Показать все", tplPhoto: "Загрузите своё фото", tplPhotoSub: "лучше всего селфи, лицо крупно", tplOr: "или опишите, кого изобразить", tplChange: "Другое фото",
     photoSub: "Картинка по описанию — Nano Banana",
     makeEdit: "Изменить фото", editSub: "Убрать людей, совместить фото, сменить фон",
     editLead: "Добавь до 4 фото и напиши, что сделать. Лица и детали останутся как есть.",
@@ -1085,7 +1085,7 @@ const T = {
     tabAgent: "Agent", tabDiscover: "Discover", tabGen: "Create", tabApps: "Apps", tabSettings: "Settings",
     gen: "Create", genSub: "Pictures, videos and edits of your photos — the result arrives in the chat", myGen: "My generations",
     freeToday: (n, max) => `${n} of ${max} free photos today`, credits: n => `${n} credits`, unlimited: "Unlimited · you're the owner",
-    topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates", showAll: "Show all", tplPhoto: "Upload your photo", tplPhotoSub: "a selfie works best, face close up", tplOr: "or describe who to show", tplChange: "Another photo",
+    topUp: "Top up", makePhoto: "Create a photo", makeVideo: "Create a video", templates: "Templates", promo: "Promo code", promoSub: "Enter a code to get credits", promoPh: "For example, START", promoGo: "Activate", showAll: "Show all", tplPhoto: "Upload your photo", tplPhotoSub: "a selfie works best, face close up", tplOr: "or describe who to show", tplChange: "Another photo",
     photoSub: "A picture from a description — Nano Banana",
     makeEdit: "Edit photos", editSub: "Remove people, put photos together, change the background",
     editLead: "Add up to 4 photos and say what to do. Faces and details stay as they are.",
@@ -1285,7 +1285,7 @@ function toast(text, icon = "") {
 async function api(path, body = {}) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg?.initData || "" }, body: JSON.stringify(body) });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw Object.assign(new Error(data.error || "error"), { code: data.error });
+  if (!res.ok) throw Object.assign(new Error(data.error || "error"), { code: data.error, detail: data.detail });
   return data;
 }
 function errorText(e) {
@@ -2223,6 +2223,7 @@ function renderGen() {
       <button class="row press" data-gen="photo"><div class="ic sym">${GEN_ICON.photo}</div><div class="body"><div class="t">${T.makePhoto}</div><div class="d">${T.photoSub}</div></div>${ICON.chev}</button>
       <button class="row press" data-gen="video"><div class="ic sym">${GEN_ICON.video}</div><div class="body"><div class="t">${T.makeVideo}</div><div class="d">${state.gen.video_free ? T.videoSubFree : T.videoSub}</div></div>${ICON.chev}</button>
       <button class="row press" data-edit="1"><div class="ic sym">${EDIT_ICON}</div><div class="body"><div class="t">${T.makeEdit}</div><div class="d">${T.editSub}</div></div>${ICON.chev}</button>
+      <button class="row press" id="gen-promo"><div class="ic sym">${PROMO_ICON}</div><div class="body"><div class="t">${T.promo}</div><div class="d">${T.promoSub}</div></div>${ICON.chev}</button>
     </div>
     <div class="section"><div class="sec-head"><h2>${T.templates}</h2>${GEN_TEMPLATES.length > 5 ? `<button class="press" id="tpl-all">${T.showAll}</button>` : ""}</div>
       ${tplMosaic(GEN_TEMPLATES.slice(0, 5).map((_, i) => i))}</div>`;
@@ -2230,10 +2231,30 @@ function renderGen() {
   $("gen-setup")?.addEventListener("click", openGenKeySheet);
   $("gen").querySelectorAll("[data-gen]").forEach(b => b.onclick = () => openGenSheet(b.dataset.gen));
   $("gen").querySelector("[data-edit]").onclick = openEditSheet;
+  $("gen-promo").onclick = openPromoSheet;
   bindTemplates($("gen"));
   $("tpl-all")?.addEventListener("click", openAllTemplates);
 }
 
+const PROMO_ICON = '<svg class="i" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8c-1.5-3-5.5-4-5.5-1.5S10 8 12 8zm0 0c1.5-3 5.5-4 5.5-1.5S14 8 12 8z"/></svg>';
+function openPromoSheet() {
+  openSheet(`<div class="head"><div class="big letter" style="background:var(--accent)">${PROMO_ICON.replace('class="i"', 'class="i" style="width:40px;height:40px;stroke:#fff"')}</div>
+      <h3>${T.promo}</h3><p class="lead">${T.promoSub}</p></div>
+    <input class="field" id="promo-code" maxlength="32" autocomplete="off" autocapitalize="characters" placeholder="${T.promoPh}" style="text-transform:uppercase;text-align:center;letter-spacing:.08em;font-weight:600">
+    <button class="btn" id="promo-go">${T.promoGo}</button>`);
+  const go = async () => {
+    const code = $("promo-code").value.trim();
+    if (!code) { $("promo-code").focus(); haptic("warning"); return; }
+    const b = $("promo-go"); b.disabled = true; b.innerHTML = '<span class="spinner"></span>';
+    try {
+      const res = await api("/api/promo", { code });
+      state.gen = res.gen; renderGen(); closeSheet(); toast(res.text); haptic("success");
+    } catch (e) { b.disabled = false; b.textContent = T.promoGo; toast(e.detail || errorText(e)); haptic("error"); }
+  };
+  $("promo-go").onclick = go;
+  $("promo-code").onkeydown = e => { if (e.key === "Enter") go(); };
+  setTimeout(() => $("promo-code")?.focus(), 350);
+}
 const EDIT_ICON = '<svg class="i" viewBox="0 0 24 24"><path d="m4 20 10-10M14 10l2-2M18 3l.6 1.6L20 5.2l-1.4.6L18 7.5l-.6-1.7L16 5.2l1.4-.6z"/><rect x="3" y="12" width="9" height="9" rx="2"/></svg>';
 function shrinkPhoto(file) {
   // Big phone photos are scaled down in the browser (max 1536 px) so the upload stays small.

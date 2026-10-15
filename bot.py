@@ -216,6 +216,11 @@ class Memory:
         self.db.execute("CREATE TABLE IF NOT EXISTS gen_credits (user_id INTEGER PRIMARY KEY, credits INTEGER NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS gen_payments (charge_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, "
                         "credits INTEGER NOT NULL, stars INTEGER NOT NULL)")
+        # Promo codes: credits for a code, a limited number of people, each person once; an optional end date.
+        self.db.execute("CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, credits INTEGER NOT NULL, "
+                        "max_uses INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, expires INTEGER, created INTEGER NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS promo_uses (code TEXT NOT NULL, user_id INTEGER NOT NULL, at INTEGER NOT NULL, "
+                        "PRIMARY KEY (code, user_id))")
         self.db.commit()
 
     def history(self, user_id):
@@ -328,6 +333,40 @@ class Memory:
     @staticmethod
     def _today():
         return time.strftime("%Y-%m-%d", time.gmtime())
+
+    def promo_create(self, code, credits, max_uses, days=None):
+        """A new code (or the same code replaced); max_uses 0 = no limit."""
+        now = int(time.time())
+        with self.db:
+            self.db.execute("INSERT INTO promo_codes(code, credits, max_uses, used, expires, created) VALUES (?, ?, ?, 0, ?, ?) "
+                            "ON CONFLICT(code) DO UPDATE SET credits=excluded.credits, max_uses=excluded.max_uses, "
+                            "expires=excluded.expires", (code, credits, max_uses, now + days * 86400 if days else None, now))
+
+    def promo_redeem(self, user_id, code):
+        """('ok', credits) or (reason, 0): 'unknown', 'expired', 'empty', 'used'. Atomic: never twice, never over the limit."""
+        now = int(time.time())
+        with self.db:
+            row = self.db.execute("SELECT credits, max_uses, used, expires FROM promo_codes WHERE code=?", (code,)).fetchone()
+            if not row:
+                return "unknown", 0
+            credits, max_uses, used, expires = row
+            if expires and expires < now:
+                return "expired", 0
+            if self.db.execute("SELECT 1 FROM promo_uses WHERE code=? AND user_id=?", (code, user_id)).fetchone():
+                return "used", 0
+            taken = self.db.execute("UPDATE promo_codes SET used=used+1 WHERE code=? AND (max_uses=0 OR used<max_uses)", (code,))
+            if not taken.rowcount:
+                return "empty", 0
+            self.db.execute("INSERT INTO promo_uses(code, user_id, at) VALUES (?, ?, ?)", (code, user_id, now))
+            self._add_credits(user_id, credits)
+        return "ok", credits
+
+    def promo_list(self):
+        return self.db.execute("SELECT code, credits, max_uses, used, expires FROM promo_codes ORDER BY created DESC").fetchall()
+
+    def promo_delete(self, code):
+        with self.db:
+            return self.db.execute("DELETE FROM promo_codes WHERE code=?", (code,)).rowcount > 0
 
     def gen_info(self, user_id):
         """(free photos left today, credits)."""
@@ -1875,6 +1914,80 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with user_lock(context, update.effective_user.id):
             context.bot_data["memory"].reset(update.effective_user.id)
         await send(update.effective_message, ui(update, "🧹 Память очищена. Начнём новый диалог!", "🧹 Memory cleared. Let's start a new conversation!"))
+
+
+PROMO_TRIES = 8  # wrong codes a person may try per hour (no guessing codes by brute force)
+
+
+def promo_clean(code):
+    return re.sub(r"[^A-Z0-9_-]", "", (code or "").upper())[:32]
+
+
+def redeem_promo(data, user_id, code, ru):
+    """Apply a code for a person; returns (ok, text)."""
+    code = promo_clean(code)
+    tries = [t for t in data.setdefault("promo_tries", {}).get(user_id, []) if time.monotonic() - t < 3600]
+    data["promo_tries"][user_id] = tries
+    if len(tries) >= PROMO_TRIES:
+        return False, ("Слишком много попыток. Попробуй через час." if ru else "Too many tries. Try again in an hour.")
+    if not code:
+        return False, ("Напиши промокод: /promo КОД" if ru else "Send the code: /promo CODE")
+    result, credits = data["memory"].promo_redeem(user_id, code)
+    if result == "ok":
+        LOG.info("Promo code %s redeemed: +%s credits", code, credits)
+        total = data["memory"].gen_info(user_id)[1]
+        return True, (f"🎁 Промокод активирован: +{credits} кредитов. Теперь у тебя {total}." if ru
+                      else f"🎁 Code activated: +{credits} credits. You now have {total}.")
+    if result in ("unknown", "expired"):
+        tries.append(time.monotonic())
+    return False, {"unknown": ("Такого промокода нет." if ru else "There's no such code."),
+                   "expired": ("Срок действия промокода закончился." if ru else "This code has expired."),
+                   "empty": ("Промокод уже закончился." if ru else "This code has run out."),
+                   "used": ("Ты уже активировал этот промокод." if ru else "You've already used this code.")}[result]
+
+
+async def promo_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/promo CODE: get credits. The owner: /promo new CODE CREDITS [PEOPLE] [DAYS], /promo list, /promo del CODE."""
+    if not await authorized(update, context):
+        return
+    data, user_id, args = context.bot_data, update.effective_user.id, context.args or []
+    ru = lang(update) == "ru"
+    owner = data["connections"].get_meta("owner") == user_id
+    action = args[0].lower() if args else ""
+    if owner and action in ("new", "create", "add", "создать", "новый"):
+        numbers = [a for a in args[2:] if a.isdigit()]
+        code = promo_clean(args[1] if len(args) > 1 else "")
+        if not code or not numbers or int(numbers[0]) <= 0:
+            await send(update.effective_message, "Как создать: /promo new КОД КРЕДИТЫ [СКОЛЬКО_ЛЮДЕЙ] [ДНЕЙ]\n"
+                                                 "Например: /promo new START 50 100 7 — 50 кредитов, первые 100 человек, 7 дней.\n"
+                                                 "Без числа людей — без ограничений, без дней — бессрочно.")
+            return
+        credits, people = int(numbers[0]), int(numbers[1]) if len(numbers) > 1 else 0
+        days = int(numbers[2]) if len(numbers) > 2 else None
+        data["memory"].promo_create(code, credits, people, days)
+        await send(update.effective_message, f"✅ Промокод {code}: +{credits} кредитов, "
+                                             + (f"для {people} человек" if people else "без ограничения по людям")
+                                             + (f", {days} дн." if days else ", бессрочно")
+                                             + f"\nАктивировать: /promo {code} или в Mini App → Генерация.")
+        return
+    if owner and action in ("list", "список"):
+        rows = data["memory"].promo_list()
+        lines = [f"{code} — +{credits}, использовано {used}" + (f"/{limit}" if limit else "")
+                 + (" (истёк)" if expires and expires < time.time() else
+                    f" до {time.strftime('%d.%m', time.localtime(expires))}" if expires else "")
+                 for code, credits, limit, used, expires in rows]
+        await send(update.effective_message, "🎁 Промокоды:\n" + "\n".join(lines) if lines else "Промокодов пока нет. "
+                   "Создать: /promo new КОД КРЕДИТЫ")
+        return
+    if owner and action in ("del", "delete", "удалить"):
+        code = promo_clean(args[1] if len(args) > 1 else "")
+        gone = data["memory"].promo_delete(code)
+        await send(update.effective_message, f"🗑 Промокод {code} удалён." if gone else "Такого промокода нет.")
+        return
+    _, text = redeem_promo(data, user_id, args[0] if args else "", ru)
+    if owner and not args:
+        text += "\n\nТы владелец: /promo new КОД КРЕДИТЫ [ЛЮДЕЙ] [ДНЕЙ], /promo list, /promo del КОД"
+    await send(update.effective_message, text)
 
 
 async def wipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4366,9 +4479,9 @@ def error_text(error):
 
 COMMANDS = {
     "ru": [("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
-           ("export", "Скачать историю"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
+           ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
     "en": [("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
-           ("export", "Download history"), ("myid", "My Telegram ID"), ("version", "Bot version")],
+           ("export", "Download history"), ("promo", "Enter a promo code"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
 
@@ -4567,6 +4680,13 @@ class Bridge:
     def generate(self, tg_user, kind, prompt, fmt, seconds=5, voice=True):
         language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
         return self._run(start_generation(self.app, tg_user["id"], language, kind, prompt, fmt, seconds, voice))
+
+    def promo(self, tg_user, code):
+        """Mini App: apply a promo code; (ok, text)."""
+        ru = (tg_user.get("language_code") or "ru").startswith("ru")
+        async def apply():
+            return redeem_promo(self.app.bot_data, tg_user["id"], code, ru)
+        return self._run(apply())
 
     def edit(self, tg_user, images, prompt, fmt="portrait"):
         """Mini App: edit/combine uploaded photos (bytes)."""
@@ -4989,6 +5109,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("promo", promo_command))
     app.add_handler(CommandHandler("owner", owner_command))
     app.add_handler(CommandHandler(["version", "v"], version_command))
     # "/version" pasted as formatted text isn't a command for Telegram: catch it as text too.

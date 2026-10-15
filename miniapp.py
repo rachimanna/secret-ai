@@ -326,6 +326,10 @@ def make_handler(config):
                     self._send(400, {"error": f"gen_{error}"})
                     return
                 self._send(200, {"gen": bridge.gen_state(uid)})
+            elif path == "/api/promo":
+                ok, text = bridge.promo(user, str(data.get("code") or "")[:64])
+                self._send(200 if ok else 400, {"ok": ok, "text": text, "gen": bridge.gen_state(uid)} if ok
+                           else {"error": "promo", "detail": text})
             elif path == "/api/edit":
                 prompt = str(data.get("prompt") or "").strip()
                 raw = data.get("images") if isinstance(data.get("images"), list) else []
