@@ -1104,7 +1104,7 @@ def model_identity(model):
                 "are or who created you, say plainly that you are " + f"{pretty} {version}".strip() + " by Anthropic, "
                 "working inside the Secret AI Telegram bot.")
     if "deepseek" in name:
-        pretty = "DeepSeek " + name.split("deepseek", 1)[1].strip("-").replace("-", " ").upper()
+        pretty = model_title(model)
         return (f" You run on {pretty.strip()}, a model made by DeepSeek. If someone asks which model you are or who created "
                 f"you, say plainly that you are {pretty.strip()} by DeepSeek, working inside the Secret AI Telegram bot.")
     if "deepseek" in name and "free" in name:
@@ -2061,7 +2061,7 @@ async def read_tiktok(update, context, question, url):
 
 def model_title(model):
     """claude-opus-5-5 -> Claude Opus 5.5, gpt-6-sol -> GPT-6 Sol, gemini-4-argon -> Gemini 4 Argon."""
-    name = model.split(":", 1)[-1].split("/")[-1].removesuffix(":free")
+    name = re.sub(r"-(\d{4}|\d{6,8}|latest|preview)$", "", model.split(":", 1)[-1].split("/")[-1].removesuffix(":free"))
     gpt = re.match(r"gpt-([\d.]+)", name, re.I)
     words = name.split("-")
     out = []
