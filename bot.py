@@ -1305,22 +1305,45 @@ async def discover_models(app):
     data["chat_default"] = chosen if chosen in free else free[0]
     if not data.get("openai"):
         data["model"] = data["chat_default"]  # every fallback to "the main model" stays off OpenAI
-    kinds = {sonnet: "sonnet", sonnet_abacus: "sonnet", grok: "grok", gemini: "gemini", deepseek: "deepseek", gpt: "gpt", claude: "opus"}
-    kinds.update({m: next(k for k, (p, _) in PREMIUM.items() if p.search(m)) for m in data["premium"]})
-    keep = lambda m: kinds.get(m) in ENABLED_MODELS
-    data["models"] = [m for m in data["models"] if keep(m)]
-    data["premium"] = {m: p for m, p in data["premium"].items() if keep(m)}
-    data["fallbacks"] = [m for m in data["fallbacks"] if keep(m)]
-    free_on = [m for m in data["models"] if m not in data["premium"]]
-    data["chat_default"] = data["chat_default"] if keep(data["chat_default"]) else (free_on or data["models"] or [None])[0]
-    data["model"] = data["chat_default"]
-    if not data["models"]:
-        LOG.warning("No models are switched on (ENABLED_MODELS is empty): the bot tells people it has none yet")
+    # The owner's list (MODEL_CATALOG) decides what is offered: each found in AnyModel's catalog, free or for credits.
+    chosen_models, prices = [], {}
+    for pattern, price in MODEL_CATALOG:
+        found = pick_catalog(any_ids, pattern)
+        if not found:
+            LOG.warning("Model %s is not in the AnyModel catalog; not offered", pattern)
+            continue
+        model = ANYMODEL_PREFIX + found
+        chosen_models.append(model)
+        if price:
+            prices[model] = price
+        LOG.info("Model: %s (%s)", model, f"{price} credits an answer" if price else "free")
+    free_on = [m for m in chosen_models if m not in prices]
+    data.update(models=chosen_models, premium=prices, fallbacks=free_on)
+    data["chat_default"] = data["model"] = (free_on or chosen_models or [None])[0]
+    if not chosen_models:
+        LOG.warning("No models are offered: the bot tells people it has none yet")
 
 
-# The models the bot offers. Empty: no models at all (the owner adds them one by one; until then the bot says so).
-# Keys: "sonnet", "grok", "opus", "fable", "astra", "gemini", "deepseek", "gpt", "cursor".
-ENABLED_MODELS = []
+# The models the bot offers, all through AnyModel, in menu order: (how to find the id, credits per answer; 0 = free).
+# The first free one is the default for everyone. Empty list: no models (the bot says so).
+MODEL_CATALOG = [
+    (r"grok[-._ ]?4[-._]7", 0),                          # Grok 4.7 (default)
+    (r"claude-sonnet[-._]5(?![-._]?\d)", 0),             # Claude Sonnet 5
+    (r"gemini[-._ ]?4\b.*argon", 0),                     # Gemini 4 Argon
+    (r"opus[-._ ]?5[-._]5(?![-._]?\d)", 5),              # Claude Opus 5.5
+    (r"opus[-._ ]?4[-._]8(?![-._]?\d)", 4),              # Claude Opus 4.8
+    (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?astra", 4),         # GPT-6 Astra
+    (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 3),           # GPT-6 Sol
+]
+ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
+
+
+def pick_catalog(ids, pattern):
+    """The best id in a catalog for a pattern: a plain one before fast/thinking/preview/dated variants, cc/ routes first."""
+    found = [i for i in ids if re.search(pattern, i, re.I) and not re.search(r"image|audio|tts|embed|vision", i, re.I)]
+    found.sort(key=lambda i: (bool(re.search(r"fast|mini|lite|flash", i, re.I)), "thinking" in i.lower(), "preview" in i.lower(),
+                              bool(re.search(r"\d{6,}", i)), not i.startswith("cc/"), len(i)))
+    return found[0] if found else None
 
 
 class NoModels(Exception):
@@ -1925,10 +1948,18 @@ async def read_tiktok(update, context, question, url):
 
 
 def model_title(model):
+    """claude-opus-5-5 -> Claude Opus 5.5, gpt-6-sol -> GPT-6 Sol, gemini-4-argon -> Gemini 4 Argon."""
     name = model.split(":", 1)[-1].split("/")[-1]
-    name = re.sub(r"^claude-", "Claude ", re.sub(r"^gpt-", "GPT-", name, flags=re.I), flags=re.I)
-    name = re.sub(r"-(\d+)-(\d+)$", r" \1.\2", name)
-    return re.sub(r"-([a-z])", lambda m: " " + m.group(1).upper(), name).replace("Claude f", "Claude F").replace("Claude o", "Claude O")
+    gpt = re.match(r"gpt-([\d.]+)", name, re.I)
+    words = name.split("-")
+    out = []
+    for word in words:
+        if out and word.isdigit() and out[-1].replace(".", "").isdigit():
+            out[-1] += "." + word  # 5-5 -> 5.5
+        else:
+            out.append(word)
+    text = " ".join(w if w[:1].isdigit() else w.capitalize() for w in out)
+    return re.sub(r"^Gpt ([\d.]+)", r"GPT-\1", text) if gpt else text
 
 
 async def premium_offer(context, update, model, price):
