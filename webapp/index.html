@@ -789,7 +789,7 @@ const T = {
           pr: "🚀 Создать PR", applying: "Создаю…", openPr: "🔗 Pull request", openCommit: "Коммит", send: "📦 В чат", site: "🌐 Сайт", sent: "Отправил в чат",
           retry: "↻ Повторить", delAsk: "Удалить этот чат?", files: n => `${n} файл.`, models: "Модель для Codex",
           errBusy: "Codex ещё работает — дождись или останови", errGh: "Сначала подключи GitHub", errCredits: "Не хватает кредитов для платной модели",
-          errRepo: "Сначала выбери репозиторий", errRestart: "Бот перезапустился во время работы — нажми «Повторить»", modeTitle: "Режим" },
+          errRepo: "Сначала выбери репозиторий", errModels: "Модели пока не подключены", errRestart: "Бот перезапустился во время работы — нажми «Повторить»", modeTitle: "Режим" },
     secTitle: "ИИ-секретарь", secOn: "Отвечает за тебя", secOff: "Выключен", secNotConnected: "Не подключён — нажми, чтобы настроить",
     secLead: "Отвечает людям в твоей личке, пока ты занят. Внизу каждого ответа — подпись «ИИ-ассистент». Как только ты сам кому-то пишешь, он замолкает на 10 минут.",
     secRules: "Как отвечать", secRulesPh: "Например: привет, я занят или сплю, отвечу позже, это ИИ", secNotify: "Присылать мне, кому и что ответил",
@@ -870,7 +870,7 @@ const T = {
           pr: "🚀 Create PR", applying: "Creating…", openPr: "🔗 Pull request", openCommit: "Commit", send: "📦 To chat", site: "🌐 Site", sent: "Sent to the chat",
           retry: "↻ Retry", delAsk: "Delete this chat?", files: n => `${n} files`, models: "Model for Codex",
           errBusy: "Codex is still working — wait or stop it", errGh: "Connect GitHub first", errCredits: "Not enough credits for the paid model",
-          errRepo: "Pick a repository first", errRestart: "The bot restarted during the work — press Retry", modeTitle: "Mode" },
+          errRepo: "Pick a repository first", errModels: "No models are connected yet", errRestart: "The bot restarted during the work — press Retry", modeTitle: "Mode" },
     secTitle: "AI secretary", secOn: "Answering for you", secOff: "Off", secNotConnected: "Not connected — tap to set up",
     secLead: "Answers people in your personal chats while you're busy, signed “AI assistant”. As soon as you write to someone yourself, it goes quiet for 10 minutes.",
     secRules: "How to answer", secRulesPh: "E.g.: hi, I'm busy or asleep, will answer later, this is an AI", secNotify: "Tell me whom it answered and what",
@@ -1156,6 +1156,7 @@ function renderAll() {
 
 /* ---------------- header and model menu ---------------- */
 function prettyModel(id) {
+  if (!id) return lang === "ru" ? "Нет моделей" : "No models";
   if (/^cursor:/i.test(id)) return prettyModel(String(id).slice(7)) + " · Cursor";
   return String(id).replace(/^(abacus|anymodel):/i, "").replace(/^[\w-]+\//, "").replace(/^grok-/i, "Grok ").replace(/^gpt-/i, "GPT-").replace(/^claude-/i, "Claude ").replace(/^gemini-/i, "Gemini ").replace(/^deepseek-/i, "DeepSeek ")
     .replace(/-(\w)/g, (_, c) => " " + c.toUpperCase()).replace(/ (\d)/g, " $1").replace(/(\d) (\d)/g, "$1.$2")
@@ -1432,7 +1433,7 @@ async function sendCodex() {
     cx.thread = task.thread; cx.draft = ""; cxSave(); haptic("success");
     await loadCodex(); window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
   } catch (e) {
-    toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits, repo: C.errRepo }[e.code] || T.err); haptic("error");
+    toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits, repo: C.errRepo, models: C.errModels }[e.code] || T.err); haptic("error");
     if ($("cx-send")) $("cx-send").disabled = false;
   }
 }

@@ -1305,6 +1305,26 @@ async def discover_models(app):
     data["chat_default"] = chosen if chosen in free else free[0]
     if not data.get("openai"):
         data["model"] = data["chat_default"]  # every fallback to "the main model" stays off OpenAI
+    kinds = {sonnet: "sonnet", sonnet_abacus: "sonnet", grok: "grok", gemini: "gemini", deepseek: "deepseek", gpt: "gpt", claude: "opus"}
+    kinds.update({m: next(k for k, (p, _) in PREMIUM.items() if p.search(m)) for m in data["premium"]})
+    keep = lambda m: kinds.get(m) in ENABLED_MODELS
+    data["models"] = [m for m in data["models"] if keep(m)]
+    data["premium"] = {m: p for m, p in data["premium"].items() if keep(m)}
+    data["fallbacks"] = [m for m in data["fallbacks"] if keep(m)]
+    free_on = [m for m in data["models"] if m not in data["premium"]]
+    data["chat_default"] = data["chat_default"] if keep(data["chat_default"]) else (free_on or data["models"] or [None])[0]
+    data["model"] = data["chat_default"]
+    if not data["models"]:
+        LOG.warning("No models are switched on (ENABLED_MODELS is empty): the bot tells people it has none yet")
+
+
+# The models the bot offers. Empty: no models at all (the owner adds them one by one; until then the bot says so).
+# Keys: "sonnet", "grok", "opus", "fable", "astra", "gemini", "deepseek", "gpt", "cursor".
+ENABLED_MODELS = []
+
+
+class NoModels(Exception):
+    """No model is switched on."""
 
 
 # Paid models, like Mira's: each answer costs credits, and credits are only bought with Telegram Stars.
@@ -1373,6 +1393,8 @@ async def resolve_abacus_model(app):
 
 async def generate(context, live, toolbox=None, **request):
     """Run the model, executing tool calls (GitHub) until it produces the final answer."""
+    if not request.get("model"):
+        raise NoModels()
     if request["model"].startswith(cursor.PREFIX):  # the Cursor CLI: text in, streamed text out, no tools
         async def on_text(text):
             await live.update(text)
@@ -2237,6 +2259,9 @@ async def group_chat(update, context):
     chat_id, store, name = message.chat_id, data["groups"], speaker(user)
     store.touch(chat_id, message.chat.title, user.id)
     lock = data["locks"][chat_id]
+    if not data.get("models"):  # no models: the chat is remembered, nothing is said
+        remember_group_message(store, message, name)
+        return
     if not addressed_to_bot(message, context.bot, data):
         remember_group_message(store, message, name)
         span = GROUP_EVERY.get(store.level(chat_id))
@@ -2468,7 +2493,9 @@ def group_model(data, chat_id):
 
 async def quick_answer(data, model, instructions, text, max_tokens=2000):
     """A short non-streamed answer; when the model fails, the next working one (data["fallbacks"]) answers."""
-    chain = [model] + [m for m in data.get("fallbacks") or [] if m != model]
+    chain = [m for m in [model] + [m for m in data.get("fallbacks") or [] if m != model] if m]
+    if not chain:
+        raise NoModels()
     for index, candidate in enumerate(chain):
         try:
             return await quick_answer_once(data, candidate, instructions, text, max_tokens)
@@ -3662,6 +3689,9 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.effective_message
     if message.text and await secretary_switch(update, context, message.text):
         return
+    if not context.bot_data.get("models") and not context.bot_data.get("cursor_models"):
+        await send(message, ui(update, "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon."))
+        return
     remember_photo(context.bot_data, update.effective_user.id, message)
     if message.media_group_id and (message.photo or message.document):
         # An album arrives as separate messages: collect them for a moment and answer once.
@@ -3965,7 +3995,9 @@ MODEL_ERRORS = (APIStatusError, APIConnectionError, APITimeoutError, cursor.Curs
 def error_text(error):
     """(Russian, English) explanation of a failed answer."""
     ru, en = "Не удалось обработать сообщение. Попробуйте ещё раз чуть позже.", "Couldn't process your message. Please try again later."
-    if isinstance(error, RateLimitError):
+    if isinstance(error, NoModels):
+        ru, en = "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon."
+    elif isinstance(error, RateLimitError):
         ru, en = "Модель сейчас перегружена или у провайдера закончился лимит. Попробуй чуть позже или выбери другую модель в Secret AI.", "The model is overloaded or its provider's limit is reached. Try later or pick another model in Secret AI."
     elif isinstance(error, (AuthenticationError, NotFoundError, PermissionDeniedError)):
         ru, en = "Выбранная модель недоступна на ключе бота. Выбери другую модель в Secret AI.", "The chosen model isn't available on the bot's key. Pick another model in Secret AI."
@@ -4059,7 +4091,7 @@ async def post_init(app):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     await resolve_abacus_model(app)
     await discover_models(app)
-    app.bot_data["cursor_models"] = cursor.models()
+    app.bot_data["cursor_models"] = cursor.models() if "cursor" in ENABLED_MODELS else []
     if app.bot_data["cursor_models"]:
         app.bot_data["cursor_task"] = asyncio.create_task(cursor.install())
     if not app.bot_data.get("logo_id"):
@@ -4418,6 +4450,8 @@ def codex_start(app, tg_user, mode, prompt, repo, thread=None):
         if not repo:
             return None, "repo"
     model = user_model(data, user_id)
+    if not model:
+        return None, "models"
     price = data.get("premium", {}).get(model)
     charged = 0
     if price and not codex_owner(data, user_id):
