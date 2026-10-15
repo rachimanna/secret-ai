@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
 <title>Secret AI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -784,6 +786,42 @@
   .cx-send { background: var(--text); color: var(--bg); box-shadow: none; }
   .cx-send.stop { background: var(--card-hi); color: var(--text); }
   .cx-st.running, .cx-st.done, .cx-st.applied, .cx-st.failed, .cx-st.stopped { background: transparent; padding-left: 0; }
+
+  /* ================= Premier skin: graphite surfaces, one confident blue, big bold headings ================= */
+  :root {
+    --bg: #111214; --bg-2: #17181b; --card: #191a1d; --card-solid: #191a1d; --card-hi: #222328;
+    --line: rgba(255,255,255,.08); --text: #f2f3f5; --hint: #9a9ca3; --hint-2: #5d5f66;
+    --accent: #2f6fed; --brand: #2f6fed; --brand-soft: rgba(47,111,237,.14); --blue-soft: #8fb2ff;
+    --rim: inset 0 0 0 1px rgba(255,255,255,.08);
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f6f8; --bg-2: #ffffff; --card: #ffffff; --card-solid: #ffffff; --card-hi: #eef0f3;
+    --line: rgba(0,0,0,.08); --text: #121316; --hint: #6b6e76; --hint-2: #a4a7ae;
+    --accent: #2f6fed; --brand: #2f6fed; --brand-soft: rgba(47,111,237,.1); --blue-soft: #2f6fed;
+    --rim: inset 0 0 0 1px rgba(0,0,0,.07);
+  }
+  .hero h1, .page-title, .cx-empty h2, .section > h2, .sheet h2, .sheet h3 { font-family: Manrope, Inter, -apple-system, sans-serif; }
+  .hero h1 { font-size: 30px; font-weight: 800; letter-spacing: -.035em; line-height: 1.1;
+             background: linear-gradient(180deg, var(--blue-soft) 15%, #8a8d96 100%); -webkit-background-clip: text; background-clip: text;
+             color: transparent; -webkit-text-fill-color: transparent; }
+  :root[data-theme="light"] .hero h1 { background: none; color: var(--text); -webkit-text-fill-color: currentColor; }
+  .hero p { font-size: 15px; }
+  .page-title { font-size: 28px; font-weight: 800; }
+  .section > h2 { font-size: 17px; font-weight: 800; }
+  #model-btn::before { background: var(--blue-soft); }
+  .pill, .pill.cta, .pill.cta.glass { border-radius: 99px; }
+  .list, .cx-modes, .cx-log, .field { border-radius: 18px; }
+  .btn, .pill-btn, .cx-act.main { background: var(--accent); color: #fff; box-shadow: 0 8px 28px rgba(47,111,237,.28); border-radius: 14px; height: 52px; font-weight: 600; }
+  .btn.secondary { background: transparent; color: var(--text); box-shadow: var(--rim); }
+  .btn.ok { background: #2fb67c; box-shadow: none; }
+  .switch.on, .step.cur .n { background: var(--accent); }
+  .chip.on { background: var(--accent); color: #fff; }
+  .badge.new { background: var(--brand-soft); color: var(--blue-soft); }
+  .tab.on, .tab.on svg { color: var(--blue-soft); }
+  :root[data-theme="light"] .tab.on, :root[data-theme="light"] .tab.on svg { color: var(--accent); }
+  .cx-msg.me .bubble { background: var(--accent); color: #fff; }
+  .cx-send { background: var(--accent); color: #fff; }
+  .cx-orb { color: var(--blue-soft); }
 
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 </style>

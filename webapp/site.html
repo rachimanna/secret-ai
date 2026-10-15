@@ -4,208 +4,186 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Secret AI — ИИ-помощник в Telegram</title>
-<meta name="description" content="Secret AI — умный ИИ прямо в Telegram: отвечает на вопросы, рисует, снимает видео, говорит голосом, отвечает за тебя как секретарь и веселит группы.">
+<meta name="description" content="Secret AI — топовые нейросети прямо в Telegram: чат, код, сайты, картинки, видео, голос и ИИ-секретарь. Без VPN.">
 <meta property="og:title" content="Secret AI — ИИ-помощник в Telegram">
-<meta property="og:description" content="Чат, картинки, видео, голос, секретарь, игры для групп и 2500+ приложений — в одном боте.">
+<meta property="og:description" content="Топовые нейросети в одном чате: от ответа до готового сайта за минуту.">
 <meta property="og:image" content="/mascot.png">
-<meta name="theme-color" content="#0b0a1a">
+<meta name="theme-color" content="#111214">
 <link rel="icon" href="/logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   :root {
-    --bg: #0b0a1a; --card: rgba(255,255,255,.055); --line: rgba(255,255,255,.09); --text: #f4f3ff; --hint: #a9a6cc;
-    --violet: #6d5dfc; --pink: #d946ef; --teal: #14b8a6; --amber: #f5a524;
+    --bg: #111214; --card: #191a1d; --card-hi: #212227; --line: rgba(255,255,255,.08); --text: #f2f3f5; --hint: #9a9ca3;
+    --blue: #2f6fed; --blue-hi: #3d7bf5; --blue-soft: #8fb2ff;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
-  body { background: var(--bg); color: var(--text); font: 16px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+  body { background: var(--bg); color: var(--text); font: 16px/1.6 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
          overflow-x: hidden; -webkit-font-smoothing: antialiased; }
   a { color: inherit; text-decoration: none; }
-  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
+  h1, h2, h3, .brand { font-family: Manrope, Inter, sans-serif; }
 
-  /* glowing background */
-  .glow { position: fixed; inset: -20vh -20vw; z-index: -1; pointer-events: none;
-          background: radial-gradient(40vw 40vw at 15% 10%, rgba(109,93,252,.35), transparent 70%),
-                      radial-gradient(45vw 45vw at 90% 40%, rgba(217,70,239,.22), transparent 70%),
-                      radial-gradient(40vw 40vw at 30% 95%, rgba(20,184,166,.16), transparent 70%);
-          animation: drift 18s ease-in-out infinite alternate; }
-  @keyframes drift { to { transform: translate3d(3vw, -2vh, 0) scale(1.05); } }
-
-  nav { position: sticky; top: 0; z-index: 10; backdrop-filter: blur(18px) saturate(160%); -webkit-backdrop-filter: blur(18px) saturate(160%);
-        background: rgba(11,10,26,.55); border-bottom: 1px solid var(--line); }
-  nav .wrap { display: flex; align-items: center; justify-content: space-between; height: 62px; }
-  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
-  .brand img { width: 32px; height: 32px; }
-  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; height: 50px; padding: 0 24px; border-radius: 16px;
-         font-weight: 650; font-size: 16px; transition: transform .2s, box-shadow .2s, background .2s; white-space: nowrap; }
-  .btn:active { transform: scale(.97); }
-  .btn.main { background: linear-gradient(135deg, var(--violet), var(--pink)); color: #fff; box-shadow: 0 10px 30px rgba(109,93,252,.4); }
-  .btn.main:hover { box-shadow: 0 14px 40px rgba(217,70,239,.45); transform: translateY(-1px); }
-  .btn.ghost { background: var(--card); border: 1px solid var(--line); }
-  .btn.ghost:hover { background: rgba(255,255,255,.09); }
-  .btn.small { height: 40px; padding: 0 16px; border-radius: 12px; font-size: 14.5px; }
-  .btn svg { width: 20px; height: 20px; fill: currentColor; }
+  /* header */
+  nav { position: sticky; top: 0; z-index: 10; background: rgba(17,18,20,.86); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
+  nav .wrap { display: flex; align-items: center; gap: 12px; height: 72px; }
+  .brand { display: flex; align-items: center; gap: 12px; font-weight: 800; font-size: 20px; margin-right: auto; }
+  .brand .mark { width: 36px; height: 36px; border-radius: 10px; background: var(--card-hi); border: 1px solid var(--line); display: grid; place-items: center; }
+  .brand .mark img { width: 24px; height: 24px; }
+  .lang { display: flex; padding: 3px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); }
+  .lang button { border: 0; background: none; color: var(--hint); font: 600 14px Inter, sans-serif; padding: 7px 10px; border-radius: 9px; cursor: pointer; }
+  .lang button.on { background: var(--card-hi); color: var(--text); }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 10px; height: 56px; padding: 0 28px; border-radius: 14px;
+         font: 600 17px Inter, sans-serif; transition: background .15s, transform .15s; white-space: nowrap; cursor: pointer; }
+  .btn:active { transform: scale(.98); }
+  .btn.main { background: var(--blue); color: #fff; box-shadow: 0 10px 40px rgba(47,111,237,.28); }
+  .btn.main:hover { background: var(--blue-hi); }
+  .btn.ghost { border: 1px solid var(--line); color: var(--text); }
+  .btn.ghost:hover { background: var(--card); }
+  .btn.small { height: 42px; padding: 0 18px; border-radius: 12px; font-size: 15px; box-shadow: none; }
+  .btn svg { width: 18px; height: 18px; }
 
   /* hero */
-  .hero { display: grid; grid-template-columns: 1.15fr .85fr; gap: 30px; align-items: center; padding: 70px 20px 50px; }
-  .pill { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px; border-radius: 99px; background: var(--card); border: 1px solid var(--line);
-          color: var(--hint); font-size: 14px; margin-bottom: 22px; }
-  .pill i { width: 8px; height: 8px; border-radius: 50%; background: #34c759; box-shadow: 0 0 0 4px rgba(52,199,89,.18); }
-  h1 { font-size: clamp(38px, 6.4vw, 68px); line-height: 1.04; letter-spacing: -.035em; font-weight: 800; }
-  .shine { background: linear-gradient(90deg, #a99bff, #f0abfc, #5eead4, #a99bff); background-size: 300% 100%; -webkit-background-clip: text;
-           background-clip: text; color: transparent; animation: shine 8s linear infinite; }
-  @keyframes shine { to { background-position: 300% 0; } }
-  .lead { color: var(--hint); font-size: clamp(17px, 2.1vw, 20px); margin: 20px 0 30px; max-width: 34em; }
-  .cta { display: flex; gap: 12px; flex-wrap: wrap; }
-  .note { color: var(--hint); font-size: 13.5px; margin-top: 14px; }
-  .mascot { position: relative; display: grid; place-items: center; }
-  .mascot img { width: min(380px, 80vw); filter: drop-shadow(0 30px 60px rgba(109,93,252,.45)); animation: float 6s ease-in-out infinite; }
-  .mascot::before { content: ""; position: absolute; width: 70%; aspect-ratio: 1; border-radius: 50%;
-                    background: radial-gradient(circle, rgba(217,70,239,.35), transparent 65%); filter: blur(10px); }
-  @keyframes float { 0%, 100% { transform: translateY(0) rotate(-4deg); } 50% { transform: translateY(-18px) rotate(3deg); } }
+  .hero { text-align: center; padding: 72px 16px 48px; }
+  .badge { display: inline-flex; align-items: center; gap: 10px; padding: 9px 18px; border-radius: 99px; border: 1px solid var(--line);
+           color: #c4c6cc; font-size: 15px; margin-bottom: 40px; }
+  .badge i { width: 8px; height: 8px; border-radius: 50%; background: var(--blue-soft); }
+  h1 { font-size: clamp(40px, 7vw, 76px); line-height: 1.08; letter-spacing: -.035em; font-weight: 800; max-width: 15ch; margin: 0 auto; }
+  h1 .grad { background: linear-gradient(180deg, var(--blue-soft) 10%, #8a8d96 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lead { color: var(--hint); font-size: clamp(17px, 2.2vw, 20px); margin: 28px auto 40px; max-width: 32em; }
+  .cta { display: flex; flex-direction: column; gap: 12px; max-width: 420px; margin: 0 auto; }
+  .note { color: var(--hint); font-size: 14px; margin-top: 18px; }
 
-  /* chat preview */
-  .chat { margin: 10px auto 0; max-width: 560px; background: rgba(20,18,40,.7); border: 1px solid var(--line); border-radius: 26px; padding: 18px;
-          box-shadow: 0 30px 80px rgba(0,0,0,.45); }
-  .msg { max-width: 82%; padding: 10px 14px; border-radius: 18px; margin: 8px 0; font-size: 15px; opacity: 0; transform: translateY(10px);
-         transition: opacity .5s, transform .5s; }
+  section { padding: 56px 0; }
+  h2 { font-size: clamp(30px, 4.6vw, 44px); letter-spacing: -.03em; line-height: 1.12; text-align: center; font-weight: 800; }
+  .sub { color: var(--hint); text-align: center; max-width: 34em; margin: 12px auto 32px; font-size: 17px; }
+
+  /* dialogue example */
+  .chat { max-width: 620px; margin: 0 auto; background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 20px; }
+  .chat .head { display: flex; align-items: center; gap: 10px; padding-bottom: 14px; margin-bottom: 6px; border-bottom: 1px solid var(--line);
+                font-weight: 600; font-size: 15px; }
+  .chat .head span { color: var(--hint); font-weight: 500; margin-left: auto; font-size: 13.5px; }
+  .chat .head .mi { width: 28px; height: 28px; border-radius: 8px; background: var(--card-hi); display: grid; place-items: center; }
+  .chat .head .mi img { width: 18px; height: 18px; }
+  .msg { max-width: 84%; padding: 11px 15px; border-radius: 18px; margin: 10px 0; font-size: 15.5px; opacity: 0; transform: translateY(8px);
+         transition: opacity .45s, transform .45s; }
   .msg.show { opacity: 1; transform: none; }
-  .msg.me { margin-left: auto; background: linear-gradient(135deg, #7b6bff, #a855f7); border-bottom-right-radius: 6px; }
-  .msg.bot { background: rgba(255,255,255,.08); border-bottom-left-radius: 6px; }
-  .typing { display: inline-flex; gap: 4px; }
-  .typing b { width: 7px; height: 7px; border-radius: 50%; background: var(--hint); animation: dot 1.2s infinite; }
-  .typing b:nth-child(2) { animation-delay: .15s; } .typing b:nth-child(3) { animation-delay: .3s; }
-  @keyframes dot { 0%, 60%, 100% { opacity: .3; transform: none; } 30% { opacity: 1; transform: translateY(-3px); } }
-
-  section { padding: 60px 0; }
-  h2 { font-size: clamp(30px, 4.4vw, 44px); letter-spacing: -.03em; line-height: 1.1; text-align: center; font-weight: 800; }
-  .sub { color: var(--hint); text-align: center; max-width: 36em; margin: 12px auto 36px; font-size: 17px; }
+  .msg.me { margin-left: auto; background: var(--blue); color: #fff; border-bottom-right-radius: 6px; }
+  .msg.bot { background: var(--card-hi); border-bottom-left-radius: 6px; }
+  .msg code { font: 13.5px ui-monospace, Menlo, monospace; background: rgba(255,255,255,.07); padding: 1px 6px; border-radius: 6px; }
 
   /* features */
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 22px; position: relative; overflow: hidden;
-          transition: transform .25s, border-color .25s, background .25s; }
-  .card:hover { transform: translateY(-4px); border-color: rgba(169,155,255,.35); background: rgba(255,255,255,.075); }
-  .card .ic { width: 48px; height: 48px; border-radius: 15px; display: grid; place-items: center; font-size: 26px; margin-bottom: 14px;
-              background: color-mix(in srgb, var(--tint) 22%, transparent); border: 1px solid color-mix(in srgb, var(--tint) 35%, transparent); }
-  .card h3 { font-size: 18.5px; margin-bottom: 6px; letter-spacing: -.01em; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 24px; transition: border-color .2s; }
+  .card:hover { border-color: rgba(143,178,255,.3); }
+  .card .ic { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: var(--card-hi); margin-bottom: 16px; color: var(--blue-soft); }
+  .card .ic svg { width: 22px; height: 22px; }
+  .card h3 { font-size: 18px; margin-bottom: 6px; letter-spacing: -.01em; }
   .card p { color: var(--hint); font-size: 15px; }
-  .card.wide { grid-column: span 2; }
 
-  /* groups band */
-  .band { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 22px; }
-  .chip { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 16px; text-align: center; }
-  .chip b { display: block; font-size: 28px; margin-bottom: 4px; }
-  .chip span { color: var(--hint); font-size: 14px; }
+  /* models strip */
+  .models { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+  .models span { padding: 10px 18px; border-radius: 99px; border: 1px solid var(--line); background: var(--card); font-weight: 500; font-size: 15px; }
+  .models span b { color: var(--blue-soft); font-weight: 600; margin-left: 6px; font-size: 13px; }
 
   /* steps */
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; counter-reset: s; }
-  .step { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 24px; }
-  .step::before { counter-increment: s; content: counter(s); display: grid; place-items: center; width: 40px; height: 40px; border-radius: 50%;
-                  background: linear-gradient(135deg, var(--violet), var(--pink)); font-weight: 800; margin-bottom: 14px; }
+  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; counter-reset: s; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 24px; }
+  .step::before { counter-increment: s; content: counter(s); display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+                  background: var(--card-hi); color: var(--blue-soft); font: 800 16px Manrope, sans-serif; margin-bottom: 14px; }
   .step h3 { font-size: 18px; margin-bottom: 6px; }
   .step p { color: var(--hint); font-size: 15px; }
 
-  .final { text-align: center; background: linear-gradient(135deg, rgba(109,93,252,.25), rgba(217,70,239,.18)); border: 1px solid var(--line);
-           border-radius: 32px; padding: 50px 22px; }
-  .final img { width: 96px; margin-bottom: 14px; animation: float 6s ease-in-out infinite; }
-  .final .cta { justify-content: center; margin-top: 26px; }
-  footer { color: var(--hint); font-size: 13.5px; text-align: center; padding: 34px 0 40px; }
+  .final { text-align: center; background: var(--card); border: 1px solid var(--line); border-radius: 28px; padding: 56px 20px; }
+  .final .cta { margin-top: 28px; }
+  footer { color: var(--hint); font-size: 14px; text-align: center; padding: 32px 0 44px; }
 
-  /* appear on scroll */
-  .up { opacity: 0; transform: translateY(26px); transition: opacity .7s cubic-bezier(.2,.7,.2,1), transform .7s cubic-bezier(.2,.7,.2,1); }
+  .up { opacity: 0; transform: translateY(20px); transition: opacity .6s cubic-bezier(.2,.7,.2,1), transform .6s cubic-bezier(.2,.7,.2,1); }
   .up.in { opacity: 1; transform: none; }
-  .grid .up:nth-child(2), .steps .up:nth-child(2) { transition-delay: .08s; }
-  .grid .up:nth-child(3), .steps .up:nth-child(3) { transition-delay: .16s; }
-  .grid .up:nth-child(5) { transition-delay: .08s; } .grid .up:nth-child(6) { transition-delay: .16s; }
 
-  @media (max-width: 860px) {
-    .hero { grid-template-columns: 1fr; text-align: center; padding-top: 40px; }
-    .hero .lead { margin-left: auto; margin-right: auto; }
-    .hero .cta { justify-content: center; }
-    .mascot { order: -1; } .mascot img { width: min(240px, 60vw); }
-    .grid, .steps { grid-template-columns: 1fr; } .card.wide { grid-column: auto; }
-    .band { grid-template-columns: repeat(2, 1fr); }
-    nav .hide-sm { display: none; }
-  }
-  @media (prefers-reduced-motion: reduce) { *, *::before { animation: none !important; transition: none !important; } .up { opacity: 1; transform: none; } }
+  @media (min-width: 720px) { .cta { flex-direction: row; justify-content: center; max-width: none; } }
+  @media (max-width: 820px) { .grid, .steps { grid-template-columns: 1fr; } }
+  @media (max-width: 480px) { nav .open { display: none; } .hero { padding-top: 48px; } h1 { font-size: 38px; } .badge { font-size: 13.5px; margin-bottom: 32px; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before { transition: none !important; } .up, .msg { opacity: 1; transform: none; } }
 </style>
 </head>
 <body>
-<div class="glow"></div>
 
 <nav><div class="wrap">
-  <a class="brand" href="#"><img src="/logo.svg" alt=""> Secret AI</a>
-  <a class="btn main small" href="https://t.me/__BOT__">Открыть бота</a>
+  <a class="brand" href="#"><span class="mark"><img src="/logo.svg" alt=""></span>Secret AI</a>
+  <div class="lang"><button class="on" data-lang="ru">RU</button><button data-lang="en">EN</button></div>
+  <a class="btn main small open" href="https://t.me/__BOT__" data-i="open">Открыть Secret AI</a>
 </div></nav>
 
 <header class="wrap hero">
-  <div>
-    <div class="pill"><i></i> Работает 24/7 · бесплатно начать</div>
-    <h1>Твой ИИ —<br><span class="shine">прямо в Telegram</span></h1>
-    <p class="lead">Отвечает на любые вопросы, рисует, снимает видео, говорит голосом, отвечает за тебя, пока ты занят, и устраивает движ в группах. Без приложений и регистраций.</p>
-    <div class="cta">
-      <a class="btn main" href="https://t.me/__BOT__"><svg viewBox="0 0 24 24"><path d="M21.9 4.6 18.7 19.7c-.2 1.1-.9 1.3-1.8.8l-4.9-3.6-2.4 2.3c-.3.3-.5.5-1 .5l.4-5 9.1-8.2c.4-.4-.1-.6-.6-.2L6.2 13.4 1.4 11.9c-1-.3-1.1-1 .2-1.5L20.5 3.1c.9-.3 1.6.2 1.4 1.5z"/></svg>Открыть в Telegram</a>
-      <a class="btn ghost" href="https://t.me/__BOT__?startgroup=1">Добавить в группу</a>
-    </div>
-    <p class="note">Работает на Claude Sonnet 5.5 и GPT — выбираешь сам.</p>
+  <div class="badge"><i></i><span data-i="badge">DeepSeek и Claude Opus — без VPN</span></div>
+  <h1><span data-i="h1a">Топовые нейросети в одном чате:</span> <span class="grad" data-i="h1b">от ответа до готового сайта за минуту</span></h1>
+  <p class="lead" data-i="lead">Пиши код, разбирай учебные задачи, рисуй картинки и создавай сайты прямо в Telegram. Без VPN, приложений и зарубежных карт.</p>
+  <div class="cta">
+    <a class="btn main" href="https://t.me/__BOT__"><span data-i="try">Попробовать бесплатно</span>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a>
+    <a class="btn ghost" href="#features" data-i="what">Что умеет</a>
   </div>
-  <div class="mascot"><img src="/mascot.png" alt="Secret AI"></div>
 </header>
 
-<div class="wrap">
+<section id="demo"><div class="wrap">
+  <h2 class="up" data-i="demo">Пример диалога</h2>
+  <p class="sub up" data-i="demoSub">Пишешь как другу — Secret AI сам понимает, что сделать.</p>
   <div class="chat up" id="chat">
-    <div class="msg me">нарисуй кота-космонавта на Луне 🚀</div>
-    <div class="msg bot">Рисую… 🎨 Через пару секунд пришлю.</div>
-    <div class="msg me">а что у меня завтра в календаре?</div>
-    <div class="msg bot">Завтра 2 встречи: в 11:00 созвон с командой и в 18:30 тренировка 💪</div>
-    <div class="msg bot" id="typing"><span class="typing"><b></b><b></b><b></b></span></div>
-  </div>
-</div>
-
-<section id="features"><div class="wrap">
-  <h2 class="up">Всё в одном боте</h2>
-  <p class="sub up">Пишешь как другу — Secret AI сам понимает, что сделать.</p>
-  <div class="grid">
-    <div class="card up" style="--tint:#6d5dfc"><div class="ic">💬</div><h3>Умный чат</h3><p>Отвечает на вопросы, пишет тексты и код, переводит на любые языки, ищет свежее в интернете.</p></div>
-    <div class="card up" style="--tint:#d946ef"><div class="ic">🎨</div><h3>Картинки и видео</h3><p>Нарисует что угодно, отредактирует твоё фото и снимет короткое видео с озвучкой.</p></div>
-    <div class="card up" style="--tint:#14b8a6"><div class="ic">🎙</div><h3>Голос</h3><p>Отправь голосовое — получишь ответ голосом. Понимает кружочки и аудио.</p></div>
-    <div class="card up" style="--tint:#f5a524"><div class="ic">👔</div><h3>ИИ-секретарь</h3><p>Пока ты спишь или занят, вежливо отвечает в твоих личных чатах — и присылает тебе сводку.</p></div>
-    <div class="card up" style="--tint:#3b82f6"><div class="ic">🧩</div><h3>2500+ приложений</h3><p>Gmail, Google Календарь, Таблицы, Notion, GitHub — подключил одной кнопкой и управляешь словами.</p></div>
-    <div class="card up" style="--tint:#ec4899"><div class="ic">🧠</div><h3>Помнит всё</h3><p>Помнит, о чём вы говорили даже месяцы назад, твоё имя, планы и вкусы.</p></div>
-    <div class="card wide up" style="--tint:#22c55e"><div class="ic">🎵</div><h3>Смотрит TikTok за тебя</h3><p>Кинь ссылку — посмотрит видео, пошутит в тему или скажет, что за песня играет.</p></div>
-    <div class="card up" style="--tint:#a855f7"><div class="ic">📱</div><h3>Мини-приложение</h3><p>Красивое приложение внутри Telegram: генерация, подключения, настройки.</p></div>
+    <div class="head"><span class="mi"><img src="/logo.svg" alt=""></span>Secret AI<span>DeepSeek</span></div>
+    <div class="msg me" data-i="m1">сделай сайт для моей кофейни, тёмный и минималистичный</div>
+    <div class="msg bot" data-i="m2">Готово ☕ Собрал лендинг с меню, ценами и картой. Вот ссылка: <code>secret.ai/s/coffee</code></div>
+    <div class="msg me" data-i="m3">а теперь объясни, как решать квадратные уравнения</div>
+    <div class="msg bot" data-i="m4">Считаем дискриминант D = b² − 4ac. Если D &gt; 0 — два корня: x = (−b ± √D) / 2a. Разберём на твоём примере?</div>
   </div>
 </div></section>
 
-<section id="groups"><div class="wrap">
-  <h2 class="up">Душа компании в группе</h2>
-  <p class="sub up">Добавь Secret AI в чат с друзьями — он подстроится под ваш стиль.</p>
-  <div class="band">
-    <div class="chip up"><b>🧠</b><span>Викторина с анимациями и рейтингом</span></div>
-    <div class="chip up"><b>📊</b><span>Итоги дня: болтун дня и фраза дня</span></div>
-    <div class="chip up"><b>😂</b><span>Мемы, цитаты и демотиваторы</span></div>
-    <div class="chip up"><b>🖼</b><span>Картинки бесплатно прямо в чате</span></div>
+<section id="features"><div class="wrap">
+  <h2 class="up" data-i="feat">Всё в одном боте</h2>
+  <p class="sub up" data-i="featSub">Одна подписка вместо пяти сервисов.</p>
+  <div class="grid">
+    <div class="card up"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/></svg></div>
+      <h3 data-i="f1">Умный чат</h3><p data-i="f1t">Отвечает на вопросы, пишет тексты, переводит на любые языки и помнит ваш разговор.</p></div>
+    <div class="card up"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg></div>
+      <h3 data-i="f2">Код и сайты</h3><p data-i="f2t">Пишет код файлами, собирает сайт и сразу даёт ссылку. Codex-режим работает с твоими репозиториями.</p></div>
+    <div class="card up"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg></div>
+      <h3 data-i="f3">Картинки и видео</h3><p data-i="f3t">Нарисует что угодно, отредактирует фото и снимет короткое видео с озвучкой.</p></div>
+    <div class="card up"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></div>
+      <h3 data-i="f4">Голос</h3><p data-i="f4t">Понимает голосовые и кружочки и отвечает реалистичным голосом.</p></div>
+    <div class="card up"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
+      <h3 data-i="f5">ИИ-секретарь</h3><p data-i="f5t">Пока ты занят, вежливо отвечает в личных чатах и присылает сводку.</p></div>
+    <div class="card up"><div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0M16 4a3 3 0 0 1 0 6M21 20a6 6 0 0 0-4-5.6"/></svg></div>
+      <h3 data-i="f6">Группы</h3><p data-i="f6t">Викторины, итоги дня и шутки в тему — бот становится своим в чате.</p></div>
+  </div>
+</div></section>
+
+<section id="models"><div class="wrap">
+  <h2 class="up" data-i="mod">Модели</h2>
+  <p class="sub up" data-i="modSub">Выбираешь в одно касание прямо в чате.</p>
+  <div class="models up">
+    <span>DeepSeek<b data-i="free">бесплатно</b></span>
+    <span>Claude Opus 5.5<b>Pro</b></span>
   </div>
 </div></section>
 
 <section id="start"><div class="wrap">
-  <h2 class="up">Начать — 10 секунд</h2>
-  <p class="sub up">Никаких регистраций и приложений.</p>
+  <h2 class="up" data-i="start">Начать — 10 секунд</h2>
+  <p class="sub up" data-i="startSub">Никаких регистраций.</p>
   <div class="steps">
-    <div class="step up"><h3>Открой бота</h3><p>Нажми «Открыть в Telegram» и затем «Старт».</p></div>
-    <div class="step up"><h3>Напиши что угодно</h3><p>Вопрос, голосовое, фото или «нарисуй…» — он поймёт.</p></div>
-    <div class="step up"><h3>Добавь друзей</h3><p>Позови бота в группу — и начинайте играть в викторину.</p></div>
+    <div class="step up"><h3 data-i="s1">Открой бота</h3><p data-i="s1t">Нажми «Попробовать бесплатно», затем «Старт».</p></div>
+    <div class="step up"><h3 data-i="s2">Напиши что угодно</h3><p data-i="s2t">Вопрос, голосовое, фото или «сделай сайт…» — он поймёт.</p></div>
+    <div class="step up"><h3 data-i="s3">Позови друзей</h3><p data-i="s3t">Добавь бота в группу — и начинайте викторину.</p></div>
   </div>
 </div></section>
 
 <section><div class="wrap">
   <div class="final up">
-    <img src="/mascot.png" alt="">
-    <h2>Попробуй прямо сейчас</h2>
-    <p class="sub" style="margin-bottom:0">Бесплатно. Работает в любом Telegram.</p>
+    <h2 data-i="final">Попробуй прямо сейчас</h2>
+    <p class="sub" style="margin-bottom:0" data-i="finalSub">Бесплатно. Работает в любом Telegram.</p>
     <div class="cta">
-      <a class="btn main" href="https://t.me/__BOT__">Открыть Secret AI</a>
-      <a class="btn ghost" href="https://t.me/__BOT__?startgroup=1">Добавить в группу</a>
+      <a class="btn main" href="https://t.me/__BOT__" data-i="open">Открыть Secret AI</a>
+      <a class="btn ghost" href="https://t.me/__BOT__?startgroup=1" data-i="group">Добавить в группу</a>
     </div>
   </div>
 </div></section>
@@ -213,17 +191,47 @@
 <footer>© Secret AI · @__BOT__</footer>
 
 <script>
-  // Sections slide in as they come into view.
+  const EN = {
+    open: "Open Secret AI", badge: "DeepSeek and Claude Opus in Telegram", h1a: "Top AI models in one chat:",
+    h1b: "from an answer to a ready website in a minute", lead: "Write code, solve homework, draw pictures and build websites right in Telegram. No apps, no sign-ups.",
+    try: "Try for free", what: "What it can do", demo: "Example chat", demoSub: "Write like to a friend — Secret AI figures out what to do.",
+    m1: "make a website for my coffee shop, dark and minimal", m2: "Done ☕ A landing page with the menu, prices and a map. Here's the link: <code>secret.ai/s/coffee</code>",
+    m3: "now explain how to solve quadratic equations", m4: "Find the discriminant D = b² − 4ac. If D &gt; 0 there are two roots: x = (−b ± √D) / 2a. Shall we try your example?",
+    feat: "Everything in one bot", featSub: "One bot instead of five services.",
+    f1: "Smart chat", f1t: "Answers questions, writes texts, translates into any language and remembers your conversation.",
+    f2: "Code and websites", f2t: "Writes code as files, builds a site and gives you a link. Codex mode works with your repositories.",
+    f3: "Images and video", f3t: "Draws anything, edits photos and makes short videos with a voice-over.",
+    f4: "Voice", f4t: "Understands voice messages and video notes and answers in a realistic voice.",
+    f5: "AI secretary", f5t: "While you're busy, it politely answers your private chats and sends you a summary.",
+    f6: "Groups", f6t: "Quizzes, daily recaps and on-point jokes — the bot becomes one of the gang.",
+    mod: "Models", modSub: "Switch with one tap right in the chat.", free: "free",
+    start: "Start in 10 seconds", startSub: "No sign-ups.", s1: "Open the bot", s1t: "Tap “Try for free”, then “Start”.",
+    s2: "Write anything", s2t: "A question, a voice message, a photo or “make a website…” — it gets it.",
+    s3: "Invite friends", s3t: "Add the bot to a group and start a quiz.", final: "Try it right now", finalSub: "Free. Works in any Telegram.", group: "Add to a group",
+  };
+  const RU = {};
+  document.querySelectorAll("[data-i]").forEach(el => { RU[el.dataset.i] = el.innerHTML; });
+  function setLang(lang) {
+    const dict = lang === "en" ? EN : RU;
+    document.querySelectorAll("[data-i]").forEach(el => { if (dict[el.dataset.i]) el.innerHTML = dict[el.dataset.i]; });
+    document.documentElement.lang = lang;
+    document.querySelectorAll(".lang button").forEach(b => b.classList.toggle("on", b.dataset.lang === lang));
+    try { localStorage.setItem("lang", lang); } catch (e) {}
+  }
+  document.querySelectorAll(".lang button").forEach(b => b.addEventListener("click", () => setLang(b.dataset.lang)));
+  let saved = null;
+  try { saved = localStorage.getItem("lang"); } catch (e) {}
+  if ((saved || (navigator.language || "").slice(0, 2)) === "en") setLang("en");
+
   const seen = new IntersectionObserver(entries => entries.forEach(e => {
     if (e.isIntersecting) { e.target.classList.add("in"); seen.unobserve(e.target); }
   }), { threshold: .15 });
   document.querySelectorAll(".up").forEach(el => seen.observe(el));
-  // The chat preview plays message by message, then keeps "typing".
   const msgs = [...document.querySelectorAll("#chat .msg")];
   const play = new IntersectionObserver(entries => {
     if (!entries[0].isIntersecting) return;
     play.disconnect();
-    msgs.forEach((m, i) => setTimeout(() => m.classList.add("show"), 350 + i * 750));
+    msgs.forEach((m, i) => setTimeout(() => m.classList.add("show"), 300 + i * 800));
   }, { threshold: .3 });
   play.observe(document.getElementById("chat"));
 </script>

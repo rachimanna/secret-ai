@@ -1403,10 +1403,15 @@ async def discover_models(app):
         LOG.info("Model: %s (%s)", model, f"{price} credits an answer" if price else "free")
     chosen_models += [m for m in fast + extra if m not in chosen_models]
     backups = []
-    if ONLY_MODEL:  # one model for now: the first gateway's copy in the menu, the other gateways' copies as backups
-        keep = [m for m in chosen_models if re.search(ONLY_MODEL, m, re.I)]
-        keep.sort(key=lambda m: ONLY_ORDER.index(m.split(":", 1)[0]) if m.split(":", 1)[0] in ONLY_ORDER else len(ONLY_ORDER))
-        chosen_models, backups = keep[:1], keep[1:]
+    if ONLY_MODEL:  # a few models for now: the first gateway's copy of each in the menu, the others as backups
+        def gateway(m):
+            return ONLY_ORDER.index(m.split(":", 1)[0]) if m.split(":", 1)[0] in ONLY_ORDER else len(ONLY_ORDER)
+        menu = []
+        for pattern in ONLY_MODEL:
+            keep = sorted((m for m in chosen_models if re.search(pattern, m, re.I)), key=gateway)
+            menu += keep[:1]
+            backups += [m for m in keep[1:] if m not in prices]
+        chosen_models = menu
         prices = {m: p for m, p in prices.items() if m in chosen_models}
         data["group_fast"] = None  # groups answer with the same model
     free_on = [m for m in chosen_models if m not in prices]
@@ -1428,10 +1433,12 @@ async def discover_models(app):
 
 # The models the bot offers, all through AnyModel, in menu order: (how to find the id, credits per answer; 0 = free).
 # The first free one is the default for everyone. Empty list: no models (the bot says so).
-MODEL_CATALOG = []  # for now: nothing from AnyModel, only DeepSeek (ONLY_MODEL); models get added back here later
+MODEL_CATALOG = [
+    (r"opus[-._ ]?5[-._]5(?![-._]?\d)", 5),              # Claude Opus 5.5 (paid; free for the owner)
+]
 DEFAULT_PICK = r"deepseek"  # the default model for everyone who hasn't picked one: DeepSeek
-# Only models matching this go into the menu (one of them shown, the rest back it up); None: everything found is offered.
-ONLY_MODEL = r"deepseek"
+# Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
+ONLY_MODEL = (r"deepseek", r"opus")
 ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # which gateway's DeepSeek goes first
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
