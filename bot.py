@@ -155,7 +155,7 @@ RECALL_MATCHES = 12
 RECALL_CHARS = 600
 # What the model sees of the history: older long answers are shortened and the whole history fits a budget,
 # so 300 messages stay affordable and inside the model's context.
-HISTORY_CHARS = 40_000  # a big prompt makes every answer slow on the gateways; older messages come back by search
+HISTORY_CHARS = 24_000  # a big prompt makes every answer slow on the gateways; older messages come back by search
 MAX_FACTS = 80  # lasting facts kept per person
 HISTORY_ITEM_CHARS = 2_500
 
@@ -2024,6 +2024,21 @@ def user_model(bot_data, user_id):
     return bot_data.get("chat_default") or next(iter(models_for(bot_data, user_id)), None) or bot_data["model"]
 
 
+# Connected apps cost seconds before every answer (Pipedream lookups, MCP handshakes): they load only when the message is
+# about them. Small talk goes straight to the model.
+APP_WORDS = re.compile(
+    r"почт|письм|имейл|e-?mail|gmail|inbox|ящик|календар|calendar|встреч|событи|созвон|notion|ноушн|заметк|drive|диск|"
+    r"документ|docs|таблиц|sheet|excel|youtube|ютуб|spotify|спотиф|плейлист|github|гитхаб|репозитор|todoist|задач|"
+    r"trello|slack|linear|jira|asana|figma|dropbox|контакт|crm|сделк|клиент|прилож|подключ|интеграц|mcp", re.I)
+
+
+def wants_apps(bot_data, user_id, text):
+    """Does this message need the connected apps? Their names, or words about mail, calendars, files, tasks…"""
+    text = text or ""
+    names = bot_data.setdefault("app_names", {}).get(user_id) or []
+    return bool(APP_WORDS.search(text)) or any(name.lower()[:5] in text.lower() for name in names if len(name) >= 4)
+
+
 async def app_tools(bot_data, user_id, taken):
     """MCP tools of apps the user connected in one tap; an outage of one source must not break the answer."""
     tools, names = [], []
@@ -2085,9 +2100,15 @@ async def respond(update, context, target, content, saved_question, voice=False)
     else:
         live = await open_reply(target, lang(update), context.bot_data)
     try:
+        prepared = time.monotonic()
+        use_apps = wants_apps(context.bot_data, user_id, saved_question)
         taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
+        empty = asyncio.sleep(0, ([], []))
         _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
-                                       app_tools(context.bot_data, user_id, taken))
+                                       app_tools(context.bot_data, user_id, taken) if use_apps else empty)
+        if use_apps:
+            context.bot_data.setdefault("app_names", {})[user_id] = list(apps[1])
+        LOG.info("Prepared in %.1f s (apps %s)", time.monotonic() - prepared, "loaded" if use_apps else "skipped")
     except BaseException:
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
@@ -2108,6 +2129,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
     toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                       apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
                                                      edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)])
+    if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
+        toolbox.mcp = []
     accent = "" if persona is PERSONAS["translator"] else ACCENT  # a pure translator outputs only the translation
     instructions = (SYSTEM + accent + TRANSLATION_RULES + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
