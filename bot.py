@@ -1020,6 +1020,18 @@ def pick_grok(ids):
     return found[0] if found else None
 
 
+THINKERS = re.compile(r"gpt-?[5-9]|grok|\bo[1-9]|deepseek-?r|reason|thinking", re.I)  # models that reason before answering
+
+
+def quick_thinking(data, model):
+    """Extra options so reasoning models think briefly (REASONING_EFFORT, "low" by default): a 20 s pause becomes a few.
+    Dropped for good on a gateway that refuses them."""
+    effort = (data.get("reasoning") or "low").strip()
+    if not THINKERS.search(model) or effort in ("", "default", "off") or model in data.setdefault("no_effort", set()):
+        return {}
+    return {"reasoning_effort": effort}
+
+
 def chat_provider(model):
     return next((prefix for prefix in CHAT_PROVIDERS if model.startswith(prefix)), None)
 
@@ -1138,19 +1150,25 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     size = sum(len(str(m.get("content") or "")) for m in messages)
     for _ in range(request.pop("rounds", MAX_TOOL_ROUNDS)):
         options = {"model": model[len(provider):], "stream": True, "messages": messages,
-                   "max_tokens": min(request.get("max_output_tokens", 8000), 32000)}
+                   "max_tokens": min(request.get("max_output_tokens", 8000), 32000), **quick_thinking(context.bot_data, model)}
         if tools:
             options["tools"] = tools
         try:
             stream = await client.chat.completions.create(**options)
         except BadRequestError as exc:
-            if not tools or "tool" not in str(exc).lower():
+            if "reasoning_effort" in options and ("reasoning" in str(exc).lower() or "effort" in str(exc).lower()):
+                context.bot_data.setdefault("no_effort", set()).add(model)  # this gateway refuses it: plain requests
+                LOG.warning("%s refuses reasoning_effort; asking without it", model)
+                options.pop("reasoning_effort")
+                stream = await client.chat.completions.create(**options)
+            elif not tools or "tool" not in str(exc).lower():
                 raise
-            no_tools.add(provider)  # this gateway refuses function tools: plain answers from now on
-            LOG.warning("%s refuses tools; answering without them", provider)
-            tools = []
-            options.pop("tools")
-            stream = await client.chat.completions.create(**options)
+            else:
+                no_tools.add(provider)  # this gateway refuses function tools: plain answers from now on
+                LOG.warning("%s refuses tools; answering without them", provider)
+                tools = []
+                options.pop("tools")
+                stream = await client.chat.completions.create(**options)
         said, calls, finish = "", {}, None
         field = lambda obj, key: obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)  # objects or raw dicts
         try:
@@ -3237,8 +3255,9 @@ async def probe_model(data, model):
     try:
         async def run():
             nonlocal first
-            stream = await client.chat.completions.create(model=model[len(provider):], stream=True, max_tokens=20,
-                                                          messages=[{"role": "user", "content": "Скажи «привет» одним словом."}])
+            stream = await client.chat.completions.create(model=model[len(provider):], stream=True, max_tokens=200,
+                                                          messages=[{"role": "user", "content": "Скажи «привет» одним словом."}],
+                                                          **quick_thinking(data, model))
             async for chunk in stream:
                 choice = (getattr(chunk, "choices", None) or [None])[0]
                 if first is None and getattr(getattr(choice, "delta", None), "content", None):
