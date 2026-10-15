@@ -986,8 +986,10 @@ EXTRA_PROVIDERS = {
                [(r"deepseek-(v\d|chat)", None), (r"qwen-?3", None)], ""),
     "openrouter": ("https://openrouter.ai/api/v1",           # openrouter.ai: only its ":free" models
                    [(r"deepseek", None), (r"qwen", None)], ":free"),
+    "dashscope": ("https://dashscope.aliyuncs.com/compatible-mode/v1",   # Alibaba DashScope (DASHSCOPE_API_KEY): DeepSeek V4 Flash
+                  [(r"deepseek-?v4-?flash(?!.*vision)", "deepseek-v4-flash")], ""),
     "bai": ("https://api.b.ai/v1",                           # b.ai: its free DeepSeek V4 Flash and Tencent Hy3 (BAI_BASE: the
-            [(r"deepseek-?v4-?flash(?!.*vision)", "DeepSeek-V4-Flash"), (r"\bhy-?3", "Hy3")], ""),   # Base URL from its key page)
+            [(r"deepseek-?v4-?flash(?!.*vision)", "deepseek-v4-flash"), (r"\bhy-?3", "Hy3")], ""),   # Base URL from its key page)
     "tokenharbor": ("https://tokenharbor.ai/v1",         # tokenharbor.ai: its ":free" models (TOKENHARBOR_BASE if the URL differs)
                     [(r"deepseek", "deepseek-v4.1-flash:free"), (r"mimo", "mimo-v2.6-flash:free")], ":free"),
 }
