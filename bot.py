@@ -3997,7 +3997,10 @@ def main():
             snapshots.restore()
         except Exception as exc:  # better to start with an empty memory than not at all
             LOG.error("Could not restore the database from Postgres: %s %s", type(exc).__name__, str(exc)[:200])
-    public_url = (hosting.start_tunnel(port) or os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
+    tunnel = hosting.start_tunnel(port)
+    if tunnel:  # the tunnel's address changes on every start: a Cloudflare Worker gives a permanent one in front of it
+        tunnel = hosting.stable_address(tunnel) or tunnel
+    public_url = (tunnel or os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL")
                   or "").strip().rstrip("/")
     if public_url and not public_url.startswith("https://"):
         raise SystemExit("PUBLIC_URL must start with https:// (Telegram Mini Apps require HTTPS).")

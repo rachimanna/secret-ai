@@ -7,6 +7,7 @@
 - the bot updates itself from GitHub: every few minutes it checks main, pulls and restarts in place.
 """
 import asyncio
+import json
 import logging
 import os
 import platform
@@ -99,6 +100,55 @@ def start_tunnel(port):
     else:
         LOG.warning("Mini App tunnel gave no address; the Mini App is off until the next start")
     return found
+
+
+WORKER_SCRIPT = """export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+    const target = new URL(TARGET);
+    url.protocol = target.protocol; url.hostname = target.hostname; url.port = "";
+    return fetch(new Request(url, request), { redirect: "manual" });
+  }
+};
+"""
+CF_API = "https://api.cloudflare.com/client/v4"
+
+
+def stable_address(target):
+    """A permanent https://<name>.<subdomain>.workers.dev in front of the changing tunnel address: a tiny Cloudflare
+    Worker that forwards everything to target, rewritten on every start. Needs CF_ACCOUNT_ID and a CF_API_TOKEN with
+    "Workers Scripts: Edit" (WORKER_NAME, default "secret-ai"). Returns the address, or "" when it can't be done."""
+    import httpx
+
+    account, token = os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()
+    name = re.sub(r"[^a-z0-9-]", "-", os.environ.get("WORKER_NAME", "secret-ai").strip().lower()) or "secret-ai"
+    if not target or not account or not token or os.environ.get("STABLE_URL", "1").strip() == "0":
+        return ""
+    headers = {"Authorization": f"Bearer {token}"}
+    base = f"{CF_API}/accounts/{account}/workers"
+    try:
+        with httpx.Client(timeout=30, headers=headers) as http:
+            sub = http.get(f"{base}/subdomain").json()
+            subdomain = ((sub or {}).get("result") or {}).get("subdomain")
+            if not subdomain:
+                LOG.warning("Stable address: open Workers & Pages in Cloudflare once to pick your workers.dev subdomain")
+                return ""
+            script = "const TARGET = " + json.dumps(target) + ";\n" + WORKER_SCRIPT
+            metadata = {"main_module": "worker.js", "compatibility_date": "2024-09-01"}
+            upload = http.put(f"{base}/scripts/{name}", files={
+                "metadata": (None, json.dumps(metadata), "application/json"),
+                "worker.js": ("worker.js", script, "application/javascript+module")})
+            if not upload.json().get("success"):
+                LOG.warning("Stable address: the Worker upload was refused (the token needs Workers Scripts: Edit): %s",
+                            str(upload.json().get("errors"))[:200])
+                return ""
+            http.post(f"{base}/scripts/{name}/subdomain", json={"enabled": True, "previews_enabled": False})
+    except Exception as exc:
+        LOG.warning("Stable address failed: %s %s", type(exc).__name__, str(exc)[:200])
+        return ""
+    address = f"https://{name}.{subdomain}.workers.dev"
+    LOG.info("Stable Mini App address: %s", address)
+    return address
 
 
 def _drain(stream, lines=None):
