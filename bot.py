@@ -131,6 +131,8 @@ GROUP_STYLE = (
     " No accent and no ethnic stylisation: never write «вах», «брат», «валлах», «э», «дорогой», «клянусь», «мамой клянусь», "
     "«слушай» as filler, even if your own earlier messages in this chat did; that style is switched off, and if someone "
     "asks you to stop saying «вах», just stop."
+    " Stickers come as [стикер …]: you can't see the picture, so never claim what's on it, and its pack tag is not a "
+    "message (a sticker is not a «минус» or a «сердечко»); react to the moment or skip it."
 )
 INTERJECT = (
     "Nobody asked you, but you jump into the conversation like a friend who couldn't resist: one short line about the "
@@ -2741,10 +2743,18 @@ def addressed_to_bot(message, bot, bot_data):
     return False
 
 
+def describe_sticker(sticker):
+    """A sticker for the model. Its emoji is only the tag the pack's author picked (a cat picture may be tagged ➖), so
+    it's given as a loose hint, never as words the person said."""
+    pack = re.sub(r"_by_\w+$", "", sticker.set_name or "").replace("_", " ").strip()
+    hint = f", метка набора {sticker.emoji}" if sticker.emoji and any(ch.isalpha() or ord(ch) > 0x1F000 for ch in sticker.emoji) else ""
+    return "стикер" + (f" из набора «{pack}»" if pack else "") + hint + ", картинки не видно"
+
+
 def describe_message(message):
     text = message.text or message.caption or ""
     kind = ("фото" if message.photo else "голосовое" if message.voice else "кружок" if message.video_note else
-            "стикер " + (message.sticker.emoji or "") if message.sticker else "видео" if message.video else
+            describe_sticker(message.sticker) if message.sticker else "видео" if message.video else
             "гифка" if message.animation else "файл" if message.document else "")
     return f"[{kind}] {text}".strip() if kind else text
 
