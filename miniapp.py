@@ -220,7 +220,7 @@ def make_handler(config):
                 github = config["store"].get(uid, "github")
                 self._send(200, {"chats": store.threads(uid),
                                  "github": github[0]["meta"].get("login", "") if github else None,
-                                 "can_run": config["store"].get_meta("owner") == uid})
+                                 "can_run": config["store"].get_meta("owner") == uid and codex.sandbox_ready()})
             elif action == "thread":
                 tasks = store.thread(str(data.get("thread") or "")[:20], uid)
                 self._send(200, {"tasks": [dict(codex.public(t, full=True), change=codex.change_view(t.get("change"))) for t in tasks]})

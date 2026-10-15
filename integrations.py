@@ -167,18 +167,9 @@ class Connections:
             self.db.execute("INSERT INTO bot_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, stored))
 
     def claim_owner(self, user_id):
-        """The bot owner: the earliest user in the chat history, otherwise the first person who uses the bot."""
-        owner = self.get_meta("owner")
-        if owner:
-            return owner
-        with self.lock:
-            try:
-                row = self.db.execute("SELECT user_id FROM messages ORDER BY id LIMIT 1").fetchone()
-            except sqlite3.OperationalError:
-                row = None
-        owner = row[0] if row else user_id
-        self.set_meta("owner", owner)
-        return owner
+        """The bot owner (OWNER_ID, or whoever confirmed the console code with /owner); None until then.
+        Nobody becomes the owner just by writing first: that would hand a stranger the admin tools."""
+        return self.get_meta("owner")
 
     def close(self):
         self.db.close()

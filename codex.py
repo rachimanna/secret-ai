@@ -233,19 +233,58 @@ class Workspace:
         return f"Unknown tool {name}."
 
 
+_sandbox = {}
+
+
+def sandbox_ready():
+    """Commands run only inside a bubblewrap sandbox: no network, no view of the server's files, only the project folder.
+    Without bwrap (or where it can't start) the run tool is off. CODEX_RUN=0 turns it off anyway."""
+    if "ok" not in _sandbox:
+        ok = False
+        if os.environ.get("CODEX_RUN", "1").strip() != "0" and shutil.which("bwrap"):
+            folder = tempfile.mkdtemp(prefix="codex-check-")
+            try:
+                ok = subprocess.run(_sandboxed(folder, "true"), capture_output=True, timeout=20, env=_ENV).returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+            finally:
+                shutil.rmtree(folder, ignore_errors=True)
+        _sandbox["ok"] = ok
+    return _sandbox["ok"]
+
+
+_ENV = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": "/work", "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
+
+
+def _sandboxed(folder, command):
+    """bwrap: the system's programs read-only, the project folder as /work, fresh /tmp, /proc and /dev, every namespace
+    (network included) unshared, no access to the bot's folder, home, database or environment."""
+    args = ["bwrap", "--ro-bind", "/usr", "/usr"]
+    for path in ("/bin", "/lib", "/lib64", "/sbin", "/etc/alternatives", "/etc/ld.so.cache", "/etc/ld.so.conf",
+                 "/etc/ld.so.conf.d"):
+        args += ["--ro-bind-try", path, path]
+    args += ["--proc", "/proc", "--dev", "/dev", "--tmpfs", "/tmp", "--bind", folder, "/work", "--chdir", "/work",
+             "--unshare-all", "--die-with-parent", "--new-session", "--clearenv"]
+    for key, value in _ENV.items():
+        args += ["--setenv", key, value]
+    return args + ["bash", "-c", command]
+
+
 def run_command(files, command):
-    """Write the files into a temporary folder and run the command there, without the bot's secrets in the environment."""
+    """Write the files into a temporary folder and run the command there, inside the sandbox."""
+    if not sandbox_ready():
+        return "Running commands is not available on this server."
     folder = tempfile.mkdtemp(prefix="codex-")
     try:
         for path, text in files.items():
-            target = os.path.join(folder, path)
+            target = os.path.realpath(os.path.join(folder, path))
+            if not target.startswith(os.path.realpath(folder) + os.sep):
+                continue  # a path that leaves the folder is never written
             os.makedirs(os.path.dirname(target), exist_ok=True)
             with open(target, "w", encoding="utf-8") as out:
                 out.write(text)
-        env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": folder, "LANG": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
         try:
-            done = subprocess.run(["bash", "-lc", command], cwd=folder, env=env, capture_output=True, text=True,
-                                  timeout=RUN_TIMEOUT)
+            done = subprocess.run(_sandboxed(folder, command), env=_ENV, capture_output=True, text=True, timeout=RUN_TIMEOUT)
             output = (done.stdout + ("\n" + done.stderr if done.stderr else "")).strip()
             result = f"exit code {done.returncode}\n{output}"
         except subprocess.TimeoutExpired:

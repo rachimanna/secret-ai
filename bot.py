@@ -1,6 +1,7 @@
 """Secret AI: Telegram polling bot with a Render HTTP health endpoint."""
 import asyncio
 import base64
+import hmac
 import html
 import io
 import json
@@ -8,6 +9,7 @@ import logging
 import os
 import random
 import re
+import secrets
 import sqlite3
 import tempfile
 import time
@@ -293,8 +295,10 @@ class Memory:
                             "ORDER BY id DESC LIMIT ?)", (user_id, user_id, MAX_FACTS))
 
     def reset(self, user_id):
+        """Forget this person: the conversation and the facts remembered about them (name, city…)."""
         with self.db:
             self.db.execute("DELETE FROM messages WHERE user_id=?", (user_id,))
+            self.db.execute("DELETE FROM facts WHERE user_id=?", (user_id,))
 
     def persona(self, user_id):
         row = self.db.execute("SELECT persona FROM settings WHERE user_id=?", (user_id,)).fetchone()
@@ -1647,7 +1651,6 @@ async def authorized(update, context):
     if update.effective_chat.type != "private":
         await send(update.effective_message, ui(update, "Напишите Secret AI в личные сообщения.", "Please message Secret AI privately."))
         return False
-    context.bot_data["connections"].claim_owner(update.effective_user.id)
     if not context.bot_data.get("logo_id") and not context.bot_data.get("logo_tried"):
         context.application.create_task(ensure_logo(context.application))
     return True
@@ -1891,6 +1894,39 @@ def wipe_all(data):
     with groups.db:
         groups.db.execute("DELETE FROM group_messages")
         groups.db.execute("DELETE FROM group_phrases")
+
+
+def owner_code(data):
+    """With no owner yet: a one-time code, printed only in the server console, that /owner exchanges for ownership."""
+    if data["connections"].get_meta("owner"):
+        data.pop("owner_code", None)
+        return None
+    if not data.get("owner_code"):
+        data["owner_code"] = secrets.token_hex(5)
+        LOG.warning("No bot owner yet. To become the owner, send the bot in a private chat: /owner %s "
+                    "(or set OWNER_ID in .env)", data["owner_code"])
+    return data["owner_code"]
+
+
+async def owner_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/owner <code>: become the owner with the code from the server console (only while there is no owner)."""
+    if not await authorized(update, context):
+        return
+    data, user_id = context.bot_data, update.effective_user.id
+    if data["connections"].get_meta("owner"):
+        text = ui(update, "Владелец уже назначен." if data["connections"].get_meta("owner") != user_id else "Ты уже владелец 👑",
+                  "The bot already has an owner." if data["connections"].get_meta("owner") != user_id else "You're already the owner 👑")
+        await send(update.effective_message, text)
+        return
+    expected, given = owner_code(data), (context.args[0] if context.args else "").strip()
+    if not expected or not given or not hmac.compare_digest(given, expected):
+        await send(update.effective_message, ui(update, "Неверный код. Код владельца есть только в консоли сервера.",
+                                                "Wrong code. The owner code is only in the server console."))
+        return
+    data["connections"].set_meta("owner", user_id)
+    data.pop("owner_code", None)
+    LOG.info("Bot owner set: %s", user_id)
+    await send(update.effective_message, ui(update, "👑 Готово, теперь ты владелец бота.", "👑 Done, you're the bot's owner now."))
 
 
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4379,6 +4415,7 @@ async def post_init(app):
     if (app.bot_data.get("public_url") and hosting.on_render()
             and os.environ.get("KEEP_AWAKE", "1").strip() != "0"):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
+    owner_code(app.bot_data)  # no owner yet: the console shows the code for /owner
     await resolve_abacus_model(app)
     await discover_models(app)
     app.bot_data["previews_task"] = asyncio.create_task(gentemplates.draw_previews(app.bot_data, free_image))
@@ -4669,28 +4706,36 @@ def codex_owner(data, user_id):
     return data["connections"].get_meta("owner") == user_id
 
 
+def codex_can_run(data, user_id):
+    """The run tool: the owner only, and only where the sandbox works."""
+    return codex_owner(data, user_id) and codex.sandbox_ready()
+
+
 async def run_codex(app, task_id, language, charged=0):
     data, store = app.bot_data, app.bot_data["codex"]
     task = store.get(task_id)
     user_id = task["user_id"]
-    context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
-    live = codex.TaskLive(store, task_id, language)
-    earlier = [t for t in store.thread(task["thread"], user_id) if t["id"] != task_id and t["created"] <= task["created"]]
-    branch = task.get("branch") or f"codex/{codex.slug(task['prompt'])}-{task_id[:4]}"
-    if task["mode"] == "repo":
-        await data["github_apps"].fresh_token(data["http"], user_id)
-        tools = RepoTools(Toolbox(data["http"], data["connections"], data["pending"], user_id, language))
-    else:
-        tools = codex.Workspace(store, task_id, can_run=codex_owner(data, user_id), language=language)
     ru = language == "ru"
-    live.status("Изучаю задачу" if ru else "Reading the task")
-    try:
+    branch = task.get("branch") or f"codex/{codex.slug(task['prompt'])}-{task_id[:4]}"
+    try:  # everything, the GitHub setup included: a failure always ends the task and gives the credits back
+        context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
+        live = codex.TaskLive(store, task_id, language)
+        earlier = [t for t in store.thread(task["thread"], user_id) if t["id"] != task_id and t["created"] <= task["created"]]
+        can_run = await asyncio.to_thread(codex_can_run, data, user_id)
+        if task["mode"] == "repo":
+            await data["github_apps"].fresh_token(data["http"], user_id)
+            tools = RepoTools(Toolbox(data["http"], data["connections"], data["pending"], user_id, language))
+        else:
+            tools = codex.Workspace(store, task_id, can_run=can_run, language=language)
+        live.status("Изучаю задачу" if ru else "Reading the task")
         answer, _ = await generate(
             context, live, tools, model=task["model"], store=False, max_output_tokens=32000, rounds=codex.ROUNDS,
-            instructions=codex.instructions(task["mode"], task["repo"], branch, codex_owner(data, user_id), language),
+            instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language),
             input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
                                                                           else "") + task["prompt"]}])
-    except asyncio.CancelledError:
+    except asyncio.CancelledError:  # stopped by the user: nothing was delivered, so the credits come back
+        if charged:
+            data["memory"].gen_refund(user_id, "credits", charged)
         store.update(task_id, status=codex.STATUS_STOPPED, step="")
         raise
     except Exception as exc:
@@ -4911,6 +4956,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("owner", owner_command))
     app.add_handler(CommandHandler(["version", "v"], version_command))
     # "/version" pasted as formatted text isn't a command for Telegram: catch it as text too.
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*/(version|v)(@\w+)?\s*$"), version_command))
