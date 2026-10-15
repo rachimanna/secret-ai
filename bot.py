@@ -3330,7 +3330,13 @@ async def probe_model(data, model):
         return None, "не ответила за 40 с"
     except Exception as exc:
         drop_model(data, model, exc)
-        return None, f"ошибка {type(exc).__name__}" + (" — убрал из меню" if model not in data.get("models", []) else "")
+        said = ""
+        body = getattr(exc, "body", None)
+        if isinstance(body, dict):  # the provider's own words: "insufficient balance", "verify your account"…
+            said = str((body.get("error") or {}).get("message") if isinstance(body.get("error"), dict) else body.get("error") or body.get("message") or "")
+        said = (said or str(exc)).strip().replace("\n", " ")[:140]
+        return None, f"ошибка {type(exc).__name__}" + (f": «{said}»" if said else "") + (
+            " — убрал из меню" if model not in data.get("models", []) else "")
     return first if first is not None else time.monotonic() - started, time.monotonic() - started
 
 
