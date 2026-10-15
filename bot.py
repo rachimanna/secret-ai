@@ -22,6 +22,7 @@ import httpx
 import imageio_ffmpeg
 from openai import (
     APIConnectionError,
+    APIError,
     AsyncOpenAI,
     AuthenticationError,
     BadRequestError,
@@ -1144,24 +1145,32 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
             options.pop("tools")
             stream = await client.chat.completions.create(**options)
         said, calls, finish = "", {}, None
-        async for chunk in stream:
-            if not chunk.choices:
-                continue
-            choice = chunk.choices[0]
-            delta = getattr(choice, "delta", None)  # some gateways end the stream with a chunk without a delta
-            content = getattr(delta, "content", None)
-            if isinstance(content, list):  # or send content as parts
-                content = "".join(p.get("text", "") if isinstance(p, dict) else str(getattr(p, "text", "") or "") for p in content)
-            if content:
-                said += content
-                await live.update(prefix + text + said)
-            for call in getattr(delta, "tool_calls", None) or []:
-                slot = calls.setdefault(call.index or 0, {"id": "", "name": "", "arguments": ""})
-                slot["id"] = call.id or slot["id"]
-                if call.function:
-                    slot["name"] += call.function.name or ""
-                    slot["arguments"] += call.function.arguments or ""
-            finish = getattr(choice, "finish_reason", None) or finish
+        field = lambda obj, key: obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)  # objects or raw dicts
+        try:
+            async for chunk in stream:
+                if not field(chunk, "choices"):
+                    continue
+                choice = field(chunk, "choices")[0]
+                delta = field(choice, "delta")  # some gateways end the stream with a chunk without a delta
+                content = field(delta, "content") if delta is not None else None
+                if isinstance(content, list):  # or send content as parts
+                    content = "".join(str(field(p, "text") or "") for p in content)
+                if content:
+                    said += content
+                    await live.update(prefix + text + said)
+                for call in (field(delta, "tool_calls") if delta is not None else None) or []:
+                    slot = calls.setdefault(field(call, "index") or 0, {"id": "", "name": "", "arguments": ""})
+                    slot["id"] = field(call, "id") or slot["id"]
+                    function = field(call, "function")
+                    if function:
+                        slot["name"] += field(function, "name") or ""
+                        slot["arguments"] += field(function, "arguments") or ""
+                finish = field(choice, "finish_reason") or finish
+        except Exception as exc:
+            # The gateway broke off after the answer was written (an error event at the end of the stream): keep the text.
+            if not said.strip() or calls:
+                raise
+            LOG.warning("%s stream ended with %s after the answer: %s", model, type(exc).__name__, str(exc)[:200])
         text += said
         incomplete = finish == "length"
         if not calls:
@@ -4023,7 +4032,7 @@ async def on_error(update, context):
         LOG.warning("Error notification could not be delivered")
 
 
-MODEL_ERRORS = (APIStatusError, APIConnectionError, APITimeoutError, cursor.CursorError)  # any provider failure
+MODEL_ERRORS = (APIError, cursor.CursorError)  # any provider failure
 
 
 def error_text(error):
