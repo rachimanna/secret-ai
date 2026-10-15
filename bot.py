@@ -1923,7 +1923,9 @@ async def read_question(update, context):
             await status.delete()
             raise
         if not transcript:
-            await status.edit_text(ui(update, "Не удалось распознать речь. Запишите ещё раз.", "No speech recognized. Please try again."))
+            shown = ui(update, "Не удалось распознать речь. Запишите ещё раз.", "No speech recognized. Please try again.")
+            await status.edit_text(shown)
+            remember_reply(context, update, shown)
             return None
         await status.delete()  # the answer comes as a voice message; no transcript bubble in between
         question = transcript if not message.caption else f"{message.caption}\n\n{transcript}"
@@ -3727,7 +3729,9 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if message.text and await secretary_switch(update, context, message.text):
         return
     if not models_for(context.bot_data, update.effective_user.id):
-        await send(message, ui(update, "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon."))
+        shown = ui(update, "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon.")
+        await send(message, shown)
+        remember_reply(context, update, shown)
         return
     remember_photo(context.bot_data, update.effective_user.id, message)
     if message.media_group_id and (message.photo or message.document):
@@ -3987,6 +3991,25 @@ async def unsupported(update, context):
         await send(update.effective_message, ui(update, "Отправьте текст, голосовое, аудио или фото. Команды: /help", "Send text, voice, audio or a photo. Commands: /help"))
 
 
+def remember_reply(context, update, shown):
+    """A service reply (an error, "no models", "couldn't hear the voice message") goes into the private chat's history,
+    so the model knows what the person saw and understands "ok, let's add it then" afterwards."""
+    message, chat = update.effective_message, update.effective_chat
+    if not message or not chat or chat.type != "private" or not update.effective_user:
+        return
+    asked = (message.text or message.caption or ("[голосовое сообщение]" if message.voice or message.audio or message.video_note
+             else "[фото]" if message.photo else "[сообщение]"))
+    memory, user_id = context.bot_data["memory"], update.effective_user.id
+    try:
+        last = memory._last_turn(user_id)
+        if last and last[1][2] == asked:  # the question is already saved (the error came after the answer): note it there
+            memory.annotate(user_id, f"[Then the bot showed: {shown}]")
+        else:
+            memory.append_turn(user_id, asked, f"[Service message the bot showed instead of an answer: {shown}]")
+    except sqlite3.Error as exc:
+        LOG.warning("Could not remember a service reply: %s", type(exc).__name__)
+
+
 async def on_error(update, context):
     error = context.error
     # Never log exception bodies: they can contain tokens, URLs or user content.
@@ -3996,10 +4019,12 @@ async def on_error(update, context):
     LOG.error("Handler error: %s at %s %s", type(error).__name__, place, str(error)[:300] if isinstance(error, MODEL_ERRORS) else "")
     if not isinstance(update, Update) or not update.effective_message or not update.effective_user or update.business_message:
         return
+    shown = ui(update, *error_text(error))
     try:
-        await send(update.effective_message, ui(update, *error_text(error)))
+        await send(update.effective_message, shown)
     except TelegramError:
         LOG.warning("Error notification could not be delivered")
+    remember_reply(context, update, shown)
 
 
 MODEL_ERRORS = (APIError, cursor.CursorError)  # any provider failure
@@ -4017,9 +4042,9 @@ def error_text(error):
     elif isinstance(error, (AuthenticationError, NotFoundError, PermissionDeniedError)):
         ru, en = "Выбранная модель недоступна на ключе бота. Выбери другую модель в Secret AI.", "The chosen model isn't available on the bot's key. Pick another model in Secret AI."
     elif isinstance(error, BadRequestError):
-        ru, en = "OpenAI отклонил запрос. Попробуйте более короткий текст или другое фото/голосовое.", "OpenAI rejected the request. Try shorter text or different media."
+        ru, en = "Модель отклонила запрос. Попробуй написать текстом или прислать другое фото/голосовое.", "The model rejected the request. Try text or different media."
     elif isinstance(error, APIConnectionError):
-        ru, en = "OpenAI не ответил вовремя или недоступна сеть. Попробуйте ещё раз через минуту.", "OpenAI timed out or the network is unavailable. Please try again in a minute."
+        ru, en = "Модель не ответила вовремя или недоступна сеть. Попробуй ещё раз через минуту.", "The model timed out or the network is unavailable. Please try again in a minute."
     elif isinstance(error, TimeoutError):
         ru, en = "Файл обрабатывался слишком долго. Попробуйте запись покороче.", "Processing the file took too long. Try a shorter recording."
     elif isinstance(error, ValueError):
