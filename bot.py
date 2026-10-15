@@ -2641,7 +2641,7 @@ async def business_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await secretary_answer(context, message)
     except Exception as exc:  # never show errors to the person the owner is talking to
-        LOG.warning("Secretary failed: %s", type(exc).__name__)
+        LOG.warning("Secretary failed: %s %s", type(exc).__name__, str(exc)[:300])
 
 
 async def secretary_answer(context, message):
@@ -2667,12 +2667,20 @@ async def secretary_answer(context, message):
         await context.bot.send_chat_action(chat_id, ChatAction.TYPING, business_connection_id=conn_id)
     except TelegramError:
         pass
-    response = await data["client"].responses.create(
-        model=data["model"], instructions=sec.instructions(conn.get("name", "the owner"), current["rules"]), store=False,
-        max_output_tokens=1500,
-        input="Chat (oldest first):\n" + "\n".join(activity.lines.get(chat_id, [])) + f"\n\nAnswer {name}'s last message.")
-    text = (response.output_text or "").strip()
+    instructions = sec.instructions(conn.get("name", "the owner"), current["rules"])
+    chat = "Chat (oldest first):\n" + "\n".join(activity.lines.get(chat_id, [])) + f"\n\nAnswer {name}'s last message."
+    text = ""
+    # The bot's main chat model first (what answers in the private chat), plain OpenAI as the fallback.
+    for model in dict.fromkeys([data.get("chat_default") or data["model"], data["model"]]):
+        try:
+            text = (await quick_answer(data, model, instructions, chat, max_tokens=1500)).strip()
+        except Exception as exc:
+            LOG.warning("Secretary model %s failed: %s %s", model, type(exc).__name__, str(exc)[:200])
+            continue
+        if text:
+            break
     if not text:
+        activity.answered.pop(chat_id, None)  # nothing was sent: the next message may try again
         return
     await send_signed(context, chat_id, text[:3500], conn_id, message.message_id)
     activity.log(chat_id, f"AI secretary: {text}")
