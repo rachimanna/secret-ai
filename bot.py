@@ -229,6 +229,13 @@ class Memory:
                                 f"({','.join('?' * len(ids))}) ORDER BY id", (user_id, before_id, *ids)).fetchall()
         return [(created, role, content) for _, created, role, content in found]
 
+    def annotate(self, user_id, note):
+        """Add a note to the bot's latest answer (e.g. that a video was sent): the history then remembers it for good,
+        restarts included, and the roles still alternate."""
+        with self.db:
+            self.db.execute("UPDATE messages SET content = content || ? WHERE id = (SELECT MAX(id) FROM messages "
+                            "WHERE user_id=? AND role='assistant')", ("\n" + note, user_id))
+
     def _last_turn(self, user_id):
         rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT 2", (user_id,)).fetchall()
         if len(rows) < 2 or rows[0][1] != "assistant" or rows[1][1] != "user":
@@ -3228,9 +3235,18 @@ async def photo_bytes(bot, photos):
     return result
 
 
-def set_state(job, state):
+def set_state(job, state, data=None):
     if job.get("entry"):
         job["entry"].update(state=state, at=time.monotonic(), task=None)
+    if data is not None and job.get("chat_id") in (None, job["user_id"]):  # the private chat's history keeps it
+        what = "picture" if job["kind"] == "photo" else "video"
+        note = {"done": f"[{what} «{job['prompt'][:120]}» was delivered to the chat]",
+                "failed": f"[{what} «{job['prompt'][:120]}» failed; the user was told]",
+                "cancelled": f"[{what} «{job['prompt'][:120]}» was cancelled]"}[state]
+        try:
+            data["memory"].annotate(job["user_id"], note)
+        except Exception as exc:
+            LOG.warning("Could not note the generation: %s", type(exc).__name__)
 
 
 async def generation_job(app, job):
@@ -3268,13 +3284,13 @@ async def generation_job(app, job):
                            else make_kling_video(data, job) if provider in ("kling", "anymodel") else make_veo_video(data, job))
             await bot.send_video(chat, InputFile(video, filename="secret-ai.mp4"), caption=caption, supports_streaming=True,
                                  write_timeout=180, read_timeout=180, **answer)
-        set_state(job, "done")
+        set_state(job, "done", data)
     except asyncio.CancelledError:  # the user said not to make it
-        set_state(job, "cancelled")
+        set_state(job, "cancelled", data)
         if job["how"] != "owner":
             data["memory"].gen_refund(user_id, job["how"], job["cost"])
     except Exception as exc:  # any failure: give the generation back and explain
-        set_state(job, "failed")
+        set_state(job, "failed", data)
         if job["how"] != "owner":
             data["memory"].gen_refund(user_id, job["how"], job["cost"])
         code = exc.code if isinstance(exc, MediaError) else "failed"
