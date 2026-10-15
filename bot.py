@@ -979,7 +979,10 @@ def is_abacus(model):
 
 
 # Chat-completions gateways: model prefix -> the bot_data key of its client. AnyModel models also get function tools.
-CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "groq:": "groq", "cerebras:": "cerebras"}
+CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "groq:": "groq", "cerebras:": "cerebras",
+                  "opencode:": "opencode"}
+# More gateways for single free models: name -> (base URL, the models to take from it, the id to try if the list is closed).
+EXTRA_PROVIDERS = {"opencode": ("https://opencode.ai/zen/v1", (r"kimi[-._]?k2",), "kimi-k2.6")}  # OPENCODE_API_KEY: Kimi
 # Very fast inference on special chips, free keys: GROQ_API_KEY (console.groq.com), CEREBRAS_API_KEY (cloud.cerebras.ai).
 FAST_PROVIDERS = {"groq": "https://api.groq.com/openai/v1", "cerebras": "https://api.cerebras.ai/v1"}
 FAST_PICK = (r"kimi[-._]?k2", r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
@@ -1092,6 +1095,10 @@ def model_identity(model):
         pretty = "DeepSeek " + name.split("deepseek", 1)[1].strip("-").replace("-", " ").upper()
         return (f" You run on {pretty.strip()}, a model made by DeepSeek. If someone asks which model you are or who created "
                 f"you, say plainly that you are {pretty.strip()} by DeepSeek, working inside the Secret AI Telegram bot.")
+    if "kimi" in name:
+        pretty = "Kimi " + "-".join(name.split("kimi-", 1)[-1].split("-")).upper().replace("-", " ")
+        return (f" You run on {pretty}, a model made by Moonshot AI. If someone asks which model you are or who created you, "
+                f"say plainly that you are {pretty} by Moonshot AI, working inside the Secret AI Telegram bot.")
     if "grok" in name:
         pretty = "Grok " + ".".join(re.findall(r"\d+", name.split("grok", 1)[1])[:2])
         return (f" You run on {pretty}, a model made by xAI. If someone asks which model you are or who created you, say "
@@ -1358,6 +1365,21 @@ async def discover_models(app):
             fast.append(f"{name}:{found}")
             LOG.info("Fast model on %s: %s", name, found)
     data["group_fast"] = fast[0] if fast else None
+    # Extra gateways (OpenCode Zen…): their model goes into the menu as a free one.
+    extra = []
+    for name, (_, patterns, usual) in EXTRA_PROVIDERS.items():
+        if not data.get(name):
+            continue
+        try:
+            ids = [m.id for m in (await data[name].models.list()).data]
+        except Exception as exc:
+            LOG.warning("%s model list unavailable (%s); trying %s", name, type(exc).__name__, usual)
+            ids = []
+        hits = sorted((i for p in patterns for i in ids if re.search(p, i, re.I)),
+                      key=lambda i: ("free" not in i.lower(), [-int(n) for n in re.findall(r"\d+", i)][:3], len(i)))
+        model = f"{name}:{hits[0] if hits else usual}"
+        extra.append(model)
+        LOG.info("Model on %s: %s%s", name, model, "" if hits else " (not in its list, trying the usual id)")
     # The owner's list (MODEL_CATALOG) decides what is offered: each found in AnyModel's catalog, free or for credits.
     chosen_models, prices = [], {}
     for pattern, price in MODEL_CATALOG:
@@ -1370,7 +1392,7 @@ async def discover_models(app):
         if price:
             prices[model] = price
         LOG.info("Model: %s (%s)", model, f"{price} credits an answer" if price else "free")
-    chosen_models += [m for m in fast if m not in chosen_models]
+    chosen_models += [m for m in fast + extra if m not in chosen_models]
     free_on = [m for m in chosen_models if m not in prices]
     data.update(models=chosen_models, premium=prices, fallbacks=free_on)
     data["chat_default"] = data["model"] = (free_on or chosen_models or [None])[0]
@@ -4806,6 +4828,8 @@ def main():
         if os.environ.get("ABACUS_API_KEY", "").strip() else None,
         **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), base_url=url, timeout=60, max_retries=1)
            for name, url in FAST_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
+        **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), base_url=spec[0], timeout=120, max_retries=1)
+           for name, spec in EXTRA_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
         anymodel_chat=AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
                                   base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
                                   timeout=180, max_retries=2) if os.environ.get("ANYMODEL_API_KEY", "").strip() else None,
