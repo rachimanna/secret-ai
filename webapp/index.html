@@ -990,6 +990,11 @@
   body[data-tab="codex"][data-keyboard="true"] .cx-empty { padding-top: 14px; }
   body[data-tab="codex"][data-keyboard="true"] .cx-orb { display: none; }
 
+  #splash.failed { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 20px; padding: 28px; }
+  #splash.failed svg { width: 54px; height: 54px; margin: 0; }
+  #boot-error { max-width: 290px; text-align: center; color: var(--hint); font-size: 14px; line-height: 1.6; }
+  #boot-error p { margin: 0 0 20px; }
+  #boot-retry { min-width: 160px; }
 </style>
 </head>
 <body data-tab="agent">
@@ -1093,12 +1098,12 @@
 
 <template id="logo-tpl">__LOGO__</template>
 <script type="application/json" id="tpl-data">__TEMPLATES__</script>
+<script type="application/json" id="apps-data">__APPS__</script>
 
 <script>
 const tg = window.Telegram?.WebApp;
 // Signal readiness before catalog/API requests; a native launch must not wait for those.
 try { tg?.ready?.(); } catch (e) {}
-setTimeout(() => hideSplash(), 2000);
 const lang = (tg?.initDataUnsafe?.user?.language_code || navigator.language || "ru").startsWith("ru") ? "ru" : "en";
 const T = {
   ru: {
@@ -1420,8 +1425,8 @@ function toast(text, icon = "") {
   clearTimeout(toast.t);
   toast.t = setTimeout(() => el.classList.remove("show"), 2400);
 }
-async function api(path, body = {}) {
-  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg?.initData || "" }, body: JSON.stringify(body) });
+async function api(path, body = {}, signal) {
+  const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg?.initData || "" }, body: JSON.stringify(body), signal });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw Object.assign(new Error(data.error || "error"), { code: data.error, detail: data.detail });
   return data;
@@ -1441,22 +1446,32 @@ function logoSvg(prefix) {
 }
 
 /* ---------------- state ---------------- */
-let state = null;
+let state = null, bootReady = false;
 const connectedSlugs = () => new Set([...(state?.apps?.connected || []).map(a => a.slug), ...(state?.github?.connected ? ["github"] : [])]);
 const connectedCount = () => (state?.apps?.connected || []).length + (state?.github?.connected ? 1 : 0) + (state?.mcp || []).length;
 
 let loading = null;
 function load(fresh = false) {
-  // One request at a time: the GitHub/app polling and visibilitychange share it instead of piling up.
   if (loading) return loading;
   loading = (async () => {
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 10000);
+    if (!bootReady) {
+      $("splash")?.classList.remove("failed");
+      $("boot-error")?.remove();
+    }
     try {
-      const next = await api("/api/state", { fresh });
-      // Re-render only when something changed, so lists don't jump on every refresh.
-      if (JSON.stringify(next) !== JSON.stringify(state)) { state = next; renderAll(); }
+      const next = await api("/api/state", { fresh }, controller.signal);
+      if (JSON.stringify(next) !== JSON.stringify(state)) {
+        const previous = state;
+        state = next;
+        try { renderAll(); } catch (e) { state = previous; throw e; }
+      }
+      bootReady = true;
+      hideSplash();
     } catch (e) {
-      if (!state) toast(errorText(e));
+      if (!bootReady) showBootError(errorText(e));
     } finally {
+      clearTimeout(timeout);
       loading = null;
     }
     return state;
@@ -1465,9 +1480,22 @@ function load(fresh = false) {
 }
 
 function settle() {
-  // Entrance animations play once; later re-renders must not make the lists jump.
-  setTimeout(() => document.querySelectorAll("#quick, #home-apps, #discover, #settings").forEach(el => el.classList.add("settled")), 1400);
+  document.querySelectorAll("#quick, #home-apps, #discover, #settings").forEach(el => el.classList.add("settled"));
 }
+
+function showBootError(text) {
+  const splash = $("splash");
+  if (!splash || bootReady) return;
+  splash.classList.add("failed");
+  $("boot-error")?.remove();
+  const message = document.createElement("div");
+  message.id = "boot-error";
+  message.setAttribute("role", "alert");
+  message.innerHTML = `<p>${esc(text)}</p><button class="btn" id="boot-retry">${lang === "ru" ? "Повторить" : "Try again"}</button>`;
+  splash.append(message);
+  $("boot-retry").onclick = () => load(false).then(settle);
+}
+
 function renderAll() {
   renderHeader();
   renderSecretary();
@@ -2074,7 +2102,9 @@ function findConnected(slug) {
 
 /* ---------------- catalog ---------------- */
 const catalog = {
-  items: [], featured: [], next: null, total: null, q: "", loading: false, loaded: false, seq: 0,
+  items: [], featured: (() => {
+    try { return JSON.parse($("apps-data").textContent)[lang] || []; } catch (e) { return []; }
+  })(), next: null, total: null, q: "", loading: false, loaded: false, seq: 0,
   find(slug) { return this.items.find(a => a.slug === slug) || this.featured.find(a => a.slug === slug); },
 };
 async function loadCatalog(reset) {
@@ -2088,7 +2118,7 @@ async function loadCatalog(reset) {
     catalog.items = reset ? data.apps : catalog.items.concat(data.apps);
     catalog.next = data.next;
     if (data.total) catalog.total = data.total;
-    if (!catalog.q && reset) { catalog.featured = data.apps; if (state) renderHomeApps(); }
+    if (!catalog.q && reset && !catalog.featured.length) { catalog.featured = data.apps; if (state) renderHomeApps(); }
     catalog.loaded = true;
   } catch (e) { if (seq === catalog.seq) toast(errorText(e)); }
   finally { if (seq === catalog.seq) { catalog.loading = false; renderCatalog(); } }
@@ -2674,11 +2704,14 @@ window.addEventListener("scroll", paintHeader, { passive: true });
 
 function hideSplash() {
   const el = $("splash");
-  if (!el || el.classList.contains("gone")) return;
-  // Keep it at least a moment so the app doesn't flash in.
-  const wait = Math.max(0, 450 - performance.now());
-  setTimeout(() => { el.classList.add("gone"); setTimeout(() => el.remove(), 600); }, wait);
+  // pageshow/activation can arrive before /api/state. Never expose an incomplete screen.
+  if (!el || !bootReady || el.classList.contains("gone")) return;
+  requestAnimationFrame(() => {
+    el.classList.add("gone");
+    setTimeout(() => el.remove(), 220);
+  });
 }
+
 function init() {
   if ("scrollRestoration" in history) history.scrollRestoration = "manual";  // always open at the top
   applyTheme();
@@ -2702,8 +2735,7 @@ function init() {
     tg.onEvent?.("activated", resumeMiniApp);
   }
   paintChrome();
-  load().then(settle).finally(hideSplash);
-  setTimeout(hideSplash, 9000);  // never keep the splash if the server is slow to answer
+  load().then(settle);
   // Re-check connections after returning from a sign-in page.
   document.addEventListener("visibilitychange", () => { if (!document.hidden) resumeMiniApp(); });
   window.addEventListener("pageshow", resumeMiniApp);
@@ -2711,7 +2743,6 @@ function init() {
 }
 function resumeMiniApp() {
   try { tg?.ready?.(); } catch (e) {}
-  hideSplash();
   syncCodexViewport();
   if (!document.hidden) load(true);
 }

@@ -155,7 +155,9 @@ def make_handler(config):
                 self._send(200, MASCOT.read_bytes(), "image/png", cache="public, max-age=86400")
             elif url.path in ("/app", "/app/", "/app/index.html"):
                 self._send(200, PAGE.read_bytes().replace(b"__LOGO__", LOGO.read_bytes())
-                           .replace(b"__TEMPLATES__", gentemplates.page_json().encode()), "text/html; charset=utf-8")
+                           .replace(b"__TEMPLATES__", gentemplates.page_json().encode())
+                           .replace(b"__APPS__", json.dumps({lang: featured(lang) for lang in ("ru", "en")},
+                                                           ensure_ascii=False).encode()), "text/html; charset=utf-8")
             elif url.path.startswith("/tpl/") and url.path.endswith(".jpg"):
                 image = gentemplates.preview(url.path[len("/tpl/"):-len(".jpg")])
                 if image:
