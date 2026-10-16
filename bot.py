@@ -74,6 +74,8 @@ SYSTEM = (
     "Use the language of their latest message, caption or voice transcription; "
     "if none is available, use their Telegram language. Short greetings and words shared by many languages (салам, "
     "привет, ок, хай, рахмат) are not a reason to switch: keep the language of the conversation so far, Russian when unsure. "
+    "Never drift into another language or script on your own (no Korean, Chinese, Japanese, Arabic… phrases, not even as a "
+    "joke) unless the user writes in it or asks for it. "
     "Get facts, numbers and code right. Give complete, practical answers: concrete steps, examples and working "
     "solutions instead of generic advice; for simple questions and small talk be brief and quick. "
     "Search the web only when the answer depends on recent or changing facts (news, prices, versions, events). "
@@ -2742,7 +2744,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
             memory.gen_refund(user_id, "credits", price)
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
-    answer = clean_chat_text(drop_accent(answer.strip()))
+    answer = keep_language(clean_chat_text(drop_accent(answer.strip())), saved_question)
     if not answer and toolbox.proposals:
         answer = ui(update, "Подготовил изменения — проверьте и подтвердите ниже.", "Changes are ready — review and confirm below.")
     if not answer:
@@ -3035,6 +3037,37 @@ def group_instructions(update):
 
 # The retired accent's filler words, cut out even if the model copies them from its old messages in the chat.
 LEADING_ACCENT = re.compile(r"(?i)^(?:вах|брат|братан|дорогой|слушай,\s*брат)[,!.]*\s+")
+
+
+# Scripts a model sometimes drifts into ("점심시간도 아닌데…" in a Russian chat): name -> character class.
+STRAY_SCRIPTS = {"hangul": "\uac00-\ud7af\u1100-\u11ff\u3130-\u318f", "han": "\u4e00-\u9fff\u3400-\u4dbf",
+                 "kana": "\u3040-\u30ff", "thai": "\u0e00-\u0e7f", "arabic": "\u0600-\u06ff", "hebrew": "\u0590-\u05ff",
+                 "devanagari": "\u0900-\u097f"}
+WANTS_LANGUAGE = re.compile(r"перев|translat|по-?(корейск|китайск|японск|арабск|тайск|иврит|хинди)|корейск|китайск|японск|"
+                            r"арабск|иероглиф|korean|chinese|japanese|arabic|hebrew|hindi|thai", re.I)
+
+
+def keep_language(answer, question):
+    """Cut sentences written in a script the user never used (and didn't ask for): the model's random language drift."""
+    question = question if isinstance(question, str) else str(question or "")
+    if not answer or WANTS_LANGUAGE.search(question):
+        return answer
+    stray = [chars for chars in STRAY_SCRIPTS.values()
+             if re.search(f"[{chars}]", answer) and not re.search(f"[{chars}]", question)]
+    if not stray:
+        return answer
+    foreign = re.compile("[" + "".join(stray) + "]")
+
+    def alien(piece):
+        letters = [c for c in piece if c.isalpha()]
+        return letters and sum(1 for c in letters if foreign.match(c)) / len(letters) > 0.3
+
+    kept = []
+    for line in answer.split("\n"):
+        parts = re.split(r"(?<=[.!?…])\s+", line)
+        kept.append(" ".join(part for part in parts if not alien(part)).strip() if any(alien(x) for x in parts) else line)
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+    return cleaned or answer
 
 
 def drop_accent(text):
@@ -5125,7 +5158,7 @@ async def live_turn(app, tg_user, audio, image=None, mode=None):
         except MODEL_ERRORS as exc:
             LOG.warning("Live: model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:200])
             drop_model(data, attempt, exc)
-    answer = live_clean(answer)
+    answer = keep_language(live_clean(answer), said)
     if not answer:
         if price and not owner:
             data["memory"].gen_refund(user_id, "credits", price)
