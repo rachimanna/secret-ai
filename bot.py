@@ -23,6 +23,8 @@ from threading import Thread
 import httpx
 import emoji as emoji_lib
 import imageio_ffmpeg
+
+from media import _ffmpeg as media_ffmpeg
 from openai import (
     APIConnectionError,
     APIError,
@@ -4997,6 +4999,188 @@ class MiniAppUpdate:
         self.effective_user, self.effective_message, self.effective_chat = user, message, message.chat
 
 
+# ---------- Secret AI Live: a spoken conversation in the Mini App (microphone, camera, interruptions, a summary) ----------
+LIVE_IDLE = 1800  # a pause this long starts a new conversation
+LIVE_TURNS = 24  # the last messages the model hears in a live talk
+LIVE_LOCALES = {"ru": "ru", "de": "de", "en": "en"}
+LIVE_VOICES = {"de": "de-DE-KatjaNeural", "en": "en-US-AndrewNeural"}
+LIVE_RULES = (
+    " This is Secret AI Live: a real-time VOICE call inside the Telegram Mini App. Your words are read aloud, so talk like "
+    "a person on a call: short (1-3 sentences, more only when asked to explain), natural, no markdown, no lists, no "
+    "emoji, no links read out (say a link will be in the chat). The user may interrupt you; just go on from what they "
+    "say. When a [camera] picture comes with the message, it is what the user is showing you right now through the "
+    "camera: look at it and answer about it. You can use your tools during the call (mail, calendar, connected apps, "
+    "GitHub): changes to a repository are only prepared and the user confirms them in the Telegram chat, say so. "
+    "Never claim you did something you didn't.")
+LIVE_GERMAN = (
+    " Mode: German practice. Speak German at the user's level, keep it a real conversation (ask questions back). After "
+    "your German reply, if the user made mistakes, add one short line in Russian starting with «Поправка:» with the "
+    "correct phrase and why; for words the speech recognition got oddly (a sign of pronunciation), say briefly how to "
+    "pronounce them. If they ask in Russian, explain in Russian, then continue in German.")
+
+
+class LiveSink:
+    """The model's streaming target during a live turn: nothing is shown, the text is just collected."""
+
+    def __init__(self):
+        self.text, self.offset = "", 0
+
+    def status(self, note):
+        pass
+
+    async def update(self, text):
+        self.text = text
+
+
+def live_session(data, user_id, mode=None):
+    sessions = data.setdefault("live", {})
+    session = sessions.get(user_id)
+    if not session or time.monotonic() - session["last"] > LIVE_IDLE:
+        session = sessions[user_id] = {"items": [], "mode": "talk", "last": time.monotonic(), "turns": 0}
+    if mode in ("talk", "de"):
+        session["mode"] = mode
+    session["last"] = time.monotonic()
+    return session
+
+
+def live_clean(text):
+    """Spoken text: no markdown marks, emoji or the retired accent."""
+    text = re.sub(r"```.*?```", " ", text or "", flags=re.S)
+    text = re.sub(r"[*_#`>|]+", "", text)
+    text = re.sub(r"[\U0001F000-\U0001FAFF\u2600-\u27BF\uFE0F]", "", text)
+    return drop_accent(" ".join(text.split()))
+
+
+async def live_mp3(audio):
+    """The reply voice as MP3: every phone's browser plays it (OGG Opus doesn't play on iPhones)."""
+    with tempfile.TemporaryDirectory(prefix="secret-ai-live-") as folder:
+        folder = Path(folder)
+        (folder / "in.audio").write_bytes(audio)
+        await media_ffmpeg("-i", str(folder / "in.audio"), "-vn", "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k",
+                           str(folder / "out.mp3"), timeout=60)
+        return (folder / "out.mp3").read_bytes()
+
+
+async def live_voice(data, text, mode):
+    if mode == "de":
+        return await speech.edge_speech(text, LIVE_VOICES["de"])  # MP3 already
+    return await live_mp3(await speech_audio(data, text))
+
+
+async def live_turn(app, tg_user, audio, image=None, mode=None):
+    """One spoken turn: recognise what was said, answer it (with the camera frame and the user's tools), speak it."""
+    data, user_id = app.bot_data, tg_user["id"]
+    language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
+    session = live_session(data, user_id, mode)
+    mode = session["mode"]
+    stt_lang = "de" if mode == "de" else language
+    try:
+        heard = (await data["stt"].audio.transcriptions.create(model="whisper-1", file=io.BytesIO(audio), language=stt_lang)).text
+    except Exception as exc:
+        LOG.warning("Live: speech not recognised: %s %s", type(exc).__name__, str(exc)[:150])
+        heard = ""
+    heard = (heard or "").strip()
+    if mode == "de" and not heard:  # they may have answered in Russian
+        try:
+            heard = ((await data["stt"].audio.transcriptions.create(model="whisper-1", file=io.BytesIO(audio), language="ru")).text or "").strip()
+        except Exception:
+            heard = ""
+    if not heard and not image:
+        return {"heard": "", "text": "", "audio": None}
+    model = user_model(data, user_id)
+    if not model:
+        return {"error": "models"}
+    price = data.get("premium", {}).get(model)
+    owner = data["connections"].get_meta("owner") == user_id
+    if price and not owner and not data["memory"].gen_charge(user_id, "chat", price):
+        return {"error": "credits"}
+    context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
+    use_apps = wants_apps(data, user_id, heard)
+    taken = [server["label"] for server in data["connections"].public(user_id) if server["service"] == "mcp"]
+    apps = await app_tools(data, user_id, taken) if use_apps else ([], [])
+    toolbox = Toolbox(data["http"], data["connections"], data["pending"], user_id, language, apps=apps,
+                      extra=[memory_tool(context, user_id)])
+    if not use_apps:
+        toolbox.mcp = []
+    instructions = (SYSTEM + ACCENT + LIVE_RULES + (LIVE_GERMAN if mode == "de" else "") + model_identity(model)
+                    + " Telegram language: " + (tg_user.get("language_code") or "ru"))
+    if toolbox.instructions():
+        instructions += " " + toolbox.instructions()
+    said = heard or ("Что ты видишь?" if language == "ru" else "What do you see?")
+    content = said if not image else [{"type": "input_text", "text": "[camera] " + said},
+                                      {"type": "input_image", "image_url": "data:image/jpeg;base64," + base64.b64encode(image).decode()}]
+    history = session["items"][-LIVE_TURNS:]
+    answer = ""
+    for attempt in dict.fromkeys([model] + [m for m in (data.get("fallbacks") or []) if m != model][:2]):
+        try:
+            answer, _ = await generate(context, LiveSink(), toolbox, model=attempt, instructions=instructions,
+                                       input=history + [{"role": "user", "content": content}], store=False,
+                                       max_output_tokens=900)
+            break
+        except MODEL_ERRORS as exc:
+            LOG.warning("Live: model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:200])
+            drop_model(data, attempt, exc)
+    answer = live_clean(answer)
+    if not answer:
+        if price and not owner:
+            data["memory"].gen_refund(user_id, "credits", price)
+        return {"error": "model", "heard": heard}
+    session["items"] += [{"role": "user", "content": ("[showed the camera] " if image else "") + said},
+                         {"role": "assistant", "content": answer}]
+    session["turns"] += 1
+    if toolbox.proposals:  # repository changes wait for Apply in the chat, as always
+        try:
+            ru = language == "ru"
+            target = await app.bot.send_message(user_id, "🎙 Secret AI Live: " + ("изменение готово, подтверди ниже ↓" if ru
+                                                                                 else "a change is ready, confirm below ↓"))
+            user = User(id=user_id, first_name=tg_user.get("first_name") or "", is_bot=False, language_code=tg_user.get("language_code"))
+            await show_proposals(MiniAppUpdate(user, target), context, toolbox, target)
+        except TelegramError as exc:
+            LOG.warning("Live: could not post the change: %s", type(exc).__name__)
+    try:
+        voice = await live_voice(data, answer, mode)
+    except Exception as exc:  # the text still shows on the screen
+        LOG.warning("Live: no voice: %s %s", type(exc).__name__, str(exc)[:150])
+        voice = None
+    return {"heard": heard, "text": answer, "audio": base64.b64encode(voice).decode() if voice else None}
+
+
+async def live_end(app, tg_user):
+    """The call is over: a short summary (notes, links, agreements) goes to the chat and into its history."""
+    data, user_id = app.bot_data, tg_user["id"]
+    session = data.get("live", {}).pop(user_id, None)
+    if not session or not session["items"]:
+        return {"ok": True, "sent": False}
+    ru = (tg_user.get("language_code") or "ru").startswith("ru")
+    talk = "\n".join(f"{'User' if i['role'] == 'user' else 'Secret AI'}: {i['content']}" for i in session["items"])[-14000:]
+    ask = ("Сделай итог этого голосового разговора для чата Telegram. Коротко: о чём говорили (1-2 предложения), затем "
+           "разделы «Заметки», «Ссылки», «Договорённости и задачи» — каждый пункт с «• », пустые разделы пропусти. "
+           "Без markdown-звёздочек. Пиши на языке разговора." if ru else
+           "Summarise this voice conversation for a Telegram chat: what it was about (1-2 sentences), then «Notes», "
+           "«Links», «Agreements and tasks» with «• » bullets, skipping empty ones. No markdown asterisks.")
+    summary = ""
+    for model in dict.fromkeys([data.get("chat_default"), user_model(data, user_id)]):
+        if not model:
+            continue
+        try:
+            summary = (await quick_answer(data, model, ask, talk, max_tokens=1200)).strip()
+        except Exception as exc:
+            LOG.warning("Live summary with %s failed: %s", model, type(exc).__name__)
+            continue
+        if summary:
+            break
+    if not summary:
+        summary = talk[-3500:]
+    title = "🎙 Итог разговора в Secret AI Live" if ru else "🎙 Secret AI Live summary"
+    try:
+        await app.bot.send_message(user_id, f"{title}\n\n{summary}"[:4000])
+        data["memory"].append_turn(user_id, "[a Secret AI Live voice call in the Mini App]", f"[Summary of the call]\n{summary}"[:12000])
+    except Exception as exc:
+        LOG.warning("Live summary not sent: %s", type(exc).__name__)
+        return {"ok": True, "sent": False}
+    return {"ok": True, "sent": True}
+
+
 async def run_prompt(app, tg_user, text):
     """Answer a scenario picked in the Mini App as if the user had sent it."""
     user = User(id=tg_user["id"], first_name=tg_user.get("first_name") or "", is_bot=False,
@@ -5035,6 +5219,19 @@ class Bridge:
 
     def notify(self, user_id, text):
         self._run(self.app.bot.send_message(user_id, text), wait=False)
+
+    def _run_long(self, coro, seconds):
+        loop = self.app.bot_data.get("loop")
+        if not loop:
+            coro.close()
+            raise RuntimeError("bot is not running yet")
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=seconds)
+
+    def live_turn(self, tg_user, audio, image=None, mode=None):
+        return self._run_long(live_turn(self.app, tg_user, audio, image, mode), 150)
+
+    def live_end(self, tg_user):
+        return self._run_long(live_end(self.app, tg_user), 90)
 
     def ask(self, tg_user, text):
         self._run(run_prompt(self.app, tg_user, text), wait=False)

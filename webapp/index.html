@@ -995,11 +995,106 @@
   #boot-error { max-width: 290px; text-align: center; color: var(--hint); font-size: 14px; line-height: 1.6; }
   #boot-error p { margin: 0 0 20px; }
   #boot-retry { min-width: 160px; }
+
+  /* ================= Secret AI Live: a calm full-screen call — the sphere, the camera, three buttons ================= */
+  .live-entry { display: flex; align-items: center; gap: 14px; width: 100%; margin: 0 0 14px; padding: 14px 16px; border-radius: 18px;
+                background: var(--card); box-shadow: var(--rim); text-align: left; }
+  .live-entry .body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .live-entry b { font-size: 15.5px; font-weight: 600; }
+  .live-entry small { color: var(--hint); font-size: 13px; line-height: 1.4; }
+  .live-entry .go { flex: none; height: 36px; padding: 0 14px; border-radius: 11px; display: grid; place-items: center;
+                    background: var(--accent); color: var(--on-accent, #fff); font-size: 13.5px; font-weight: 600; }
+  .live-dot { flex: none; width: 42px; height: 42px; border-radius: 50%; position: relative;
+              background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--accent) 55%, #fff), var(--accent) 45%, var(--brand-soft) 100%);
+              box-shadow: 0 0 0 6px var(--brand-soft); animation: live-breathe 3.2s ease-in-out infinite; }
+  @keyframes live-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
+  .live { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+          padding: calc(var(--safe-top) + 10px) 16px calc(var(--safe-bottom) + 18px); opacity: 0; transition: opacity .3s var(--ease); }
+  .live[hidden] { display: none; }
+  .live.open { opacity: 1; }
+  .live-top { display: flex; align-items: center; gap: 10px; min-height: 48px; }
+  .live-ib { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; color: var(--hint); }
+  .live-ib:active { background: var(--card-hi); }
+  .live-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .live-title b { font-size: 15px; font-weight: 600; }
+  .live-title small { color: var(--hint); font-size: 12px; }
+  .live-modes { display: inline-flex; padding: 3px; gap: 2px; border-radius: 11px; background: var(--card); box-shadow: var(--rim); }
+  .live-modes button { height: 32px; padding: 0 11px; border-radius: 8px; font-size: 12px; font-weight: 500; color: var(--hint); }
+  .live-modes button.on { background: var(--brand-soft); color: var(--accent); }
+  .live-stage { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 26px; }
+  .live-orb { --lv: 0; position: relative; width: min(56vw, 230px); aspect-ratio: 1; border-radius: 50%;
+              transform: scale(calc(1 + var(--lv) * .22)); transition: transform .09s linear; }
+  .live-orb::before { content: ""; position: absolute; inset: 0; border-radius: 50%;
+              background: radial-gradient(circle at 34% 28%, color-mix(in srgb, var(--accent) 45%, #fff) 0, var(--accent) 34%,
+                          color-mix(in srgb, var(--accent) 55%, var(--bg)) 66%, var(--brand-soft) 100%);
+              box-shadow: inset -14px -18px 40px color-mix(in srgb, var(--bg) 55%, transparent); }
+  .live-orb::after { content: ""; position: absolute; inset: -18%; border-radius: 50%; z-index: -1; filter: blur(28px);
+              background: radial-gradient(circle, color-mix(in srgb, var(--accent) 45%, transparent), transparent 68%);
+              opacity: calc(.35 + var(--lv) * .65); }
+  .live-orb i { position: absolute; inset: 14%; border-radius: 50%; border: 1px solid color-mix(in srgb, #fff 30%, transparent);
+                opacity: 0; }
+  .live[data-state="listening"] .live-orb, .live[data-state="ready"] .live-orb { animation: live-breathe 3.6s ease-in-out infinite; }
+  .live[data-state="thinking"] .live-orb i { opacity: .7; border-color: transparent; border-top-color: color-mix(in srgb, #fff 70%, transparent);
+                animation: live-spin 1.1s linear infinite; }
+  .live[data-state="thinking"] .live-orb i:nth-child(2) { inset: 24%; animation-duration: 1.6s; animation-direction: reverse; }
+  .live[data-state="thinking"] .live-orb i:nth-child(3) { inset: 34%; animation-duration: 2.2s; }
+  @keyframes live-spin { to { transform: rotate(360deg); } }
+  .live-status { color: var(--hint); font-size: 15px; font-weight: 500; min-height: 22px; text-align: center; }
+  .live-lines { width: 100%; max-width: 440px; min-height: 96px; text-align: center; display: flex; flex-direction: column; gap: 8px; }
+  .live-lines p { margin: 0; line-height: 1.55; }
+  .live-lines .me { color: var(--hint); font-size: 13.5px; }
+  .live-lines .ai { font-size: 16px; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
+  .live-cam { position: absolute; top: 4px; right: 0; width: 112px; aspect-ratio: 3 / 4; border-radius: 16px; overflow: hidden;
+              background: var(--card); box-shadow: var(--rim); display: none; }
+  .live-cam.on { display: block; }
+  .live-cam video { width: 100%; height: 100%; object-fit: cover; }
+  .live-cam.front video { transform: scaleX(-1); }
+  .live-cam button { position: absolute; right: 6px; bottom: 6px; width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center;
+                     background: rgba(0,0,0,.45); color: #fff; }
+  .live-cam button svg { width: 16px; height: 16px; }
+  .live-start { display: flex; flex-direction: column; align-items: center; gap: 14px; padding-bottom: 6px; }
+  .live-start .btn { width: min(100%, 360px); }
+  .live-tips { list-style: none; margin: 0; padding: 0; max-width: 340px; color: var(--hint); font-size: 13px; line-height: 1.55; text-align: center; }
+  .live-tips li + li { margin-top: 4px; }
+  .live-controls { display: flex; justify-content: center; align-items: center; gap: 22px; padding-bottom: 4px; }
+  .live-controls[hidden], .live-start[hidden] { display: none; }
+  .live-ctl { width: 60px; height: 60px; border-radius: 50%; display: grid; place-items: center; background: var(--card); box-shadow: var(--rim); color: var(--text); }
+  .live-ctl.off { background: var(--card-hi); color: var(--hint); }
+  .live-ctl.active { background: var(--brand-soft); color: var(--accent); }
+  .live-ctl.end { width: 68px; height: 68px; background: var(--danger); color: #fff; box-shadow: none; }
+  .live-ctl svg { width: 24px; height: 24px; }
+  body.live-on .tabbar { display: none; }
+  @media (prefers-reduced-motion: reduce) { .live-orb, .live-dot { animation: none !important; } }
 </style>
 </head>
 <body data-tab="agent">
 <div id="splash"><svg viewBox="0 0 128 128" aria-hidden="true"><defs><mask id="splash-cut"><rect width="128" height="128" fill="#fff"/><rect x="50.5" y="54" width="10.5" height="20" rx="5.25" fill="#000"/><rect x="67.5" y="54" width="10.5" height="20" rx="5.25" fill="#000"/></mask></defs><path mask="url(#splash-cut)" fill="currentColor" d="M112.99 66.00 L114.91 67.07 L116.66 68.21 L118.15 69.41 L119.32 70.65 L120.10 71.90 L120.46 73.13 L120.36 74.32 L119.83 75.44 L118.86 76.47 L117.52 77.38 L115.84 78.16 L113.92 78.82 L111.81 79.35 L109.61 79.77 L107.39 80.10 L105.20 80.35 L103.11 80.54 L101.16 80.71 L99.37 80.87 L97.76 81.03 L96.33 81.21 L95.08 81.43 L93.99 81.68 L93.05 81.97 L92.23 82.30 L91.52 82.67 L90.89 83.06 L90.33 83.50 L90.16 84.18 L90.03 84.91 L89.95 85.69 L89.92 86.55 L89.97 87.48 L90.09 88.52 L90.27 89.65 L90.52 90.91 L90.83 92.27 L91.17 93.75 L91.54 95.32 L91.89 96.98 L92.20 98.68 L92.44 100.38 L92.58 102.06 L92.57 103.64 L92.41 105.10 L92.06 106.37 L91.52 107.41 L90.78 108.20 L89.87 108.71 L88.78 108.93 L87.56 108.86 L86.24 108.53 L84.84 107.97 L83.40 107.22 L81.95 106.33 L80.54 105.34 L79.16 104.30 L77.86 103.26 L76.63 102.26 L75.48 101.33 L74.41 100.49 L73.42 99.75 L72.50 99.12 L71.65 98.60 L70.84 98.18 L70.08 97.85 L69.35 97.61 L68.64 97.43 L67.95 97.30 L67.29 97.34 L66.65 97.61 L66.01 97.95 L65.36 98.36 L64.69 98.87 L64.00 99.50 L63.28 100.26 L62.53 101.17 L61.72 102.24 L60.85 103.48 L59.91 104.87 L58.89 106.41 L57.79 108.06 L56.59 109.79 L55.31 111.53 L53.96 113.24 L52.55 114.83 L51.10 116.24 L49.65 117.40 L48.23 118.24 L46.87 118.72 L45.61 118.80 L44.49 118.47 L43.52 117.73 L42.73 116.61 L42.12 115.15 L41.69 113.41 L41.44 111.45 L41.33 109.36 L41.35 107.19 L41.47 105.02 L41.65 102.90 L41.86 100.88 L42.08 99.00 L42.27 97.27 L42.41 95.71 L42.51 94.32 L42.53 93.08 L42.50 91.99 L42.39 91.03 L42.23 90.18 L42.01 89.42 L41.74 88.73 L41.41 88.12 L40.78 87.81 L40.09 87.53 L39.34 87.28 L38.51 87.09 L37.59 86.94 L36.55 86.83 L35.40 86.78 L34.12 86.76 L32.72 86.78 L31.21 86.81 L29.59 86.84 L27.90 86.84 L26.17 86.79 L24.45 86.67 L22.79 86.46 L21.24 86.12 L19.85 85.66 L18.68 85.05 L17.77 84.30 L17.15 83.42 L16.85 82.42 L16.86 81.32 L17.18 80.14 L17.77 78.91 L18.61 77.65 L19.65 76.40 L20.82 75.18 L22.09 74.00 L23.38 72.87 L24.67 71.81 L25.91 70.81 L27.06 69.88 L28.10 69.01 L29.03 68.20 L29.84 67.43 L30.52 66.70 L31.10 66.00 L31.58 65.32 L31.97 64.66 L32.28 64.00 L32.03 63.32 L31.70 62.61 L31.27 61.87 L30.73 61.09 L30.07 60.26 L29.26 59.37 L28.30 58.41 L27.20 57.37 L25.96 56.23 L24.61 55.00 L23.17 53.67 L21.68 52.25 L20.21 50.75 L18.81 49.20 L17.55 47.61 L16.49 46.03 L15.68 44.49 L15.19 43.03 L15.05 41.70 L15.28 40.53 L15.88 39.55 L16.84 38.77 L18.13 38.22 L19.70 37.89 L21.49 37.76 L23.44 37.81 L25.49 38.02 L27.57 38.34 L29.62 38.75 L31.59 39.19 L33.46 39.64 L35.19 40.06 L36.78 40.44 L38.21 40.74 L39.49 40.97 L40.63 41.12 L41.65 41.18 L42.57 41.17 L43.39 41.09 L44.14 40.94 L44.84 40.75 L45.49 40.52 L46.11 40.27 L46.72 39.99 L47.31 39.70 L47.82 39.29 L48.33 38.86 L48.83 38.40 L49.31 37.90 L49.77 37.33 L50.21 36.69 L50.61 35.94 L50.99 35.06 L51.34 34.02 L51.66 32.81 L51.95 31.40 L52.23 29.77 L52.50 27.92 L52.79 25.85 L53.11 23.59 L53.48 21.16 L53.93 18.63 L54.47 16.05 L55.12 13.52 L55.89 11.11 L56.79 8.92 L57.80 7.05 L58.93 5.58 L60.14 4.58 L61.40 4.08 L62.70 4.13 L64.00 4.71 L65.26 5.79 L66.46 7.32 L67.57 9.23 L68.58 11.44 L69.48 13.84 L70.27 16.35 L70.96 18.88 L71.55 21.35 L72.07 23.70 L72.53 25.87 L72.95 27.84 L73.35 29.59 L73.74 31.13 L74.13 32.45 L74.54 33.57 L74.96 34.52 L75.41 35.33 L75.87 36.01 L76.36 36.59 L76.87 37.10 L77.46 37.40 L78.16 37.47 L78.90 37.49 L79.69 37.45 L80.55 37.34 L81.48 37.14 L82.50 36.85 L83.62 36.46 L84.86 35.99 L86.21 35.42 L87.69 34.80 L89.27 34.12 L90.94 33.43 L92.68 32.77 L94.46 32.17 L96.24 31.67 L97.95 31.33 L99.57 31.17 L101.03 31.23 L102.29 31.53 L103.31 32.07 L104.05 32.87 L104.51 33.89 L104.68 35.12 L104.57 36.52 L104.21 38.05 L103.64 39.67 L102.89 41.32 L102.02 42.98 L101.07 44.60 L100.10 46.15 L99.15 47.62 L98.25 49.00 L97.43 50.27 L96.71 51.44 L96.10 52.51 L95.60 53.49 L95.21 54.39 L94.92 55.23 L94.71 56.02 L94.58 56.77 L94.87 57.38 L95.43 57.93 L96.08 58.47 L96.86 59.01 L97.79 59.55 L98.87 60.10 L100.13 60.66 L101.57 61.25 L103.19 61.88 L104.98 62.56 L106.90 63.30 L108.91 64.12 L110.96 65.02Z"/></svg></div>
 <div class="backdrop"></div>
+<div class="live" id="live" hidden data-state="ready">
+  <div class="live-top">
+    <button class="live-ib press" id="live-close" aria-label="close"><svg class="i" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+    <div class="live-title"><b>Secret AI Live</b><small id="live-sub"></small></div>
+    <div class="live-modes" id="live-modes"><button data-mode="talk" class="on"></button><button data-mode="de"></button></div>
+  </div>
+  <div class="live-stage">
+    <div class="live-cam" id="live-cam"><video id="live-video" playsinline muted autoplay></video>
+      <button id="live-flip" aria-label="flip"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.2L3 16M3 21v-5h5"/></svg></button></div>
+    <div class="live-orb" id="live-orb"><i></i><i></i><i></i></div>
+    <div class="live-status" id="live-status"></div>
+    <div class="live-lines"><p class="me" id="live-heard"></p><p class="ai" id="live-said"></p></div>
+  </div>
+  <div class="live-start" id="live-start">
+    <ul class="live-tips" id="live-tips"></ul>
+    <button class="btn press" id="live-begin"></button>
+  </div>
+  <div class="live-controls" id="live-controls" hidden>
+    <button class="live-ctl press" id="live-camera" aria-label="camera"><svg class="i" viewBox="0 0 24 24"><path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L17 6h2a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.5"/></svg></button>
+    <button class="live-ctl end press" id="live-end" aria-label="end"><svg class="i" viewBox="0 0 24 24"><path d="M3.5 14.5c4.7-4.6 12.3-4.6 17 0l-2.2 2.6-3.3-1.5v-2.4a10 10 0 0 0-6 0v2.4l-3.3 1.5z" fill="currentColor"/></svg></button>
+    <button class="live-ctl press" id="live-mic" aria-label="microphone"><svg class="i" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+  </div>
+</div>
+
 
 <main>
   <!-- ============ AGENT ============ -->
@@ -1020,6 +1115,8 @@
       <h1 id="hello"></h1>
       <p data-t="heroSub"></p>
     </div>
+    <button class="live-entry press" id="live-open"><span class="live-dot"></span>
+      <span class="body"><b>Secret AI Live</b><small id="live-entry-sub"></small></span><span class="go" id="live-entry-go"></span></button>
     <div class="list quick stagger" id="quick"></div>
 
     <div class="section">
@@ -2746,6 +2843,234 @@ function resumeMiniApp() {
   syncCodexViewport();
   if (!document.hidden) load(true);
 }
+
+/* ---------------- Secret AI Live: talk with the voice, show with the camera, interrupt at any moment ---------------- */
+const Live = (() => {
+  const L = lang === "ru" ? {
+    entrySub: "Говорите голосом и показывайте камерой", go: "Начать", sub: "Живой разговор", begin: "Начать разговор",
+    talk: "Разговор", de: "Немецкий",
+    tips: ["Можно перебивать — я остановлюсь и выслушаю", "Покажите камерой предмет или задание", "Попросите проверить почту или подготовить изменение в репозитории", "В конце итог разговора придёт в чат"],
+    tipsDe: ["Говорите по-немецки, как получится", "Я отвечу по-немецки и поправлю ошибки", "Объяснения — по-русски, если спросите"],
+    ready: "Нажмите «Начать разговор»", listening: "Слушаю…", hearing: "Слышу вас…", thinking: "Думаю…",
+    speaking: "Говорю — можно перебить", muted: "Микрофон выключен", noMic: "Нет доступа к микрофону. Разрешите его для Telegram в настройках телефона.",
+    noCam: "Камера недоступна", noSupport: "Этот Telegram не умеет записывать звук в мини-приложении. Обновите Telegram.",
+    err: "Не получилось ответить, скажите ещё раз", credits: "Закончились кредиты для этой модели — выберите бесплатную",
+    models: "Модели пока не подключены", sent: "Итог разговора — в чате", camOn: "Камера включена — спросите, что видно",
+  } : {
+    entrySub: "Talk with your voice, show with the camera", go: "Start", sub: "Live conversation", begin: "Start talking",
+    talk: "Talk", de: "German",
+    tips: ["Interrupt any time — I'll stop and listen", "Show an object or a task with the camera", "Ask me to check mail or prepare a repository change", "A summary lands in the chat at the end"],
+    tipsDe: ["Speak German as best you can", "I answer in German and correct mistakes", "Explanations in Russian if you ask"],
+    ready: "Tap “Start talking”", listening: "Listening…", hearing: "I hear you…", thinking: "Thinking…",
+    speaking: "Speaking — you can interrupt", muted: "Microphone off", noMic: "No microphone access. Allow it for Telegram in your phone settings.",
+    noCam: "The camera isn't available", noSupport: "This Telegram can't record sound in mini apps. Please update Telegram.",
+    err: "Couldn't answer, please say it again", credits: "No credits left for this model — pick a free one",
+    models: "No models are connected yet", sent: "The summary is in the chat", camOn: "Camera on — ask what it sees",
+  };
+  const box = $("live"), orb = $("live-orb");
+  let state = "ready", mode = "talk", stream = null, ctx = null, micAn = null, outAn = null, data = null, raf = 0, last = 0;
+  let rec = null, recStart = 0, speechMs = 0, silenceMs = 0, speaking = false, floor = 0.008, muted = false;
+  let camStream = null, facing = "environment", source = null, request = null, wake = null, turns = 0, talking = false;
+  const MIME = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find(t => window.MediaRecorder?.isTypeSupported?.(t)) || "";
+
+  function set(next, note) {
+    state = next; box.dataset.state = next;
+    $("live-status").textContent = note || (muted && next === "listening" ? L.muted : L[next] || "");
+  }
+  function tips() {
+    $("live-tips").innerHTML = (mode === "de" ? L.tipsDe : L.tips).map(t => `<li>${esc(t)}</li>`).join("");
+    $("live-modes").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.mode === mode));
+  }
+  function level(an) {
+    if (!an) return 0;
+    an.getFloatTimeDomainData(data);
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum += data[i] * data[i];
+    return Math.sqrt(sum / data.length);
+  }
+
+  function startRec() {
+    if (!stream) return;
+    let r;
+    try { r = new MediaRecorder(stream, MIME ? { mimeType: MIME } : undefined); } catch (e) { r = new MediaRecorder(stream); }
+    const parts = r.parts = [];  // each recorder keeps its own pieces: the last one arrives after stop()
+    r.ondataavailable = e => { if (e.data && e.data.size) parts.push(e.data); };
+    r.start(250);
+    rec = r; recStart = performance.now(); speaking = false; speechMs = 0; silenceMs = 0;
+  }
+  function stopRec() {
+    return new Promise(resolve => {
+      const r = rec;
+      if (!r || r.state === "inactive") return resolve(null);
+      r.onstop = () => resolve(new Blob(r.parts, { type: r.mimeType || MIME || "audio/webm" }));
+      try { r.stop(); } catch (e) { resolve(null); }
+    });
+  }
+  async function restartRec() { await stopRec(); startRec(); }
+
+  function tick(t) {
+    raf = requestAnimationFrame(tick);
+    const dt = last ? Math.min(100, t - last) : 16; last = t;
+    const mic = muted ? 0 : level(micAn), out = level(outAn);
+    orb.style.setProperty("--lv", Math.min(1, (state === "speaking" ? out * 5 : mic * 7)).toFixed(3));
+    if (muted || !rec) return;
+    // Echo of our own voice is loud too: while speaking, only a clearly louder voice counts as an interruption.
+    const threshold = Math.max(floor * 3, 0.018) * (state === "speaking" ? 2.2 : 1);
+    if (mic > threshold) { speechMs += dt; silenceMs = 0; }
+    else { silenceMs += dt; if (silenceMs > 300) speechMs = 0; floor = floor * 0.995 + Math.min(mic, 0.05) * 0.005; }
+    if (!speaking && speechMs > (state === "speaking" ? 260 : 170)) {
+      speaking = true;
+      if (state === "speaking" || state === "thinking") interrupt();
+      set("listening", L.hearing);
+    }
+    if (speaking && silenceMs > 950) finishPhrase();
+    else if (!speaking && state === "listening" && t - recStart > 15000) restartRec();  // nothing said: keep it short
+  }
+
+  function interrupt() {
+    if (source) { try { source.onended = null; source.stop(); } catch (e) {} source = null; }
+    if (request) { request.abort(); request = null; }
+    haptic("light");
+  }
+
+  async function finishPhrase() {
+    speaking = false;
+    const blob = await stopRec();
+    startRec();  // keep listening at once: an interruption during the answer is caught too
+    if (!blob || blob.size < 1800) { set("listening"); return; }
+    send(blob);
+  }
+
+  function frame() {
+    const v = $("live-video");
+    if (!camStream || !v.videoWidth) return null;
+    const k = Math.min(1, 720 / Math.max(v.videoWidth, v.videoHeight)), c = document.createElement("canvas");
+    c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.72);
+  }
+  const b64 = blob => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = fail; r.readAsDataURL(blob); });
+
+  async function send(blob) {
+    set("thinking");
+    const mine = request = new AbortController();
+    let res;
+    try {
+      const body = { audio: await b64(blob), mode };
+      const image = frame();
+      if (image) body.image = image;
+      const r = await fetch("/api/live/turn", { method: "POST", signal: mine.signal,
+        headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg?.initData || "" }, body: JSON.stringify(body) });
+      res = await r.json();
+    } catch (e) {
+      if (mine.signal.aborted) return;  // interrupted: the new phrase is being heard
+      res = { error: "network" };
+    }
+    if (request !== mine) return;
+    request = null;
+    if (res.heard) $("live-heard").textContent = res.heard;
+    if (res.error) { set("listening", L[res.error] || L.err); haptic("warning"); return; }
+    if (!res.text) { set("listening"); return; }
+    $("live-said").textContent = res.text;
+    turns++;
+    if (res.audio) play(res.audio); else set("listening");
+  }
+
+  async function play(audio) {
+    try {
+      const bytes = Uint8Array.from(atob(audio), c => c.charCodeAt(0));
+      const buffer = await ctx.decodeAudioData(bytes.buffer);
+      if (state !== "thinking") return;  // interrupted while decoding
+      await restartRec();  // the answer's echo is thrown away unless they speak over it
+      source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(outAn);
+      source.onended = () => { source = null; if (state === "speaking") { restartRec(); set("listening"); } };
+      set("speaking");
+      source.start();
+    } catch (e) { set("listening"); }
+  }
+
+  async function begin() {
+    if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) { set("ready", L.noSupport); return; }
+    try {
+      ctx = ctx || new (window.AudioContext || window.webkitAudioContext)();
+      await ctx.resume();
+      stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
+    } catch (e) { set("ready", L.noMic); haptic("error"); return; }
+    micAn = ctx.createAnalyser(); micAn.fftSize = 1024;
+    ctx.createMediaStreamSource(stream).connect(micAn);
+    outAn = outAn || ctx.createAnalyser(); outAn.fftSize = 1024;
+    try { outAn.disconnect(); } catch (e) {}
+    outAn.connect(ctx.destination);
+    data = new Float32Array(micAn.fftSize);
+    try { wake = await navigator.wakeLock?.request("screen"); } catch (e) {}
+    talking = true; turns = 0;
+    $("live-start").hidden = true; $("live-controls").hidden = false;
+    startRec(); set("listening"); haptic("medium");
+    last = 0; raf = requestAnimationFrame(tick);
+  }
+
+  async function camera(on) {
+    if (!on) {
+      camStream?.getTracks().forEach(t => t.stop()); camStream = null;
+      $("live-cam").classList.remove("on"); $("live-camera").classList.remove("active"); return;
+    }
+    try {
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: facing, width: { ideal: 960 } } });
+      $("live-video").srcObject = camStream;
+      $("live-cam").classList.add("on"); $("live-cam").classList.toggle("front", facing === "user");
+      $("live-camera").classList.add("active");
+      if (state === "listening") set("listening", L.camOn);
+    } catch (e) { toast(L.noCam); }
+  }
+
+  function stopAll() {
+    cancelAnimationFrame(raf); raf = 0;
+    interrupt(); stopRec(); rec = null;
+    stream?.getTracks().forEach(t => t.stop()); stream = null;
+    camera(false);
+    try { wake?.release(); } catch (e) {}
+    wake = null; talking = false;
+  }
+
+  async function close() {
+    const had = talking && turns > 0;
+    stopAll();
+    box.classList.remove("open");
+    document.body.classList.remove("live-on");
+    try { tg?.BackButton?.offClick(close); tg?.BackButton?.hide(); } catch (e) {}
+    setTimeout(() => { box.hidden = true; }, 300);
+    if (had) {
+      try { const r = await api("/api/live/end", {}); if (r.sent) toast(L.sent); } catch (e) {}
+    }
+  }
+
+  function open() {
+    $("live-sub").textContent = L.sub; $("live-begin").textContent = L.begin;
+    $("live-modes").querySelector('[data-mode="talk"]').textContent = L.talk;
+    $("live-modes").querySelector('[data-mode="de"]').textContent = L.de;
+    $("live-heard").textContent = ""; $("live-said").textContent = "";
+    $("live-start").hidden = false; $("live-controls").hidden = true;
+    muted = false; $("live-mic").classList.remove("off");
+    tips(); set("ready");
+    box.hidden = false; document.body.classList.add("live-on");
+    requestAnimationFrame(() => box.classList.add("open"));
+    try { tg?.BackButton?.onClick(close); tg?.BackButton?.show(); } catch (e) {}
+    haptic("light");
+  }
+
+  $("live-entry-sub").textContent = L.entrySub; $("live-entry-go").textContent = L.go;
+  $("live-open").onclick = open;
+  $("live-close").onclick = close;
+  $("live-end").onclick = close;
+  $("live-begin").onclick = begin;
+  $("live-modes").onclick = e => { const b = e.target.closest("[data-mode]"); if (b) { mode = b.dataset.mode; tips(); haptic("select"); } };
+  $("live-mic").onclick = () => { muted = !muted; $("live-mic").classList.toggle("off", muted); if (muted) { speaking = false; restartRec(); } set(state === "speaking" ? "speaking" : "listening"); haptic("select"); };
+  $("live-camera").onclick = () => camera(!camStream);
+  $("live-flip").onclick = async () => { facing = facing === "user" ? "environment" : "user"; await camera(false); camera(true); };
+  return { open, close };
+})();
 init();
 </script>
 </body>

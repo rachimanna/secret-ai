@@ -205,7 +205,7 @@ def make_handler(config):
             if not user:
                 return
             try:
-                data = self._json(MAX_UPLOAD if path == "/api/edit" else MAX_BODY)
+                data = self._json(MAX_UPLOAD if path in ("/api/edit", "/api/live/turn") else MAX_BODY)
             except ValueError:
                 self._send(400, {"error": "bad request"})
                 return
@@ -342,6 +342,20 @@ def make_handler(config):
                 ok, text = bridge.promo(user, str(data.get("code") or "")[:64])
                 self._send(200 if ok else 400, {"ok": ok, "text": text, "gen": bridge.gen_state(uid)} if ok
                            else {"error": "promo", "detail": text})
+            elif path == "/api/live/turn":  # Secret AI Live: one spoken phrase (+ a camera frame) -> the answer as voice
+                try:
+                    audio = base64.b64decode(str(data.get("audio") or "").split(",", 1)[-1], validate=True)
+                    image = base64.b64decode(str(data.get("image")).split(",", 1)[-1], validate=True) if data.get("image") else None
+                except ValueError:
+                    self._send(400, {"error": "bad request"})
+                    return
+                if (not audio and not image) or len(audio) > 8_000_000 or (image and len(image) > 4_000_000):
+                    self._send(400, {"error": "bad request"})
+                    return
+                mode = str(data.get("mode") or "") or None
+                self._send(200, bridge.live_turn(user, audio, image, mode))
+            elif path == "/api/live/end":
+                self._send(200, bridge.live_end(user))
             elif path == "/api/edit":
                 prompt = str(data.get("prompt") or "").strip()
                 raw = data.get("images") if isinstance(data.get("images"), list) else []
