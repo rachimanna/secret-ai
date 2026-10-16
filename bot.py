@@ -1478,7 +1478,8 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 async def discover_models(app):
     """Only the owner's three models, using IDs confirmed by a configured gateway."""
     data = app.bot_data
-    sources = ((ANYMODEL_PREFIX, "anymodel_chat"), (ABACUS_PREFIX, "abacus"), ("experiential:", "experiential"))
+    sources = ((ANYMODEL_PREFIX, "anymodel_chat"), (ABACUS_PREFIX, "abacus"), ("experiential:", "experiential"),
+               ("tokenharbor:", "tokenharbor"))
 
     async def catalog(prefix, name):
         if not data.get(name):
@@ -1532,7 +1533,7 @@ async def discover_models(app):
 MODEL_CATALOG = [  # the first one is the default for everyone
     ("Gemini 4 Argon", r"(?:^|[/:])gemini[-._ ]?4[-._ ]?argon(?:[-._ ]\d{6,})?$", "experiential:"),  # the owner's Experiential plan
     ("Claude Sonnet 4.6", r"(?:^|[/:])claude[-._ ]sonnet[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$"),
-    ("Claude Haiku 5.5", r"(?:^|[/:])claude[-._ ]haiku[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
+    ("Claude Haiku 5.5", r"(?:^|[/:])claude[-._ ]haiku[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?(?::free)?$", "tokenharbor:"),  # free there
     ("Claude Opus 5.5", r"(?:^|[/:])claude[-._ ]opus[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
 ]
 DEFAULT_PICK = MODEL_CATALOG[0][1]
