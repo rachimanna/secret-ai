@@ -6,3 +6,4 @@ Pillow>=10,<13
 gradio_client>=2,<3
 psycopg[binary]>=3.2,<4
 edge-tts>=7,<8
+emoji>=2.14,<3

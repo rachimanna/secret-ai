@@ -21,6 +21,7 @@ from pathlib import Path
 from threading import Thread
 
 import httpx
+import emoji as emoji_lib
 import imageio_ffmpeg
 from openai import (
     APIConnectionError,
@@ -468,12 +469,52 @@ def emoji_key(char):
     return char.replace("\ufe0f", "")
 
 
+def valid_emoji_key(text):
+    """A custom emoji may replace an emoji, never a space, letter or punctuation mark."""
+    return isinstance(text, str) and bool(text) and emoji_lib.is_emoji(text)
+
+
+# Keep code (including an unfinished streamed code fence) and URLs byte-for-byte.
+CHAT_LITERAL = re.compile(r"(```[\s\S]*?(?:```|\Z)|`[^`\n]*(?:`|\Z)|https?://[^\s<>]+)")
+
+
+def clean_chat_text(text):
+    """Remove decorative emoji from generated prose before streaming, sending and saving it."""
+    parts = CHAT_LITERAL.split(text)
+    for index in range(0, len(parts), 2):
+        original = parts[index]
+        cleaned = emoji_lib.replace_emoji(original, replace=" ")
+        if cleaned != original:
+            cleaned = re.sub(r"[ \t]{2,}", " ", cleaned)
+            cleaned = re.sub(r" +([,.!?;:])", r"\1", cleaned)
+            cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+            cleaned = re.sub(r"\n[ \t]+", "\n", cleaned)
+        parts[index] = cleaned
+    return "".join(parts).strip()
+
+
+class CleanChatReply:
+    """Filter each cumulative preview as well as the final reply; status UI stays intact."""
+
+    def __init__(self, reply):
+        self.reply = reply
+
+    def __getattr__(self, name):
+        return getattr(self.reply, name)
+
+    async def update(self, text):
+        await self.reply.update(clean_chat_text(text))
+
+    async def finish(self, text, reply_markup=None):
+        return await self.reply.finish(clean_chat_text(text), reply_markup=reply_markup)
+
+
 def premium_entities(text, start=0):
     """MessageEntity list that turns the known plain emoji in text into the owner's custom ones."""
     if not PREMIUM_EMOJI or not text:
         return []
     found, offset, index = [], 0, 0
-    keys = sorted(PREMIUM_EMOJI, key=len, reverse=True)
+    keys = sorted((key for key in PREMIUM_EMOJI if valid_emoji_key(key)), key=len, reverse=True)
     while index < len(text) and len(found) < PREMIUM_MAX:
         for key in keys:
             plain = text[index:index + len(key) + 1]
@@ -496,7 +537,7 @@ def premium_button(button):
     """A button whose text starts with a known emoji gets the custom one as its icon (the plain one leaves the text)."""
     text = button.text or ""
     for key, emoji_id in PREMIUM_EMOJI.items():
-        if emoji_key(text).startswith(key) and not button.icon_custom_emoji_id:
+        if valid_emoji_key(key) and emoji_key(text).startswith(key) and not button.icon_custom_emoji_id:
             rest = text[len(key):].lstrip("\ufe0f").strip()
             fields = {name: getattr(button, name) for name in ("url", "callback_data", "web_app", "login_url", "copy_text",
                                                                  "switch_inline_query", "switch_inline_query_current_chat",
@@ -2219,7 +2260,7 @@ def learn_premium(context, message):
         if entity.type != MessageEntity.CUSTOM_EMOJI or not entity.custom_emoji_id:
             continue
         plain = emoji_key(message.parse_entity(entity) if message.text else message.parse_caption_entity(entity))
-        if plain and len(plain) <= 8:
+        if valid_emoji_key(plain):
             PREMIUM_EMOJI[plain] = entity.custom_emoji_id
             learned.append(plain)
     if learned:
@@ -2596,6 +2637,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         await live.start()
     else:
         live = await open_reply(target, lang(update), context.bot_data)
+    live = CleanChatReply(live)
     try:
         prepared = time.monotonic()
         use_apps = wants_apps(context.bot_data, user_id, saved_question)
@@ -2690,7 +2732,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
             memory.gen_refund(user_id, "credits", price)
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
-    answer = drop_accent(answer.strip())
+    answer = clean_chat_text(drop_accent(answer.strip()))
     if not answer and toolbox.proposals:
         answer = ui(update, "Подготовил изменения — проверьте и подтвердите ниже.", "Changes are ready — review and confirm below.")
     if not answer:
@@ -4894,7 +4936,8 @@ async def post_init(app):
             and os.environ.get("KEEP_AWAKE", "1").strip() != "0"):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     owner_code(app.bot_data)  # no owner yet: the console shows the code for /owner
-    PREMIUM_EMOJI.update(app.bot_data["connections"].get_meta("premium_emoji") or {})
+    PREMIUM_EMOJI.update({key: value for key, value in
+                          (app.bot_data["connections"].get_meta("premium_emoji") or {}).items() if valid_emoji_key(key)})
     await resolve_abacus_model(app)
     await discover_models(app)
     app.bot_data["previews_task"] = asyncio.create_task(gentemplates.draw_previews(app.bot_data, free_image))
