@@ -1529,11 +1529,11 @@ async def discover_models(app):
 
 
 # Sonnet 4.6, Haiku, Opus and Gemini 4 Argon: no auto-router or guessed IDs.
-MODEL_CATALOG = [
+MODEL_CATALOG = [  # the first one is the default for everyone
+    ("Gemini 4 Argon", r"(?:^|[/:])gemini[-._ ]?4[-._ ]?argon(?:[-._ ]\d{6,})?$", "experiential:"),  # the owner's Experiential plan
     ("Claude Sonnet 4.6", r"(?:^|[/:])claude[-._ ]sonnet[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$"),
     ("Claude Haiku 5.5", r"(?:^|[/:])claude[-._ ]haiku[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
     ("Claude Opus 5.5", r"(?:^|[/:])claude[-._ ]opus[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
-    ("Gemini 4 Argon", r"(?:^|[/:])gemini[-._ ]?4[-._ ]?argon(?:[-._ ]\d{6,})?$", "experiential:"),  # the owner's Experiential plan
 ]
 DEFAULT_PICK = MODEL_CATALOG[0][1]
 ENABLED_MODELS = []  # Cursor must not add other models to the picker.
