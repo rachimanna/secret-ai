@@ -184,10 +184,8 @@ STREAM_EDIT_INTERVAL = 1.2
 TYPING_INTERVAL = 4.5
 # Native drafts (sendMessageDraft) animate smoothly and are not limited like edits.
 DRAFT_INTERVAL = 0.3
-REVEAL_CATCH_UP = 3.0  # at most this long typing out an answer that arrived all at once
 # A draft disappears after 30 seconds without updates.
 DRAFT_KEEPALIVE = 10
-REVEAL_MIN_STEP = 24
 MAX_TOOL_ROUNDS = 12
 DIFF_INLINE_LIMIT = 2500
 VOICE_TIMEOUT = 60
@@ -234,8 +232,8 @@ class Memory:
                         "PRIMARY KEY (code, user_id))")
         self.db.commit()
 
-    def history(self, user_id):
-        rows = self.db.execute("SELECT id, role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, HISTORY_LIMIT)).fetchall()
+    def history(self, user_id, limit=HISTORY_LIMIT):
+        rows = self.db.execute("SELECT id, role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, limit)).fetchall()
         return [{"id": id_, "role": role, "content": content} for id_, role, content in rows]
 
     def append_turn(self, user_id, question, answer):
@@ -890,13 +888,8 @@ class DraftReply:
             self.offset += cut
             self.revealed = 0
             pending = self.text[self.offset:]
-        # Typewriter: reveal the backlog in steps so the text flows instead of jumping.
-        backlog = len(pending) - self.revealed
-        if backlog > 0:
-            self.revealed = min(len(pending), self.revealed + max(REVEAL_MIN_STEP, backlog // 3))
-            space = pending.find(" ", self.revealed)
-            if 0 <= space - self.revealed <= 8:
-                self.revealed = space
+        # Display all available tokens immediately; the provider already streams them.
+        self.revealed = len(pending)
         shown = pending[:self.revealed]
         if self.note and self.revealed == len(pending):
             shown = shown.rstrip() + f"\n\n{self.config['logo']} {self.note}…"
@@ -926,17 +919,7 @@ class DraftReply:
         await asyncio.gather(*self.tasks, return_exceptions=True)
         self.tasks = []
 
-    async def _catch_up(self, text):
-        """The answer may arrive in one piece (some gateways don't stream): type it out in the draft first."""
-        if "```" in text or self.closed:
-            return
-        self.text = text
-        deadline = time.monotonic() + REVEAL_CATCH_UP
-        while time.monotonic() < deadline and self.revealed < len(self.text[self.offset:]) - REVEAL_MIN_STEP:
-            await asyncio.sleep(DRAFT_INTERVAL)
-
     async def finish(self, text, reply_markup=None):
-        await self._catch_up(text)
         await self.stop()
         # Parts already sent stay; the final text may differ after them (code moved to files).
         rest = text[self.offset:] if text[:self.offset] == self.text[:self.offset] else text
@@ -2622,6 +2605,19 @@ def fit_history(history, limit=None):
     return kept
 
 
+GREETING = re.compile(
+    r"(?:(?:привет(?:ик)?|здравствуй(?:те)?|салам|салям|хай|здарова|доброе утро|добрый (?:день|вечер)|hello|hi|hey)"
+    r"(?: (?:как (?:ты|дела|сам)|как у тебя дела|how are you|how s it going))?"
+    r"|как (?:ты|дела|сам)|как у тебя дела|how are you)", re.I)
+
+
+def is_greeting(text):
+    """Only standalone greetings, never a substantive question prefaced with hello."""
+    normalized = emoji_lib.replace_emoji(text or "", replace=" ")
+    normalized = re.sub(r"[,.!?…:;'’—–-]", " ", normalized)
+    return bool(GREETING.fullmatch(" ".join(normalized.split())))
+
+
 async def respond(update, context, target, content, saved_question, voice=False):
     """Answer in the chat; voice=True (the user sent a voice message) also sends the answer as a voice message."""
     user_id = update.effective_user.id
@@ -2672,9 +2668,13 @@ async def respond(update, context, target, content, saved_question, voice=False)
                                                      edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)])
     if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
         toolbox.mcp = []
-    accent = "" if persona is PERSONAS["translator"] else ACCENT  # a pure translator outputs only the translation
-    instructions = (SYSTEM + accent + TRANSLATION_RULES + CODE_RULES + (" " + persona[3] if persona[3] else "") + " Telegram language: "
+    greeting = persona is PERSONAS["assistant"] and not use_apps and is_greeting(saved_question)
+    accent = "" if persona is PERSONAS["translator"] else ACCENT
+    rules = "" if greeting else TRANSLATION_RULES + CODE_RULES
+    instructions = (SYSTEM + accent + rules + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
+    if greeting:
+        instructions += " This is a simple greeting: reply naturally in one or two short sentences."
     speak_only = voice and bool(context.bot_data.get("tts_model"))
     if speak_only:
         instructions += (" The user sent a voice message and your answer will be read aloud as a voice message: talk like "
@@ -2683,15 +2683,17 @@ async def respond(update, context, target, content, saved_question, voice=False)
     # Gateway small talk skips tool definitions and unnecessary app handshakes.
     slow_gateway = bool(model) and bool(chat_provider(model))
     light = slow_gateway and not use_apps and not needs_tools(saved_question)
-    if toolbox.instructions() and not light:
+    if not light and toolbox.instructions():
         instructions += " " + toolbox.instructions()
-    history = memory.history(user_id)
-    shown = fit_history(history, ANYMODEL_HISTORY_CHARS if model.startswith(ANYMODEL_PREFIX) else None)
+    history = memory.history(user_id, limit=6) if greeting else memory.history(user_id)
+    history_limit = 2400 if greeting else ANYMODEL_HISTORY_CHARS if model.startswith(ANYMODEL_PREFIX) else None
+    shown = fit_history(history, history_limit)
     if shown:  # everything older than what the model reads comes back by search when the talk touches it
         oldest = history[len(history) - len(shown)]["id"]
     else:
         oldest = history[-1]["id"] + 1 if history else None
-    instructions += recall_note(memory.recall(user_id, saved_question, oldest))
+    if not greeting:
+        instructions += recall_note(memory.recall(user_id, saved_question, oldest))
     price = context.bot_data.get("premium", {}).get(model)
     if price and context.bot_data["connections"].get_meta("owner") == user_id:
         price = None  # the owner talks to every model without limits
@@ -2707,7 +2709,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
                 answer, incomplete = await unless_stopped(live, generate(
                     context, live, toolbox, model=attempt, instructions=instructions,
                     input=shown + [{"role": "user", "content": content}],
-                    store=False, max_output_tokens=32000, light=light and bool(chat_provider(attempt))))
+                    store=False, max_output_tokens=1024 if greeting else 32000,
+                    light=light and bool(chat_provider(attempt))))
                 break
             except MODEL_ERRORS as exc:
                 LOG.warning("Model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:300])
