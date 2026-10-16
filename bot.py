@@ -1222,6 +1222,9 @@ def chat_tools(toolbox):
 def model_identity(model):
     """Who the model is, so it answers "who are you / who made you" truthfully."""
     name = model.split(":", 1)[-1].split("/")[-1].lower()
+    if re.search(r"route-?llm", name):
+        return (" You run on RouteLLM by Abacus.AI: a router that picks a suitable model (GPT, Claude, Gemini…) for each "
+                "message. If someone asks which model you are, say so plainly, working inside the Secret AI Telegram bot.")
     if "claude" in name:
         pretty = "Claude " + " ".join(p.capitalize() for p in re.sub(r"^claude-", "", name).split("-") if not p.isdigit())
         version = ".".join(re.findall(r"-(\d+)(?=-|$)", name)[:2])
@@ -1542,6 +1545,13 @@ async def discover_models(app):
         if price:
             prices[model] = price
         LOG.info("Model: %s (%s)", model, f"{price} credits an answer" if price else "free")
+    # RouteLLM from Abacus: it picks a model for each message itself (GPT-6 Luna for small talk, stronger ones when needed).
+    if data.get("abacus") and os.environ.get("ROUTELLM", "1").strip() != "0":
+        route = next((i for i in sorted(abacus_ids) if re.fullmatch(r"route-?llm", i, re.I)), None) or "route-llm"
+        if abacus_ids and route not in abacus_ids:
+            LOG.info("RouteLLM is not in the Abacus list; trying %s anyway", route)
+        chosen_models.insert(0, ABACUS_PREFIX + route)
+        LOG.info("Model: %s (free, the default)", ABACUS_PREFIX + route)
     chosen_models += [m for m in fast + extra if m not in chosen_models]
     backups = []
     if ONLY_MODEL:  # a few models for now: the first gateway's copy of each in the menu, the others as backups
@@ -1581,9 +1591,9 @@ MODEL_CATALOG = [  # all from AnyModel, all free for everyone (the owner's balan
     (r"claude-sonnet[-._]5(?![-._]?\d)", 0),              # Claude Sonnet 5
     (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 0),             # GPT-6 Sol
 ]
-DEFAULT_PICK = r"grok[-._ ]?4[-._]7"  # the default model for everyone who hasn't picked one: Grok 4.7
+DEFAULT_PICK = r"route-?llm"  # the default for everyone who hasn't picked one: RouteLLM (Abacus), Grok 4.7 if it's off
 # Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
-ONLY_MODEL = (r"grok[-._ ]?4", r"haiku", r"gemini", r"sonnet", r"gpt[-._ ]?6")
+ONLY_MODEL = (r"route-?llm", r"grok[-._ ]?4", r"haiku", r"gemini", r"sonnet", r"gpt[-._ ]?6")
 ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # which gateway's DeepSeek goes first
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
@@ -2499,6 +2509,12 @@ async def read_tiktok(update, context, question, url):
 
 
 def model_title(model):
+    if re.search(r"route-?llm", model, re.I):
+        return "RouteLLM"
+    return _model_title(model)
+
+
+def _model_title(model):
     """claude-opus-5-5 -> Claude Opus 5.5, gpt-6-sol -> GPT-6 Sol, gemini-4-argon -> Gemini 4 Argon."""
     name = re.sub(r"-(\d{4}|\d{6,8}|latest|preview)$", "", model.split(":", 1)[-1].split("/")[-1].removesuffix(":free"))
     gpt = re.match(r"gpt-([\d.]+)", name, re.I)
