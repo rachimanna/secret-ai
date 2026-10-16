@@ -80,6 +80,9 @@ SYSTEM = (
     "they are judging YOUR offer, so give fresher, bolder options on the same topic instead of starting a new one; "
     "only treat it as a new topic when it clearly is one, and if it could mean both, ask in a few words. "
     "Reply in plain text, without Markdown formatting (no **bold**, no # headings). "
+    "For ordinary replies, use no emoji by default. If one adds meaning, use at most one per reply, "
+    "never in every sentence or between words. Do not copy emoji density from conversation history or emoji catalogs. "
+    "When the user explicitly requests emoji content, provide it as requested. "
     "Previous photo markers are not images; do not invent unseen visual details."
 )
 # The bot's built-in voice: plain, friendly, no accent.
@@ -2198,8 +2201,7 @@ async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await send(update.effective_message, "Забыл все премиум-эмодзи, теперь обычные.")
         return
     known = " ".join(PREMIUM_EMOJI) or "пока нет"
-    remember_reply(context, update, "[the bot showed /emoji: how to give it premium (custom) emoji; it uses them instead of "
-                                    "the plain ones in its answers, menus, notifications and buttons; it knows: " + known + "]")
+    # Emoji configuration is UI state, not a conversation turn for the model.
     await send(update.effective_message,
                "✨ Премиум-эмодзи бота\n\nОтправь мне сообщение с премиум-эмодзи — можно сразу много, например "
                "✅ ❌ 🎁 💎 ⭐ 🔥 🎨 🎬 👑 ⚡ 📋 🗑 ➕ 🎲 🎟 ⏱ 🔖 📝 🌐 🧹 ⚠️ 🤖 — и я буду ставить их вместо обычных во всех "
@@ -4408,7 +4410,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             shown = (f"✨ Запомнил премиум-эмодзи: {' '.join(learned)}\nТеперь они стоят вместо обычных везде, где я их пишу: "
                      f"в моих ответах, в меню (/promo), уведомлениях и на кнопках. Всего: {len(PREMIUM_EMOJI)}. Список — /emoji")
             await send(message, shown)
-            remember_reply(context, update, shown)
+            # Keep the catalog out of model history: it is not a sample answer style.
             return
     if message.text and await promo_typed(update, context):
         return
