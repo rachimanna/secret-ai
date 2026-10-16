@@ -1574,13 +1574,16 @@ async def discover_models(app):
 
 # The models the bot offers, all through AnyModel, in menu order: (how to find the id, credits per answer; 0 = free).
 # The first free one is the default for everyone. Empty list: no models (the bot says so).
-MODEL_CATALOG = [
-    (r"opus[-._ ]?5[-._]5(?![-._]?\d)", 5),              # Claude Opus 5.5 (paid; free for the owner)
-    (r"claude-haiku-4[-._]5", 0),                         # Claude Haiku 4.5, free (cc/: the direct route was 3x slower)
+MODEL_CATALOG = [  # all from AnyModel, all free for everyone (the owner's balance pays), none of the expensive ones
+    (r"grok[-._ ]?4[-._]7", 0),                           # Grok 4.7: the default, the quickest of them
+    (r"claude-haiku-4[-._]5", 0),                         # Claude Haiku 4.5 (cc/: the direct route was 3x slower)
+    (r"gemini[-._ ]?4\b.*argon", 0),                      # Gemini 4 Argon
+    (r"claude-sonnet[-._]5(?![-._]?\d)", 0),              # Claude Sonnet 5
+    (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 0),             # GPT-6 Sol
 ]
-DEFAULT_PICK = r"deepseek"  # the default model for everyone who hasn't picked one: DeepSeek
+DEFAULT_PICK = r"grok[-._ ]?4[-._]7"  # the default model for everyone who hasn't picked one: Grok 4.7
 # Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
-ONLY_MODEL = (r"deepseek", r"haiku", r"opus")
+ONLY_MODEL = (r"grok[-._ ]?4", r"haiku", r"gemini", r"sonnet", r"gpt[-._ ]?6")
 ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # which gateway's DeepSeek goes first
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
