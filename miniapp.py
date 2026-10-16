@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import re
+import traceback
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -66,14 +67,19 @@ def make_handler(config):
     class Handler(BaseHTTPRequestHandler):
         def _send(self, status, body, content_type="application/json; charset=utf-8", head=False, cache="no-store"):
             data = body if isinstance(body, bytes) else (json.dumps(body) if not isinstance(body, str) else body).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", cache)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.end_headers()
-            if not head:
-                self.wfile.write(data)
+            try:
+                self.send_response(status)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Cache-Control", cache)
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                if not head:
+                    self.wfile.write(data)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # A closed WebView cannot receive another response. Never turn this into a 500.
+                self.close_connection = True
+                LOG.debug("Mini App client disconnected during response")
 
         def _page(self, title, text, ok=True):
             self._send(200, result_page(title, text, ok), "text/html; charset=utf-8")
@@ -208,8 +214,12 @@ def make_handler(config):
                 self._send(502, {"error": "apps"})
             except (RuntimeError, TimeoutError):
                 self._send(503, {"error": "busy"})
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                self.close_connection = True
             except Exception as exc:  # e.g. Telegram refusing an invoice: answer instead of dropping the connection
-                LOG.warning("Mini App request %s failed: %s", path, type(exc).__name__)
+                frame = traceback.extract_tb(exc.__traceback__)[-1]
+                LOG.warning("Mini App request %s failed: %s at %s:%s", path, type(exc).__name__,
+                            Path(frame.filename).name, frame.lineno)
                 self._send(500, {"error": "server"})
 
         def _codex(self, action, user, data):
