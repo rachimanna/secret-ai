@@ -5,8 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark light">
 <title>Secret AI</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <style>
   :root {
@@ -787,42 +785,6 @@
   .cx-send.stop { background: var(--card-hi); color: var(--text); }
   .cx-st.running, .cx-st.done, .cx-st.applied, .cx-st.failed, .cx-st.stopped { background: transparent; padding-left: 0; }
 
-  /* ================= Premier skin: graphite surfaces, one confident blue, big bold headings ================= */
-  :root {
-    --bg: #111214; --bg-2: #17181b; --card: #191a1d; --card-solid: #191a1d; --card-hi: #222328;
-    --line: rgba(255,255,255,.08); --text: #f2f3f5; --hint: #9a9ca3; --hint-2: #5d5f66;
-    --accent: #2f6fed; --brand: #2f6fed; --brand-soft: rgba(47,111,237,.14); --blue-soft: #8fb2ff;
-    --rim: inset 0 0 0 1px rgba(255,255,255,.08);
-  }
-  :root[data-theme="light"] {
-    --bg: #f5f6f8; --bg-2: #ffffff; --card: #ffffff; --card-solid: #ffffff; --card-hi: #eef0f3;
-    --line: rgba(0,0,0,.08); --text: #121316; --hint: #6b6e76; --hint-2: #a4a7ae;
-    --accent: #2f6fed; --brand: #2f6fed; --brand-soft: rgba(47,111,237,.1); --blue-soft: #2f6fed;
-    --rim: inset 0 0 0 1px rgba(0,0,0,.07);
-  }
-  .hero h1, .page-title, .cx-empty h2, .section > h2, .sheet h2, .sheet h3 { font-family: Manrope, Inter, -apple-system, sans-serif; }
-  .hero h1 { font-size: 30px; font-weight: 800; letter-spacing: -.035em; line-height: 1.1;
-             background: linear-gradient(180deg, var(--blue-soft) 15%, #8a8d96 100%); -webkit-background-clip: text; background-clip: text;
-             color: transparent; -webkit-text-fill-color: transparent; }
-  :root[data-theme="light"] .hero h1 { background: none; color: var(--text); -webkit-text-fill-color: currentColor; }
-  .hero p { font-size: 15px; }
-  .page-title { font-size: 28px; font-weight: 800; }
-  .section > h2 { font-size: 17px; font-weight: 800; }
-  #model-btn::before { background: var(--blue-soft); }
-  .pill, .pill.cta, .pill.cta.glass { border-radius: 99px; }
-  .list, .cx-modes, .cx-log, .field { border-radius: 18px; }
-  .btn, .pill-btn, .cx-act.main { background: var(--accent); color: #fff; box-shadow: 0 8px 28px rgba(47,111,237,.28); border-radius: 14px; height: 52px; font-weight: 600; }
-  .btn.secondary { background: transparent; color: var(--text); box-shadow: var(--rim); }
-  .btn.ok { background: #2fb67c; box-shadow: none; }
-  .switch.on, .step.cur .n { background: var(--accent); }
-  .chip.on { background: var(--accent); color: #fff; }
-  .badge.new { background: var(--brand-soft); color: var(--blue-soft); }
-  .tab.on, .tab.on svg { color: var(--blue-soft); }
-  :root[data-theme="light"] .tab.on, :root[data-theme="light"] .tab.on svg { color: var(--accent); }
-  .cx-msg.me .bubble { background: var(--accent); color: #fff; }
-  .cx-send { background: var(--accent); color: #fff; }
-  .cx-orb { color: var(--blue-soft); }
-
   /* ================= Templates: picture cards like a gallery (3 small, then 2 big) ================= */
   .sec-head { display: flex; align-items: baseline; justify-content: space-between; margin: 0 4px 12px; }
   .sec-head h2 { margin: 0 !important; font-size: 22px !important; }
@@ -855,6 +817,160 @@
   .tpl-or { color: var(--hint); font-size: 13px; text-align: center; margin: 2px 0 8px; }
 
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+  /* Calm interface: system typography, matte surfaces and a soft sage accent. */
+  :root {
+    --bg: #171a18; --bg-2: #202420; --card: #202420; --card-solid: #202420; --card-hi: #2a302b;
+    --text: #edf0eb; --hint: #adb7ad; --hint-2: #8b978d; --line: #343d35;
+    --accent: #b3ccba; --brand: #b3ccba; --blue-soft: #b3ccba; --brand-soft: #2c3b30;
+    --on-accent: #19281e; --ok: #a4c6ad; --danger: #efaaa0;
+    --rim: inset 0 0 0 1px var(--line); --lift: none;
+    --spring: cubic-bezier(.2,.7,.3,1); --ease: cubic-bezier(.2,.7,.3,1);
+  }
+  :root[data-theme="light"] {
+    --bg: #f5f5f0; --bg-2: #fffefa; --card: #fffefa; --card-solid: #fffefa; --card-hi: #ecefe7;
+    --text: #252d27; --hint: #626f64; --hint-2: #778178; --line: #dce1d8;
+    --accent: #42684e; --brand: #42684e; --blue-soft: #42684e; --brand-soft: #e7eee4;
+    --on-accent: #ffffff; --ok: #42684e; --danger: #a64439;
+    --rim: inset 0 0 0 1px var(--line);
+  }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.5; letter-spacing: -.012em; }
+  main { max-width: 560px; padding-inline: 20px; padding-bottom: calc(var(--safe-bottom) + 112px); }
+  button, input, textarea { font-family: inherit; }
+  button:focus-visible, a:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  button:disabled { cursor: default; }
+  svg.i { stroke-width: 1.65; }
+  .press { transition: background-color .18s, opacity .18s, transform .18s; }
+  .press:active { transform: scale(.985); }
+  .view.active { animation-duration: .18s; }
+  .stagger > * { animation: none; }
+  #splash { background: var(--bg); transition: opacity .2s, visibility 0s linear .2s; }
+  #splash::before { display: none; }
+  #splash svg { width: 72px; height: 72px; color: var(--hint); animation: none; }
+  .glass, :root[data-theme="light"] .glass { border: 0; background: var(--card); box-shadow: var(--rim); backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .topbar { gap: 12px; }
+  .pill { height: 44px; border-radius: 13px; padding: 0 13px; font-size: 13px; font-weight: 500; }
+  .pill.cta, .pill.cta.glass, :root[data-theme="light"] .pill.cta { background: var(--card); box-shadow: var(--rim); }
+  .pill.cta svg { color: var(--hint); width: 17px !important; height: 17px !important; }
+  #model-btn { max-width: 55%; }
+  #model-btn::before { display: none; }
+  #model-btn:disabled { color: var(--hint); }
+  #model-btn:disabled .chev { display: none; }
+  .hero { padding: 34px 0 10px; }
+  .hero .logo { width: 70px; height: 70px; }
+  .hero .logo svg { animation: none !important; }
+  .hero .edit-btn { width: 28px; height: 28px; background: var(--card); color: var(--hint); }
+  .hero h1, .page-title, .cx-empty h2, .section > h2, .sheet h2, .sheet h3 { font-family: inherit; font-weight: 600; }
+  .hero h1, :root[data-theme="light"] .hero h1 { color: var(--text); -webkit-text-fill-color: currentColor; background: none; font-size: 26px; line-height: 1.25; letter-spacing: -.035em; margin: 16px 0 8px; }
+  .hero p { max-width: 290px; font-size: 14px; line-height: 1.6; }
+  .page-title { margin: 18px 2px 6px; font-size: 27px; }
+  .page-sub { margin: 0 2px 22px; font-size: 14px; line-height: 1.6; }
+  .section { margin-top: 26px; }
+  .section > h2, .sec-head h2 { font-size: 16px !important; letter-spacing: -.015em; text-transform: none; font-weight: 600; }
+  .section > h2.cap { font-size: 13px !important; letter-spacing: 0; color: var(--hint); text-transform: none; margin-bottom: 10px; }
+  .section > .sub { color: var(--hint); font-size: 12px; line-height: 1.6; margin-top: 4px; }
+  .list { border: 0; border-radius: 16px; box-shadow: var(--rim); }
+  .row { min-height: 66px; padding: 13px 15px; gap: 13px; }
+  .row.compact { min-height: 59px; }
+  .quick .row { min-height: 66px; }
+  .row .t { font-size: 14px; font-weight: 500; line-height: 1.5; }
+  .row .d { font-size: 12px; line-height: 1.55; margin-top: 3px; }
+  .row .ic.emoji { font-size: 20px; }
+  .row .ic.spark, .row .ic.sym, .row .ic.line { background: var(--card-hi); color: var(--hint); border: 0; border-radius: 10px; }
+  .row .val { font-size: 12px; color: var(--hint); }
+  .row .chev { width: 15px; height: 15px; }
+  .row.more { color: var(--accent); font-size: 14px; font-weight: 500; }
+  .row:active, .menu button.on, .menu button:active { background: var(--card-hi); }
+  .row + .row::before, .swipe + .swipe .row::before { left: 60px; right: 15px; }
+  .badge.new, .badge.app { background: var(--brand-soft); color: var(--accent); font-size: 10px; font-weight: 500; text-transform: none; letter-spacing: 0; box-shadow: none; }
+  .badge.pro { background: var(--card-hi); color: var(--text); }
+  .save, .row .d.ok { color: var(--ok); }
+  .save { font-size: 11px; font-weight: 400; color: var(--hint); }
+  .menu, :root[data-theme="light"] .menu { border-radius: 16px; background: var(--bg-2); box-shadow: var(--rim), 0 8px 24px #00000018; transition-duration: .18s; }
+  .menu button { border-radius: 10px; min-height: 48px; }
+  .menu .t { font-size: 14px; }
+  .search { height: 46px; border-radius: 13px; }
+  .search input, .field { font-size: 16px; }
+  .field { border: 1px solid var(--line); background: var(--bg); box-shadow: none; border-radius: 12px; height: 48px; }
+  .field:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--brand-soft); }
+  .btn, .pill-btn, .cx-act.main { background: var(--accent); color: var(--on-accent); box-shadow: none; font-weight: 600; border-radius: 12px; }
+  .btn { height: 48px; }
+  .btn.secondary { background: var(--card-hi); color: var(--text); box-shadow: none; }
+  .btn.ok { background: var(--accent); color: var(--on-accent); }
+  .btn.ghost, .btn.link { background: transparent; box-shadow: none; }
+  .btn.ghost { color: var(--danger); }
+  .btn.link { color: var(--hint); }
+  .chip { border-radius: 10px; font-weight: 500; }
+  .chip.on { background: var(--brand-soft); color: var(--accent); box-shadow: var(--rim); }
+  .switch.on, .step.cur .n { background: var(--accent); }
+  .sheet, :root[data-theme="light"] .sheet { border-radius: 22px 22px 0 0; background: var(--bg-2); box-shadow: 0 -1px 0 var(--line); }
+  .sheet h3 { font-size: 22px; }
+  .sheet .lead { line-height: 1.6; }
+  .notice { border-radius: 14px; line-height: 1.6; font-size: 14px; }
+  .toast, :root[data-theme="light"] .toast { background: var(--bg-2); box-shadow: var(--rim), 0 6px 20px #00000020; border-radius: 13px; }
+  .mt, .mt.wide { border-radius: 14px; }
+  .mt .name { font-weight: 500; }
+  .wallet { border-radius: 16px; }
+  .tabbar, :root[data-theme="light"] .tabbar { width: min(520px, calc(100vw - 32px)); height: 66px; bottom: calc(var(--safe-bottom) + 12px); border-radius: 18px; background: var(--bg-2); box-shadow: var(--rim), 0 4px 18px #00000012; backdrop-filter: none; -webkit-backdrop-filter: none; }
+  .tabbar .lens, :root[data-theme="light"] .tabbar .lens { border-radius: 13px; background: var(--brand-soft); box-shadow: none; transition: transform .22s ease; }
+  .tabbar .lens.squish { animation: none; }
+  .tab { font-size: 10px; font-weight: 500; gap: 4px; }
+  .tab svg { width: 20px; height: 20px; }
+  .tab.on, .tab.on svg, :root[data-theme="light"] .tab.on, :root[data-theme="light"] .tab.on svg { color: var(--accent); }
+  .cx-head { padding: 10px 0 14px; margin: 0; border-bottom: 1px solid var(--line); background: var(--bg); }
+  .cx-ib { width: 44px; height: 44px; color: var(--hint); border-radius: 12px; }
+  .cx-title b { font-size: 15px; font-weight: 600; }
+  .cx-title small { font-size: 12px; }
+  .cx-empty { padding: clamp(32px, 7vh, 72px) 0 20px; }
+  .cx-orb { width: 54px; height: 54px; margin-bottom: 20px; border-radius: 16px; background: var(--brand-soft); color: var(--accent); }
+  .cx-empty h2 { font-size: 25px; font-weight: 600; letter-spacing: -.035em; margin-bottom: 10px; }
+  .cx-empty p { max-width: 270px; font-size: 14px; line-height: 1.65; margin-bottom: 24px; }
+  .cx-modes { display: inline-flex; padding: 4px; gap: 3px; border-radius: 12px; background: var(--card); box-shadow: var(--rim); margin-bottom: 20px; }
+  .cx-modes button { display: inline-flex; align-items: center; gap: 7px; border-radius: 9px; height: 40px; font-size: 12px; font-weight: 500; padding: 0 12px; }
+  .cx-modes button svg { width: 15px; height: 15px; }
+  .cx-modes button.on { background: var(--brand-soft); color: var(--accent); box-shadow: none; }
+  .cx-chipline { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; max-width: 360px; margin: 0 auto; }
+  .cx-chipline button { min-height: 52px; padding: 12px; border-radius: 12px; font-size: 12px; line-height: 1.5; font-weight: 400; text-align: left; color: var(--hint); background: var(--card); box-shadow: var(--rim); }
+  .cx-chipline button:active { background: var(--card-hi); }
+  .cx-repo-chip { border-radius: 11px; margin-bottom: 18px; font-size: 13px; }
+  .cx-msg { gap: 10px; margin-bottom: 24px; }
+  .cx-msg.me .bubble { max-width: 88%; padding: 12px 16px; border-radius: 16px 16px 5px 16px; background: var(--card-hi); color: var(--text); line-height: 1.65; font-size: 14px; }
+  .cx-ava { width: 28px; height: 28px; border-radius: 9px; background: var(--brand-soft); color: var(--accent); }
+  .cx-ai { min-width: 0; }
+  .cx-ai .who { flex-wrap: wrap; gap: 6px 9px; line-height: 1.6; }
+  .cx-ai .who b { font-weight: 600; }
+  .cx-sum { font-size: 14px; line-height: 1.8; }
+  .cx-st { font-size: 10px; font-weight: 500; letter-spacing: 0; }
+  .cx-st.running, .cx-st.done, .cx-st.applied { color: var(--accent); }
+  .cx-st.failed, .cx-st.stopped { color: var(--danger); }
+  .cx-log { border-radius: 12px; padding: 12px; font-size: 11px; line-height: 1.75; background: var(--card); }
+  .cx-log div::before { color: var(--accent); }
+  .cx-log div.now::before, .cx-log div.now { color: var(--text); }
+  .cx-file { border-radius: 12px; }
+  .cx-file pre { background: var(--bg); color: var(--text); }
+  .cx-file pre .a { background: var(--brand-soft); color: var(--accent); }
+  .cx-file pre .r { background: #a6443918; color: var(--danger); }
+  .cx-file pre .h { color: var(--hint); }
+  .cx-act { min-height: 44px; border-radius: 10px; font-size: 12px; font-weight: 500; }
+  .cx-err { color: var(--danger); line-height: 1.6; }
+  .cx-composer { width: min(520px, calc(100vw - 32px)); bottom: calc(var(--safe-bottom) + 90px); background: var(--bg); padding-top: 6px; border-radius: 16px 16px 0 0; }
+  .cx-model, :root[data-theme="light"] .cx-model { display: flex; width: 100%; padding: 8px 4px; margin-bottom: 4px; min-height: 40px; font-size: 12px; font-weight: 400; }
+  .cx-model .nm { color: var(--hint); }
+  .cx-model .pr, .cx-model .pr.free { color: var(--hint); font-size: 11px; font-weight: 400; }
+  .cx-model:disabled .ar { display: none; }
+  .cx-input, :root[data-theme="light"] .cx-input { padding: 7px; gap: 4px; border-radius: 17px; background: var(--bg-2); box-shadow: var(--rim), 0 4px 18px #00000010; }
+  .cx-input:focus-within { box-shadow: inset 0 0 0 1px var(--accent); }
+  .cx-input textarea { font-size: 16px; line-height: 1.5; padding: 10px 3px; min-height: 44px; }
+  .cx-input .clip, .cx-send { width: 44px; height: 44px; border-radius: 12px; }
+  .cx-send { background: var(--accent); color: var(--on-accent); }
+  .cx-send:disabled { background: var(--card-hi); color: var(--hint); filter: none; }
+  .cx-send.stop { background: var(--accent); color: var(--on-accent); }
+  @media (max-height: 700px) { .cx-empty { padding-top: 22px; } .cx-orb { width: 44px; height: 44px; margin-bottom: 14px; } .cx-empty h2 { font-size: 23px; } .cx-empty p { margin-bottom: 16px; } .cx-modes { margin-bottom: 14px; } .cx-chipline button { min-height: 46px; padding: 10px; } }
+  @media (max-width: 360px) { main { padding-inline: 16px; } .pill { padding-inline: 11px; font-size: 12px; } .cx-modes button { padding-inline: 10px; } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+  }
+
 </style>
 </head>
 <body data-tab="agent">
@@ -964,15 +1080,15 @@ const tg = window.Telegram?.WebApp;
 const lang = (tg?.initDataUnsafe?.user?.language_code || navigator.language || "ru").startsWith("ru") ? "ru" : "en";
 const T = {
   ru: {
-    hello: n => n ? `Привет, ${n}!` : "Привет!", heroSub: "Ваш личный ИИ-агент. Подключите приложения — и просто пишите, что сделать.",
+    hello: n => n ? `Привет, ${n}!` : "Привет!", heroSub: "Место для ваших идей и повседневных задач.",
     paidModel: n => `${n} кредитов за ответ · покупка за ⭐`, paidLow: n => `Платная модель: ${n} кредитов за ответ. Пополни за звёзды в «Генерация»`,
-    cx: { help: "Чем помочь?", subProject: "Опиши, что построить — Codex напишет весь проект, проверит и отдаст файлы или сайт.",
-          subRepo: "Поставь задачу по твоему репозиторию — Codex прочитает код, внесёт правки и откроет pull request.",
+    cx: { help: "Что создадим?", subProject: "Опиши идею или выбери пример ниже.",
+          subRepo: "Выбери репозиторий и расскажи, что изменить.",
           project: "Новый проект", repo: "Репозиторий", pick: "Выбери репозиторий", noGh: "Подключи GitHub", newChat: "Новый чат", chats: "Чаты Codex",
-          noChats: "Чатов пока нет", ph: "Сообщение…", phMore: "Уточни или попроси доработать…", free: "бесплатно", unlimited: "∞ безлимит", perAnswer: n => `💎 ${n} / задача`,
+          noChats: "Чатов пока нет", ph: "Опиши задачу…", phMore: "Уточни или попроси доработать…", free: "бесплатно", unlimited: "∞ безлимит", perAnswer: n => `💎 ${n} / задача`,
           ideasRepo: ["Найди и исправь баги", "Напиши тесты", "Добавь README", "Отрефактори код"],
           ideasProject: ["Игра «змейка»", "Сайт-портфолио", "Telegram-бот на Python", "Лендинг кофейни"],
-          st: { running: "РАБОТАЕТ", done: "ГОТОВО", applied: "PR СОЗДАН", failed: "ОШИБКА", stopped: "ОСТАНОВЛЕН" },
+          st: { running: "В работе", done: "Готово", applied: "PR создан", failed: "Ошибка", stopped: "Остановлено" },
           pr: "🚀 Создать PR", applying: "Создаю…", openPr: "🔗 Pull request", openCommit: "Коммит", send: "📦 В чат", site: "🌐 Сайт", sent: "Отправил в чат",
           retry: "↻ Повторить", delAsk: "Удалить этот чат?", files: n => `${n} файл.`, models: "Модель для Codex",
           errBusy: "Codex ещё работает — дождись или останови", errGh: "Сначала подключи GitHub", errCredits: "Не хватает кредитов для платной модели",
@@ -1045,15 +1161,15 @@ const T = {
     chips: { all: "Популярное", productivity: "Продуктивность", dev: "Разработка", chat: "Общение", files: "Файлы", marketing: "Маркетинг", finance: "Финансы", ai: "ИИ" },
   },
   en: {
-    hello: n => n ? `Hi, ${n}!` : "Hi!", heroSub: "Your personal AI agent. Connect apps — then just tell it what to do.",
+    hello: n => n ? `Hi, ${n}!` : "Hi!", heroSub: "A place for your ideas and everyday tasks.",
     paidModel: n => `${n} credits an answer · bought with ⭐`, paidLow: n => `Paid model: ${n} credits an answer. Top up with Stars in “Generation”`,
-    cx: { help: "How can I help?", subProject: "Describe what to build — Codex writes the whole project, checks it and gives you the files or a site.",
-          subRepo: "Give a task for your repository — Codex reads the code, makes the changes and opens a pull request.",
+    cx: { help: "What shall we build?", subProject: "Describe your idea or choose an example below.",
+          subRepo: "Choose a repository and describe what to change.",
           project: "New project", repo: "Repository", pick: "Pick a repository", noGh: "Connect GitHub", newChat: "New chat", chats: "Codex chats",
-          noChats: "No chats yet", ph: "Message…", phMore: "Clarify or ask for more…", free: "free", unlimited: "∞ unlimited", perAnswer: n => `💎 ${n} / task`,
+          noChats: "No chats yet", ph: "Describe a task…", phMore: "Clarify or ask for more…", free: "free", unlimited: "∞ unlimited", perAnswer: n => `💎 ${n} / task`,
           ideasRepo: ["Find and fix bugs", "Write tests", "Add a README", "Refactor the code"],
           ideasProject: ["Snake game", "Portfolio site", "Telegram bot in Python", "Coffee shop landing"],
-          st: { running: "WORKING", done: "READY", applied: "PR OPENED", failed: "ERROR", stopped: "STOPPED" },
+          st: { running: "Working", done: "Ready", applied: "PR opened", failed: "Error", stopped: "Stopped" },
           pr: "🚀 Create PR", applying: "Creating…", openPr: "🔗 Pull request", openCommit: "Commit", send: "📦 To chat", site: "🌐 Site", sent: "Sent to the chat",
           retry: "↻ Retry", delAsk: "Delete this chat?", files: n => `${n} files`, models: "Model for Codex",
           errBusy: "Codex is still working — wait or stop it", errGh: "Connect GitHub first", errCredits: "Not enough credits for the paid model",
@@ -1543,7 +1659,7 @@ async function loadCodex() {
 function renderCodex() {
   const C = T.cx, first = cx.tasks[0], mode = first ? first.mode : cx.mode, repo = first ? first.repo : cx.repo;
   const title = first ? first.prompt : C.newChat;
-  const sub = mode === "repo" ? `🐙 ${repo || C.pick}` : `✨ ${C.project}`;
+  const sub = mode === "repo" ? (repo || C.pick) : C.project;
   const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 140;
   $("codex").innerHTML = `<div class="cx-head">
       <button class="cx-ib press" id="cx-list" aria-label="chats"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
@@ -1571,7 +1687,7 @@ function renderCodex() {
 function cxEmpty(mode) {
   const C = T.cx, repoMode = mode === "repo";
   return `<div class="cx-empty"><div class="cx-orb">${CX_ICON}</div><h2>${C.help}</h2><p>${repoMode ? C.subRepo : C.subProject}</p>
-    <div class="cx-modes"><button data-mode="project" class="${repoMode ? "" : "on"}">✨ ${C.project}</button><button data-mode="repo" class="${repoMode ? "on" : ""}">🐙 ${C.repo}</button></div><br>
+    <div class="cx-modes"><button data-mode="project" aria-pressed="${!repoMode}" class="${repoMode ? "" : "on"}">${CX_ICON} ${C.project}</button><button data-mode="repo" aria-pressed="${repoMode}" class="${repoMode ? "on" : ""}">${GH_ICON} ${C.repo}</button></div><br>
     ${repoMode ? `<button class="cx-repo-chip press" id="cx-repo-chip">${GH_ICON}<span>${esc(cx.github ? (cx.repo || C.pick) : C.noGh)}</span><span style="color:var(--hint)">▾</span></button>` : ""}
     <div class="cx-chipline">${(repoMode ? C.ideasRepo : C.ideasProject).map(t => `<button class="press" data-idea="${esc(t)}">${esc(t)}</button>`).join("")}</div></div>`;
 }
@@ -1604,12 +1720,12 @@ function cxMessage(t) {
 }
 function renderComposer() {
   const C = T.cx, s = state?.settings || {}, running = cxRunning();
-  const price = (s.premium || {})[s.model], owner = state?.gen?.owner;
-  $("cx-composer").innerHTML = `<button class="cx-model press" id="cx-model"><span class="mi">${CX_ICON}</span><span class="nm">${esc(prettyModel(s.model || ""))}</span>
-      <span class="pr ${price ? "" : "free"}">${owner ? C.unlimited : price ? C.perAnswer(price * 3) : C.free}</span><span class="ar">▼</span></button>
+  const price = (s.premium || {})[s.model], owner = state?.gen?.owner, available = !!s.models?.length;
+  $("cx-composer").innerHTML = `<button class="cx-model press" id="cx-model" ${available ? "" : "disabled"}><span class="mi">${CX_ICON}</span><span class="nm">${esc(prettyModel(s.model || ""))}</span>
+      <span class="pr ${price ? "" : "free"}">${available ? (owner ? C.unlimited : price ? C.perAnswer(price * 3) : C.free) : ""}</span><span class="ar">⌄</span></button>
     <div class="cx-input"><button class="clip press" id="cx-clip" aria-label="mode"><svg class="i" viewBox="0 0 24 24"><path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7"/></svg></button>
-      <textarea id="cx-text" rows="1" maxlength="4000" placeholder="${cx.tasks.length ? C.phMore : C.ph}">${esc(cx.draft)}</textarea>
-      <button class="cx-send press ${running ? "stop" : ""}" id="cx-send" aria-label="send">${running
+      <textarea id="cx-text" rows="1" maxlength="4000" aria-label="${C.ph}" placeholder="${cx.tasks.length ? C.phMore : C.ph}">${esc(cx.draft)}</textarea>
+      <button class="cx-send press ${running ? "stop" : ""}" id="cx-send" ${!available && !running ? "disabled" : ""} aria-label="${running ? (lang === "ru" ? "Остановить" : "Stop") : (lang === "ru" ? "Отправить" : "Send")}">${running
         ? '<svg class="i" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
         : '<svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>'}</button></div>`;
   $("cx-text").addEventListener("input", e => { cx.draft = e.target.value; cxGrow(); });
@@ -2222,10 +2338,10 @@ function renderGen() {
   const wallet = g.unlimited
     ? `<div class="wallet glass"><div class="grow"><div class="k">${T.myGen}</div><div class="v">∞ <small>${T.unlimited}</small></div></div></div>`
     : `<div class="wallet glass"><div class="grow"><div class="k">${T.freeToday(g.free_left, g.free_per_day)}</div>
-         <div class="v"><span style="color:#b4a9ff;display:inline-flex">${lineIcon("✨")}</span> ${g.credits} <small>${T.credits(g.credits).replace(/^\d+\s*/, "")}</small></div></div>
+         <div class="v"><span style="color:var(--accent);display:inline-flex">${lineIcon("✨")}</span> ${g.credits} <small>${T.credits(g.credits).replace(/^\d+\s*/, "")}</small></div></div>
          <button class="pill-btn press" id="gen-buy">${T.topUp}</button></div>`;
   const setup = g.ready ? "" : g.owner
-    ? `<div class="notice glass"><span style="color:#b4a9ff">${lineIcon("🔑")}</span><div><b>${T.genOwnerSetup}</b><br><button class="pill-btn press" id="gen-setup" style="margin-top:10px">${T.addKey}</button></div></div>`
+    ? `<div class="notice glass"><span style="color:var(--accent)">${lineIcon("🔑")}</span><div><b>${T.genOwnerSetup}</b><br><button class="pill-btn press" id="gen-setup" style="margin-top:10px">${T.addKey}</button></div></div>`
     : `<div class="notice glass"><span style="color:var(--hint)">${lineIcon("⏳")}</span><div>${T.genNotReady}</div></div>`;
   $("gen").innerHTML = setup + wallet + `
     <div class="list">
@@ -2489,7 +2605,7 @@ function hideSplash() {
   const el = $("splash");
   if (!el || el.classList.contains("gone")) return;
   // Keep it at least a moment so the app doesn't flash in.
-  const wait = Math.max(0, 3000 - performance.now());
+  const wait = Math.max(0, 450 - performance.now());
   setTimeout(() => { el.classList.add("gone"); setTimeout(() => el.remove(), 600); }, wait);
 }
 function init() {
