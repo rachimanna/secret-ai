@@ -1194,6 +1194,49 @@ async def chat_completion(data, model_id, client, **options):
             LOG.info("Adjusted effort compatibility for %s", model_id)
 
 
+async def chat_stream(data, model_id, client, *, retries=0, on_retry=None, **options):
+    """Retry a stalled model round only before it has emitted text or a tool call.
+
+    Tool results stay in the caller's messages; already executed tools are never replayed.
+    """
+    def field(obj, key):
+        return obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)
+
+    for attempt in range(retries + 1):
+        stream, emitted = None, False
+        try:
+            try:
+                stream = await chat_completion(data, model_id, client, **options)
+            except BadRequestError as exc:
+                if not options.get("tools") or "tool" not in str(exc).lower():
+                    raise
+                provider = chat_provider(model_id)
+                data.setdefault("no_tools", set()).add(provider)
+                LOG.warning("%s refuses tools; answering without them", provider)
+                options.pop("tools")
+                stream = await chat_completion(data, model_id, client, **options)
+            async for chunk in stream:
+                for choice in field(chunk, "choices") or []:
+                    delta = field(choice, "delta")
+                    if delta and (field(delta, "content") or field(delta, "tool_calls")):
+                        emitted = True
+                yield chunk
+            return
+        except APIConnectionError:
+            if emitted or attempt >= retries:
+                raise
+            LOG.warning("%s connection stalled before output; retrying model round once", model_id)
+            if on_retry:
+                on_retry()
+        finally:
+            close = (getattr(stream, "close", None) or getattr(stream, "aclose", None)) if stream is not None else None
+            if close:
+                try:
+                    await close()
+                except Exception as exc:
+                    LOG.warning("Closing model stream failed: %s", type(exc).__name__)
+
+
 def chat_provider(model):
     return next((prefix for prefix in CHAT_PROVIDERS if model.startswith(prefix)), None)
 
@@ -1327,18 +1370,15 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     for _ in range(request.pop("rounds", MAX_TOOL_ROUNDS)):
         options = {"model": model[len(provider):], "stream": True, "messages": messages,
                    "max_tokens": min(request.get("max_output_tokens", 8000), 32000)}
-        if tools:
+        if request.get("api_timeout"):
+            options["timeout"] = httpx.Timeout(request["api_timeout"], connect=8)
+        if tools and provider not in no_tools:
             options["tools"] = tools
-        try:
-            stream = await chat_completion(context.bot_data, model, client, **options)
-        except BadRequestError as exc:
-            if not tools or "tool" not in str(exc).lower():
-                raise
-            no_tools.add(provider)
-            LOG.warning("%s refuses tools; answering without them", provider)
-            tools = []
-            options.pop("tools")
-            stream = await chat_completion(context.bot_data, model, client, **options)
+        def retry_note():
+            ru = getattr(live, "language", "ru") == "ru"
+            live.status("Модель задерживается, повторяю запрос" if ru else "Model is taking longer; retrying request")
+        stream = chat_stream(context.bot_data, model, client,
+                             retries=request.get("stream_retries", 0), on_retry=retry_note, **options)
         said, calls, finish = "", {}, None
         field = lambda obj, key: obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)  # objects or raw dicts
         try:
@@ -5181,6 +5221,7 @@ async def run_codex(app, task_id, language, charged=0):
         live.status("Изучаю задачу" if ru else "Reading the task")
         answer, _ = await generate(
             context, live, tools, model=codex_model(data, task["model"]), store=False, max_output_tokens=32000, rounds=codex.ROUNDS,
+            api_timeout=180, stream_retries=1,
             instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language),
             input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
                                                                           else "") + task["prompt"]}])
@@ -5193,7 +5234,12 @@ async def run_codex(app, task_id, language, charged=0):
         LOG.warning("Codex task failed: %s %s", type(exc).__name__, str(exc)[:200])
         if charged:
             data["memory"].gen_refund(user_id, "credits", charged)
-        store.update(task_id, status=codex.STATUS_FAILED, step="", error=f"{type(exc).__name__}: {str(exc)[:300]}")
+        if isinstance(exc, APITimeoutError):
+            error = ("Модель не ответила вовремя. Повторите запрос или выберите другую модель." if ru else
+                     "The model did not respond in time. Retry the request or choose another model.")
+        else:
+            error = f"{type(exc).__name__}: {str(exc)[:300]}"
+        store.update(task_id, status=codex.STATUS_FAILED, step="", error=error)
         return
     finally:
         data["codex_jobs"].pop(task_id, None)
