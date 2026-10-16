@@ -1160,16 +1160,35 @@ def pick_grok(ids):
     return found[0] if found else None
 
 
-THINKERS = re.compile(r"gpt-?[5-9]|grok|\bo[1-9]|deepseek-?r|reason|thinking", re.I)  # models that reason before answering
+THINKERS = re.compile(r"gpt-?[5-9]|grok|\bo[1-9]|deepseek-?r|reason|thinking|gemini|claude", re.I)
 
 
 def quick_thinking(data, model):
-    """Extra options so reasoning models think briefly (REASONING_EFFORT, "low" by default): a 20 s pause becomes a few.
-    Dropped for good on a gateway that refuses them."""
-    effort = (data.get("reasoning") or "low").strip()
-    if not THINKERS.search(model) or effort in ("", "default", "off") or model in data.setdefault("no_effort", set()):
+    """Request less thinking; remember gateways that reject this optional parameter."""
+    effort = (data.get("chat_reasoning") or "low").strip()
+    if not THINKERS.search(model) or effort in ("default", "off") or model in data.setdefault("no_effort", set()):
         return {}
+    if effort == "low" and re.search(r"gemini[-._ ]3(?:[-._ ]0)?[-._ ]flash", model, re.I):
+        effort = "low" if model in data.get("low_effort", set()) else "minimal"
     return {"reasoning_effort": effort}
+
+
+async def chat_completion(data, model_id, client, **options):
+    """Adapt optional effort once per model without retrying unrelated API errors."""
+    options.update(quick_thinking(data, model_id))
+    while True:
+        try:
+            return await client.chat.completions.create(**options)
+        except BadRequestError as exc:
+            if "reasoning_effort" not in options or not re.search(r"reason|effort|thinking", str(exc), re.I):
+                raise
+            if options["reasoning_effort"] == "minimal":
+                data.setdefault("low_effort", set()).add(model_id)
+                options["reasoning_effort"] = "low"
+            else:
+                data.setdefault("no_effort", set()).add(model_id)
+                options.pop("reasoning_effort")
+            LOG.info("Adjusted effort compatibility for %s", model_id)
 
 
 def chat_provider(model):
@@ -1304,25 +1323,19 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     size = sum(len(str(m.get("content") or "")) for m in messages)
     for _ in range(request.pop("rounds", MAX_TOOL_ROUNDS)):
         options = {"model": model[len(provider):], "stream": True, "messages": messages,
-                   "max_tokens": min(request.get("max_output_tokens", 8000), 32000), **quick_thinking(context.bot_data, model)}
+                   "max_tokens": min(request.get("max_output_tokens", 8000), 32000)}
         if tools:
             options["tools"] = tools
         try:
-            stream = await client.chat.completions.create(**options)
+            stream = await chat_completion(context.bot_data, model, client, **options)
         except BadRequestError as exc:
-            if "reasoning_effort" in options and ("reasoning" in str(exc).lower() or "effort" in str(exc).lower()):
-                context.bot_data.setdefault("no_effort", set()).add(model)  # this gateway refuses it: plain requests
-                LOG.warning("%s refuses reasoning_effort; asking without it", model)
-                options.pop("reasoning_effort")
-                stream = await client.chat.completions.create(**options)
-            elif not tools or "tool" not in str(exc).lower():
+            if not tools or "tool" not in str(exc).lower():
                 raise
-            else:
-                no_tools.add(provider)  # this gateway refuses function tools: plain answers from now on
-                LOG.warning("%s refuses tools; answering without them", provider)
-                tools = []
-                options.pop("tools")
-                stream = await client.chat.completions.create(**options)
+            no_tools.add(provider)
+            LOG.warning("%s refuses tools; answering without them", provider)
+            tools = []
+            options.pop("tools")
+            stream = await chat_completion(context.bot_data, model, client, **options)
         said, calls, finish = "", {}, None
         field = lambda obj, key: obj.get(key) if isinstance(obj, dict) else getattr(obj, key, None)  # objects or raw dicts
         try:
@@ -1390,213 +1403,64 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 
 
 async def discover_models(app):
-    """Offer newer models only if this account really has them, so the picker never lists one that fails."""
+    """Only the owner's three models, using IDs confirmed by a configured gateway."""
     data = app.bot_data
-    if not MODEL_CATALOG and not ENABLED_MODELS:
-        # An empty owner catalog means no chat models, including automatic gateway backups.
-        # Ignore old environment overrides and saved user/group defaults until models are added again.
-        data.update(models=[], premium={}, fallbacks=[], cursor_models=[], model=None,
-                    chat_default=None, group_fast=None, vision_model=None, search_model=None,
-                    web_search=False)
-        LOG.info("Chat models are temporarily disconnected")
-        return
-    openai_ids = set()
-    if data.get("openai"):
-        try:
-            openai_ids = {m.id for m in (await data["client"].models.list()).data}
-        except Exception as exc:
-            LOG.warning("OpenAI model list unavailable: %s", type(exc).__name__)
-    abacus_ids = set()
-    if data.get("abacus"):
-        try:
-            abacus_ids = {m.id for m in (await data["abacus"].models.list()).data}
-        except Exception as exc:
-            LOG.warning("RouteLLM model list unavailable: %s", type(exc).__name__)
-    if openai_ids and data["model"] not in openai_ids:  # OPENAI_MODEL names a model this key doesn't have
-        def rank(i):  # the newest full GPT: a higher version, then not mini/nano
-            version = re.match(r"gpt-(\d+(?:\.\d+)?)", i)
-            return (float(version.group(1)) if version else 0.0, not re.search(r"mini|nano", i), -len(i))
-        chat_ids = [i for i in openai_ids if i.startswith("gpt-") and not re.search(
-            r"image|audio|realtime|tts|transcribe|search|embedding|instruct|moderation|codex|\d{4}-\d\d-\d\d", i)]
-        fallback = GPT_PICK if GPT_PICK in openai_ids else (max(chat_ids, key=rank) if chat_ids else data["model"])
-        LOG.warning("OPENAI_MODEL %s is not on this OpenAI key; using %s", data["model"], fallback)
-        data["model"] = fallback
-    images = sorted(i for i in openai_ids if i.startswith("gpt-image") and "mini" not in i)
-    if not data.get("image_model"):
-        data["image_model"] = images[-1] if images else "gpt-image-1"
-    gpt = GPT_PICK if GPT_PICK in openai_ids else ABACUS_PREFIX + GPT_PICK if GPT_PICK in abacus_ids else None
-    if not gpt and not data.get("openai"):
-        LOG.info("%s is not on RouteLLM and OpenAI is off: not offered", GPT_PICK)
-    elif not gpt:
-        LOG.warning("%s is not on the OpenAI key or RouteLLM; offering %s instead", GPT_PICK, data["model"])
-        gpt = data["model"]
-    gemini, any_ids = None, []
-    if data.get("anymodel_chat"):
-        try:
-            any_ids = [m.id for m in (await data["anymodel_chat"].models.list()).data]
-        except Exception as exc:
-            LOG.warning("AnyModel model list unavailable: %s", type(exc).__name__)
-    # Opus only through Abacus (a paid model, below); the old AnyModel Opus stays only when CHAT_MODEL asks for it.
-    claude = OPUS if data.get("anymodel_chat") and data.get("chat_override", "").startswith(ANYMODEL_PREFIX) and "opus" in data.get("chat_override", "") else None
-    if claude and any_ids and claude[len(ANYMODEL_PREFIX):] not in any_ids:
-        # The catalog spells it differently, or doesn't have it: take the closest Claude Opus it has.
-        wanted = claude.rsplit("opus-", 1)[1]
-        found = [i for i in any_ids if "opus" in i.lower() and wanted.replace("-", "") in re.sub(r"\D", "", i)]
-        others = sorted(i for i in any_ids if "claude-opus" in i.lower())
-        pick = (sorted(found, key=lambda i: (not i.startswith("cc/"), i)) or others[-1:] or [None])[0]
-        LOG.warning("%s is not in the AnyModel catalog; using %s", claude, pick or "it anyway")
-        claude = ANYMODEL_PREFIX + pick if pick else claude
-    if any_ids and os.environ.get("GEMINI_CHAT", "").strip() == "1":  # off unless asked for
-        gemini = pick_gemini(any_ids)
-    if gemini is not None or os.environ.get("GEMINI_CHAT", "").strip() == "1":
-        if gemini:
-            gemini = ANYMODEL_PREFIX + gemini
-            LOG.info("Gemini on AnyModel: %s", gemini)
-        else:
-            LOG.warning("Gemini 3.8 is not in the AnyModel catalog")
-    deepseek = pick_deepseek(any_ids) if os.environ.get("DEEPSEEK_CHAT", "").strip() == "1" else None
-    if deepseek:
-        deepseek = ANYMODEL_PREFIX + deepseek
-        LOG.info("DeepSeek on AnyModel: %s", deepseek)
-    # Sonnet through AnyModel when its catalog has it, otherwise through Abacus; never a guessed id that isn't listed.
-    sonnet, sonnet_abacus = None, None
-    pick = lambda ids: sorted((i for i in ids if SONNET_55.search(i)), key=lambda i: ("thinking" in i.lower(), "/" not in i, len(i)))
-    if any_ids and pick(any_ids):
-        sonnet = ANYMODEL_PREFIX + pick(any_ids)[0]
-        LOG.info("Claude Sonnet 5.5 on AnyModel: %s", sonnet)
-    elif data.get("anymodel_chat"):
-        claudes = [i for i in any_ids if "claude" in i.lower() or "sonnet" in i.lower()]
-        LOG.warning("AnyModel has no Claude Sonnet 5.5 (its Claude models: %s)", ", ".join(claudes[:15]) or "none")
-    if data.get("abacus"):
-        found = pick(abacus_ids)
-        if found or not abacus_ids:  # an empty list means the catalog didn't load: the usual id still works there
-            sonnet_abacus = ABACUS_PREFIX + (found[0] if found else "claude-sonnet-5-5")
-        sonnet = sonnet or sonnet_abacus
-        if sonnet == sonnet_abacus:
-            LOG.info("Claude Sonnet 5.5 on Abacus: %s", sonnet)
-    # Web search without OpenAI: a search model (Perplexity Sonar…) on a gateway, if there is one.
-    data["search_model"] = None
-    if not data.get("openai") and data.get("web_wanted"):
-        for prefix, ids in ((ANYMODEL_PREFIX, any_ids), (ABACUS_PREFIX, abacus_ids)):
-            hits = sorted((i for i in ids if re.search(r"sonar|perplexity", i, re.I) and not re.search(r"reason|deep", i, re.I)), key=len)
-            if hits:
-                data["search_model"] = prefix + hits[0]
-                LOG.info("Web search through %s", data["search_model"])
-                break
-        else:
-            LOG.warning("No search model on AnyModel or Abacus: web search is off")
-    grok = None  # Grok from xAI, through whichever gateway has it (GROK_CHAT=0 hides it)
-    if os.environ.get("GROK_CHAT", "1").strip() != "0":
-        for prefix, ids in ((ABACUS_PREFIX, abacus_ids), (ANYMODEL_PREFIX, any_ids)):
-            found = pick_grok(ids)
-            if found:
-                grok = prefix + found
-                LOG.info("Grok: %s", grok)
-                break
-        else:
-            LOG.info("Grok is in neither the Abacus nor the AnyModel catalog")
-    free = list(dict.fromkeys(m for m in (gemini, sonnet, claude, gpt, grok, deepseek) if m))  # the first one is the default
-    free = free or [data["model"]]
-    # When a model fails, these answer instead, in this order (each tried once).
-    data["fallbacks"] = list(dict.fromkeys(m for m in (sonnet, sonnet_abacus, grok, *free) if m))
-    data["premium"] = {m: price for m, price in find_premium(openai_ids, abacus_ids, any_ids).items() if m not in free}
-    data["models"] = free + list(data["premium"])
-    chosen = data.get("chat_override")
-    data["chat_default"] = chosen if chosen in free else free[0]
-    if not data.get("openai"):
-        data["model"] = data["chat_default"]  # every fallback to "the main model" stays off OpenAI
-    # Fast providers (Groq, Cerebras): their best chat model is free, answers groups first and backs the others up.
-    fast = []
-    for name in FAST_PROVIDERS:
+    sources = ((ANYMODEL_PREFIX, "anymodel_chat"), (ABACUS_PREFIX, "abacus"))
+
+    async def catalog(prefix, name):
         if not data.get(name):
-            continue
+            return prefix, []
         try:
-            ids = [m.id for m in (await data[name].models.list()).data]
+            result = await asyncio.wait_for(data[name].models.list(), 20)
+            return prefix, [m.id for m in result.data]
         except Exception as exc:
             LOG.warning("%s model list unavailable: %s", name, type(exc).__name__)
-            continue
-        found = next((i for pattern in FAST_PICK for i in ids if re.search(pattern, i, re.I)), None)
-        if found:
-            fast.append(f"{name}:{found}")
-            LOG.info("Fast model on %s: %s", name, found)
-    data["group_fast"] = fast[0] if fast else None
-    # Extra gateways (NVIDIA, OpenRouter's free models, OpenCode…): their models go into the menu as free ones.
-    extra = []
-    for name, (_, wanted, must) in EXTRA_PROVIDERS.items():
-        if not data.get(name):
-            continue
-        try:
-            ids = [m.id for m in (await data[name].models.list()).data]
-        except Exception as exc:
-            LOG.warning("%s model list unavailable: %s", name, type(exc).__name__)
-            ids = []
-        for pattern, usual in wanted:
-            hits = sorted((i for i in ids if re.search(pattern, i, re.I) and must in i
-                           and not re.search(r"code|coder|vision|vl\b|r1|reason|distill|embed|guard", i, re.I)),
-                          key=lambda i: ([-int(n) for n in (re.findall(r"\d+", i.split("/")[-1]) + ["0"] * 3)[:3]], len(i)))
-            found = hits[0] if hits else (usual if (not ids or usual in ids) else None)
+            return prefix, []
+
+    catalogs = await asyncio.gather(*(catalog(*source) for source in sources))
+    models, backups = [], []
+    for label, pattern in MODEL_CATALOG:
+        routes = []
+        for prefix, ids in catalogs:
+            found = pick_catalog(ids, pattern, cc_first=False)
             if found:
-                extra.append(f"{name}:{found}")
-                LOG.info("Free model on %s: %s", name, found)
-            else:
-                LOG.info("%s has no model like %s", name, pattern)
-    data["vision_model"] = await find_vision_model(data)
-    # The owner's list (MODEL_CATALOG) decides what is offered: each found in AnyModel's catalog, free or for credits.
-    chosen_models, prices = [], {}
-    for pattern, price, *route in MODEL_CATALOG:
-        found = pick_catalog(any_ids, pattern, cc_first=route[0] if route else True)
-        if not found:
-            LOG.warning("Model %s is not in the AnyModel catalog; not offered", pattern)
-            continue
-        model = ANYMODEL_PREFIX + found
-        chosen_models.append(model)
-        if price:
-            prices[model] = price
-        LOG.info("Model: %s (%s)", model, f"{price} credits an answer" if price else "free")
-    # RouteLLM from Abacus: it picks a model for each message itself (GPT-6 Luna for small talk, stronger ones when needed).
-    if data.get("abacus") and os.environ.get("ROUTELLM", "1").strip() != "0":
-        route = next((i for i in sorted(abacus_ids) if re.fullmatch(r"route-?llm", i, re.I)), None) or "route-llm"
-        if abacus_ids and route not in abacus_ids:
-            LOG.info("RouteLLM is not in the Abacus list; trying %s anyway", route)
-        chosen_models.append(ABACUS_PREFIX + route)
-        LOG.info("Model: %s (free)", ABACUS_PREFIX + route)
-    chosen_models += [m for m in fast + extra if m not in chosen_models]
-    backups = []
-    if ONLY_MODEL:  # a few models for now: the first gateway's copy of each in the menu, the others as backups
-        def gateway(m):
-            return ONLY_ORDER.index(m.split(":", 1)[0]) if m.split(":", 1)[0] in ONLY_ORDER else len(ONLY_ORDER)
-        menu = []
-        for pattern in ONLY_MODEL:
-            keep = sorted((m for m in chosen_models if re.search(pattern, m, re.I)), key=gateway)
-            menu += keep[:1]
-            backups += [m for m in keep[1:] if m not in prices]
-        chosen_models = menu
-        prices = {m: p for m, p in prices.items() if m in chosen_models}
-        data["group_fast"] = None  # groups answer with the same model
-    free_on = [m for m in chosen_models if m not in prices]
-    data.update(models=chosen_models, premium=prices, fallbacks=free_on + backups)
-    data["chat_default"] = data["model"] = (free_on or chosen_models or [None])[0]
-    # The owner's choice of the default for everyone (DEFAULT_PICK), applied once; /speed set can change it later.
+                routes.append(prefix + found)
+        if routes:
+            models.append(routes[0])
+            backups.extend(routes[1:])
+            LOG.info("Chat model %s: %s", label, routes[0])
+        else:
+            LOG.warning("%s is unavailable in the configured catalogs; not offered", label)
+    default = next((m for m in models if re.search(DEFAULT_PICK, m, re.I)), None)
+    if not default and models:
+        default = models[0]
+        LOG.warning("Gemini 3 Flash unavailable; temporarily using %s", default)
+    # Migrate the previous global default once. Explicit per-user choices remain valid
+    # only if they belong to this catalog. Old env flags cannot activate other models.
     store = data.get("connections")
-    pick = next((m for m in free_on if re.search(DEFAULT_PICK, m, re.I)), None)
-    if store and pick and store.get_meta("default_pick") != DEFAULT_PICK:
-        store.set_meta("default_model", pick)
-        store.set_meta("default_pick", DEFAULT_PICK)
+    if store and default and store.get_meta("default_pick") != DEFAULT_PICK:
+        store.set_meta("default_model", default)
+        if re.search(DEFAULT_PICK, default, re.I):
+            store.set_meta("default_pick", DEFAULT_PICK)
     saved = store.get_meta("default_model") if store else None
-    if saved in free_on:  # /speed set picked the fastest one
-        data["chat_default"] = data["model"] = saved
-        data["fallbacks"] = [saved] + [m for m in free_on + backups if m != saved]
-    if not chosen_models:
-        LOG.warning("No models are offered: the bot tells people it has none yet")
+    if saved in models:
+        default = saved
+    fallbacks = list(dict.fromkeys(([default] if default else []) + models + backups))
+    data.update(models=models, premium={}, fallbacks=fallbacks, cursor_models=[],
+                model=default, chat_default=default, group_fast=None,
+                vision_model=None, search_model=None, web_search=False)
+    if not models:
+        LOG.warning("No requested chat models available; check gateway keys and catalog access")
 
 
-# The models the bot offers, all through AnyModel, in menu order: (how to find the id, credits per answer; 0 = free).
-# The first free one is the default for everyone. Empty list: no models (the bot says so).
-MODEL_CATALOG = []  # Temporarily empty; the owner will choose the next models.
-DEFAULT_PICK = ""
-ONLY_MODEL = None
-ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")
-ENABLED_MODELS = []  # No Cursor models, even when old environment variables are still set.
+# An explicit allowlist: no Sonnet, auto-router, extra chat models or guessed IDs.
+MODEL_CATALOG = [
+    ("Gemini 3 Flash", r"(?:^|[/:])gemini[-._ ]3(?:[-._ ]0)?[-._ ]flash(?:[-._ ]preview)?(?:[-._ ]\d{6,})?$"),
+    ("Claude Haiku 5.5", r"(?:^|[/:])claude[-._ ]haiku[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
+    ("Claude Opus 5.5", r"(?:^|[/:])claude[-._ ]opus[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
+]
+DEFAULT_PICK = MODEL_CATALOG[0][1]
+ENABLED_MODELS = []  # Cursor must not add other models to the picker.
 
 
 def pick_catalog(ids, pattern, cc_first=True):
@@ -2693,11 +2557,11 @@ async def respond(update, context, target, content, saved_question, voice=False)
     try:
         prepared = time.monotonic()
         use_apps = wants_apps(context.bot_data, user_id, saved_question)
-        taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
-        empty = asyncio.sleep(0, ([], []))
-        _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
-                                       app_tools(context.bot_data, user_id, taken) if use_apps else empty)
+        apps = ([], [])
         if use_apps:
+            taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
+            _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
+                                           app_tools(context.bot_data, user_id, taken))
             context.bot_data.setdefault("app_names", {})[user_id] = list(apps[1])
         if apps_named(context.bot_data, user_id, saved_question):
             context.bot_data.setdefault("apps_until", {})[user_id] = time.monotonic() + APPS_FOLLOW_UP
@@ -2732,13 +2596,13 @@ async def respond(update, context, target, content, saved_question, voice=False)
         instructions += (" The user sent a voice message and your answer will be read aloud as a voice message: talk like "
                          "in a live conversation, short (2-5 sentences), no lists, no markdown, no links, no emoji.")
     model = user_model(context.bot_data, user_id)
-    # AnyModel adds seconds per request, more the bigger it is: a shorter history, and no tools unless the message needs them.
-    slow_gateway = bool(model) and model.startswith(ANYMODEL_PREFIX)
+    # Gateway small talk skips tool definitions and unnecessary app handshakes.
+    slow_gateway = bool(model) and bool(chat_provider(model))
     light = slow_gateway and not use_apps and not needs_tools(saved_question)
     if toolbox.instructions() and not light:
         instructions += " " + toolbox.instructions()
     history = memory.history(user_id)
-    shown = fit_history(history, ANYMODEL_HISTORY_CHARS if slow_gateway else None)
+    shown = fit_history(history, ANYMODEL_HISTORY_CHARS if model.startswith(ANYMODEL_PREFIX) else None)
     if shown:  # everything older than what the model reads comes back by search when the talk touches it
         oldest = history[len(history) - len(shown)]["id"]
     else:
@@ -2759,7 +2623,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
                 answer, incomplete = await unless_stopped(live, generate(
                     context, live, toolbox, model=attempt, instructions=instructions,
                     input=shown + [{"role": "user", "content": content}],
-                    store=False, max_output_tokens=32000, light=light and attempt.startswith(ANYMODEL_PREFIX)))
+                    store=False, max_output_tokens=32000, light=light and bool(chat_provider(attempt))))
                 break
             except MODEL_ERRORS as exc:
                 LOG.warning("Model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:300])
@@ -3289,7 +3153,7 @@ async def quick_answer_once(data, model, instructions, text, max_tokens=2000):
         model = data.get("chat_default") or model
     provider = chat_provider(model)
     if provider and data.get(CHAT_PROVIDERS[provider]):
-        response = await data[CHAT_PROVIDERS[provider]].chat.completions.create(
+        response = await chat_completion(data, model, data[CHAT_PROVIDERS[provider]],
             model=model[len(provider):], max_tokens=max_tokens,
             messages=[{"role": "system", "content": instructions + model_identity(model)}, {"role": "user", "content": text}])
         message = response.choices[0].message if response.choices else None
@@ -3911,9 +3775,8 @@ async def probe_model(data, model):
     try:
         async def run():
             nonlocal first
-            stream = await client.chat.completions.create(model=model[len(provider):], stream=True, max_tokens=200,
-                                                          messages=[{"role": "user", "content": "Скажи «привет» одним словом."}],
-                                                          **quick_thinking(data, model))
+            stream = await chat_completion(data, model, client, model=model[len(provider):], stream=True, max_tokens=200,
+                                                          messages=[{"role": "user", "content": "Скажи «привет» одним словом."}])
             async for chunk in stream:
                 choice = (getattr(chunk, "choices", None) or [None])[0]
                 if first is None and getattr(getattr(choice, "delta", None), "content", None):
@@ -5288,10 +5151,8 @@ def codex_owner(data, user_id):
 
 
 def codex_model(data, model):
-    """Codex needs a model that calls the project tools: the Cursor CLI can't, so its tasks use the default model."""
-    if model and model.startswith(cursor.PREFIX):
-        return data.get("chat_default") if not (data.get("chat_default") or "").startswith(cursor.PREFIX) else None
-    return model
+    """Old tasks also respect the current allowlist after the model catalog changes."""
+    return model if model in data.get("models", []) else data.get("chat_default")
 
 
 def codex_can_run(data, user_id):
@@ -5508,7 +5369,8 @@ def main():
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
-        abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL, timeout=120, max_retries=2)
+        abacus=AsyncOpenAI(api_key=os.environ["ABACUS_API_KEY"].strip(), base_url=ABACUS_URL,
+                           timeout=httpx.Timeout(120, connect=8, read=45), max_retries=0)
         if os.environ.get("ABACUS_API_KEY", "").strip() else None,
         **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), base_url=url, timeout=60, max_retries=1)
            for name, url in FAST_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
@@ -5517,7 +5379,7 @@ def main():
            for name, spec in EXTRA_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
         anymodel_chat=AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
                                   base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
-                                  timeout=180, max_retries=2) if os.environ.get("ANYMODEL_API_KEY", "").strip() else None,
+                                  timeout=httpx.Timeout(120, connect=8, read=45), max_retries=0) if os.environ.get("ANYMODEL_API_KEY", "").strip() else None,
         abacus_model=os.environ.get("ABACUS_MODEL", "").strip(),
         abacus_image=os.environ.get("ABACUS_IMAGE_MODEL", "").strip(),
         image_model=os.environ.get("OPENAI_IMAGE_MODEL", "").strip(),
@@ -5525,6 +5387,7 @@ def main():
         web_wanted=os.environ.get("WEB_SEARCH", "1").strip() != "0",
         # Low effort: the first words come much sooner; set REASONING_EFFORT=medium/high for deeper answers.
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),
+        chat_reasoning=os.environ.get("CHAT_REASONING_EFFORT", "low").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},
         biz_activity=sec.Activity())
     # Business updates first: their messages must not reach the regular chat handlers.
