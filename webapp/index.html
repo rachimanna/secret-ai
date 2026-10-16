@@ -971,6 +971,25 @@
     *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
   }
 
+
+  /* A keyboard resizes the chat, rather than scrolling the entire document. */
+  body[data-tab="codex"] { position: fixed; inset: 0; overflow: hidden; }
+  body[data-tab="codex"]::after { display: none; }
+  body[data-tab="codex"] main {
+    position: fixed; top: var(--app-top, 0px); left: 0; right: 0;
+    height: var(--app-height, 100dvh); width: 100%; margin: 0 auto;
+    display: flex; overflow: hidden; padding-bottom: calc(var(--safe-bottom) + 90px);
+  }
+  body[data-tab="codex"] #view-codex.active { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; animation: none; }
+  #codex { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+  .cx-head { position: static; flex: none; }
+  #cx-thread { flex: 1; min-height: 0; padding: 16px 0 24px; overflow-y: auto; overscroll-behavior-y: contain; -webkit-overflow-scrolling: touch; }
+  body[data-tab="codex"] .cx-composer { position: static; flex: none; transform: none; width: 100%; margin: 0; padding-top: 6px; }
+  body[data-tab="codex"][data-keyboard="true"] main { padding-bottom: 8px; }
+  body[data-tab="codex"][data-keyboard="true"] .tabbar { display: none; }
+  body[data-tab="codex"][data-keyboard="true"] .cx-empty { padding-top: 14px; }
+  body[data-tab="codex"][data-keyboard="true"] .cx-orb { display: none; }
+
 </style>
 </head>
 <body data-tab="agent">
@@ -1023,6 +1042,7 @@
   <!-- ============ CODEX ============ -->
   <section class="view" id="view-codex">
     <div id="codex"></div>
+    <div class="cx-composer" id="cx-composer"></div>
   </section>
 
   <!-- ============ GENERATION ============ -->
@@ -1067,7 +1087,6 @@
   <button class="tab" data-tab="settings"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span data-t="tabSettings"></span></button>
 </nav>
 
-<div class="cx-composer" id="cx-composer"></div>
 <div class="scrim" id="scrim"></div>
 <div class="sheet glass" id="sheet" role="dialog" aria-modal="true"></div>
 <div class="toast glass" id="toast"></div>
@@ -1077,6 +1096,9 @@
 
 <script>
 const tg = window.Telegram?.WebApp;
+// Signal readiness before catalog/API requests; a native launch must not wait for those.
+try { tg?.ready?.(); } catch (e) {}
+setTimeout(() => hideSplash(), 2000);
 const lang = (tg?.initDataUnsafe?.user?.language_code || navigator.language || "ru").startsWith("ru") ? "ru" : "en";
 const T = {
   ru: {
@@ -1660,7 +1682,8 @@ function renderCodex() {
   const C = T.cx, first = cx.tasks[0], mode = first ? first.mode : cx.mode, repo = first ? first.repo : cx.repo;
   const title = first ? first.prompt : C.newChat;
   const sub = mode === "repo" ? (repo || C.pick) : C.project;
-  const atBottom = window.innerHeight + window.scrollY >= document.body.scrollHeight - 140;
+  const previous = $("cx-thread"), previousTop = previous?.scrollTop || 0;
+  const atBottom = !previous || previous.scrollHeight - previous.scrollTop - previous.clientHeight < 80;
   $("codex").innerHTML = `<div class="cx-head">
       <button class="cx-ib press" id="cx-list" aria-label="chats"><svg class="i" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg></button>
       <button class="cx-title press" id="cx-title"><b><span>${esc(title)}</span>${first ? "" : "<i>▼</i>"}</b><small>${esc(sub)}</small></button>
@@ -1682,7 +1705,9 @@ function renderCodex() {
   document.querySelectorAll("#cx-thread [data-link]").forEach(a => a.addEventListener("click", e => { e.preventDefault(); openLink(a.dataset.link); }));
   document.querySelectorAll("#cx-thread [data-act]").forEach(b => b.onclick = () => codexAction(b.dataset.act, b.dataset.id, b));
   document.querySelectorAll(".cx-log").forEach(l => l.scrollTop = l.scrollHeight);
-  if (atBottom && first) window.scrollTo(0, document.body.scrollHeight);
+  if (atBottom && first) cxScrollBottom();
+  else if (previous) $("cx-thread").scrollTop = previousTop;
+  syncCodexViewport();
 }
 function cxEmpty(mode) {
   const C = T.cx, repoMode = mode === "repo";
@@ -1721,20 +1746,61 @@ function cxMessage(t) {
 function renderComposer() {
   const C = T.cx, s = state?.settings || {}, running = cxRunning();
   const price = (s.premium || {})[s.model], owner = state?.gen?.owner, available = !!s.models?.length;
-  $("cx-composer").innerHTML = `<button class="cx-model press" id="cx-model" ${available ? "" : "disabled"}><span class="mi">${CX_ICON}</span><span class="nm">${esc(prettyModel(s.model || ""))}</span>
-      <span class="pr ${price ? "" : "free"}">${available ? (owner ? C.unlimited : price ? C.perAnswer(price * 3) : C.free) : ""}</span><span class="ar">⌄</span></button>
-    <div class="cx-input"><button class="clip press" id="cx-clip" aria-label="mode"><svg class="i" viewBox="0 0 24 24"><path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7"/></svg></button>
-      <textarea id="cx-text" rows="1" maxlength="4000" aria-label="${C.ph}" placeholder="${cx.tasks.length ? C.phMore : C.ph}">${esc(cx.draft)}</textarea>
-      <button class="cx-send press ${running ? "stop" : ""}" id="cx-send" ${!available && !running ? "disabled" : ""} aria-label="${running ? (lang === "ru" ? "Остановить" : "Stop") : (lang === "ru" ? "Отправить" : "Send")}">${running
-        ? '<svg class="i" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
-        : '<svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>'}</button></div>`;
-  $("cx-text").addEventListener("input", e => { cx.draft = e.target.value; cxGrow(); });
-  $("cx-text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCodex(); });
-  $("cx-send").onclick = () => running ? stopCodex() : sendCodex();
-  $("cx-model").onclick = openCodexModels;
-  $("cx-clip").onclick = () => cx.tasks.length ? openCodexChats() : openCodexMode();
+  // Keep this textarea alive while task polling updates the history. Replacing a focused
+  // node closes the iOS keyboard and loses the selection even if its text is restored.
+  if (!$("cx-text")) {
+    $("cx-composer").innerHTML = `<button class="cx-model press" id="cx-model"><span class="nm"></span><span class="pr"></span><span class="ar">⌄</span></button>
+      <div class="cx-input"><button class="clip press" id="cx-clip" aria-label="${C.modeTitle}"><svg class="i" viewBox="0 0 24 24"><path d="m21 11-8.5 8.5a5 5 0 0 1-7-7L14 4a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4L15.5 7"/></svg></button>
+      <textarea id="cx-text" rows="1" maxlength="4000" aria-label="${C.ph}"></textarea>
+      <button class="cx-send press" id="cx-send"></button></div>`;
+    $("cx-text").addEventListener("input", e => { cx.draft = e.target.value; cxGrow(); });
+    $("cx-text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCodex(); });
+    $("cx-send").onclick = () => cxRunning() ? stopCodex() : sendCodex();
+    $("cx-model").onclick = openCodexModels;
+    $("cx-clip").onclick = () => cx.tasks.length ? openCodexChats() : openCodexMode();
+  }
+  const model = $("cx-model"), send = $("cx-send"), input = $("cx-text");
+  model.disabled = !available;
+  model.querySelector(".nm").textContent = prettyModel(s.model || "");
+  model.querySelector(".pr").textContent = available ? (owner ? C.unlimited : price ? C.perAnswer(price * 3) : C.free) : "";
+  send.disabled = !available && !running;
+  send.classList.toggle("stop", running);
+  send.setAttribute("aria-label", running ? (lang === "ru" ? "Остановить" : "Stop") : (lang === "ru" ? "Отправить" : "Send"));
+  send.innerHTML = running
+    ? '<svg class="i" viewBox="0 0 24 24"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none"/></svg>'
+    : '<svg class="i" viewBox="0 0 24 24"><path d="M12 19V5M6 11l6-6 6 6"/></svg>';
+  input.placeholder = cx.tasks.length ? C.phMore : C.ph;
+  if (input.value !== cx.draft) input.value = cx.draft;
   cxGrow();
 }
+function cxScrollBottom(behavior = "auto") {
+  const thread = $("cx-thread");
+  thread?.scrollTo({ top: thread.scrollHeight, behavior });
+}
+
+let codexFullHeight = window.innerHeight, codexWidth = window.innerWidth, viewportFrame;
+function syncCodexViewport() {
+  cancelAnimationFrame(viewportFrame);
+  viewportFrame = requestAnimationFrame(() => {
+    const vv = window.visualViewport, root = document.documentElement;
+    const focused = document.activeElement?.matches("input, textarea, [contenteditable=true]");
+    if (window.innerWidth !== codexWidth) { codexWidth = window.innerWidth; codexFullHeight = window.innerHeight; }
+    const heights = [window.innerHeight, vv?.height, tg?.viewportStableHeight || tg?.viewportHeight].filter(h => h > 0);
+    const height = Math.min(...heights);
+    if (!focused) codexFullHeight = Math.max(codexFullHeight, window.innerHeight, height);
+    const thread = $("cx-thread"), follow = thread && thread.scrollHeight - thread.scrollTop - thread.clientHeight < 80;
+    root.style.setProperty("--app-height", `${height}px`);
+    root.style.setProperty("--app-top", `${vv?.offsetTop || 0}px`);
+    document.body.dataset.keyboard = String(!!focused && codexFullHeight - height > 80);
+    if (follow) cxScrollBottom();
+  });
+}
+window.visualViewport?.addEventListener("resize", syncCodexViewport);
+window.visualViewport?.addEventListener("scroll", syncCodexViewport);
+window.addEventListener("resize", syncCodexViewport);
+document.addEventListener("focusin", syncCodexViewport);
+document.addEventListener("focusout", syncCodexViewport);
+
 function cxGrow() { const t = $("cx-text"); if (!t) return; t.style.height = "auto"; t.style.height = Math.min(130, t.scrollHeight) + "px"; }
 async function sendCodex() {
   const C = T.cx, text = ($("cx-text")?.value || "").trim();
@@ -1745,7 +1811,7 @@ async function sendCodex() {
   try {
     const { task } = await api("/api/codex/start", { mode: cx.mode, prompt: text, repo: cx.repo, thread: cx.thread || "" });
     cx.thread = task.thread; cx.draft = ""; cxSave(); haptic("success");
-    await loadCodex(); window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    await loadCodex(); cxScrollBottom("smooth");
   } catch (e) {
     toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits, repo: C.errRepo, models: C.errModels }[e.code] || T.err); haptic("error");
     if ($("cx-send")) $("cx-send").disabled = false;
@@ -1778,7 +1844,7 @@ function openCodexChats() {
           <div class="d">${esc(c.mode === "repo" ? c.repo : C.project)} · ${cxAgo(c.updated)}${c.count > 1 ? ` · ${c.count} 💬` : ""}</div></div>
         <span class="cx-st ${c.status}">${C.st[c.status] || ""}</span></button>`).join("") : `<div class="empty">${C.noChats}</div>`}</div>`);
   $("cx-sheet-new").onclick = () => { closeSheet(); cx.thread = null; cx.tasks = []; cxSave(); renderCodex(); };
-  document.querySelectorAll("#sheet [data-thread]").forEach(b => b.onclick = () => { cx.thread = b.dataset.thread; cx.open.clear(); cxSave(); closeSheet(); loadCodex().then(() => window.scrollTo(0, document.body.scrollHeight)); });
+  document.querySelectorAll("#sheet [data-thread]").forEach(b => b.onclick = () => { cx.thread = b.dataset.thread; cx.open.clear(); cxSave(); closeSheet(); loadCodex().then(() => cxScrollBottom()); });
 }
 function openCodexMode() {
   const C = T.cx;
@@ -2557,7 +2623,12 @@ async function clearMemory() {
 /* ---------------- tabs ---------------- */
 const TABS = ["agent", "discover", "codex", "gen", "settings"];  // the apps page has no tab: it opens from the agent tab
 function switchTab(tab) {
-  if (document.body.dataset.tab === tab) { window.scrollTo({ top: 0, behavior: "smooth" }); return; }
+  if (document.body.dataset.tab === tab) {
+    if (tab === "codex") $("cx-thread")?.scrollTo({ top: 0, behavior: "smooth" });
+    else window.scrollTo({ top: 0, behavior: "smooth" });
+    return;
+  }
+  if (document.body.dataset.tab === "codex") document.activeElement?.blur();
   haptic("select");
   document.body.dataset.tab = tab;
   document.querySelectorAll(".tab").forEach(b => b.classList.toggle("on", b.dataset.tab === tab));
@@ -2570,7 +2641,7 @@ function switchTab(tab) {
   window.scrollTo(0, 0);
   paintHeader();
   if (tab === "apps" && !catalog.loaded) loadCatalog(true);
-  if (tab === "codex") loadCodex();
+  if (tab === "codex") { syncCodexViewport(); loadCodex(); }
 }
 document.querySelectorAll(".tab").forEach(b => b.addEventListener("click", () => switchTab(b.dataset.tab)));
 
@@ -2623,17 +2694,26 @@ function init() {
   $("model-name").textContent = "…";
   $("cta-text").textContent = T.ctaNone;
   if (tg) {
-    tg.ready();
-    tg.expand();
+    try { tg.ready?.(); tg.expand?.(); } catch (e) {}
     try { tg.isVersionAtLeast?.("7.7") && tg.disableVerticalSwipes(); } catch (e) {}
     // Only a real light/dark switch changes anything; echoes of our own color calls are ignored.
     tg.onEvent?.("themeChanged", () => { if (applyTheme()) paintChrome(); });
+    tg.onEvent?.("viewportChanged", syncCodexViewport);
+    tg.onEvent?.("activated", resumeMiniApp);
   }
   paintChrome();
   load().then(settle).finally(hideSplash);
   setTimeout(hideSplash, 9000);  // never keep the splash if the server is slow to answer
   // Re-check connections after returning from a sign-in page.
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && state) load(true); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) resumeMiniApp(); });
+  window.addEventListener("pageshow", resumeMiniApp);
+  syncCodexViewport();
+}
+function resumeMiniApp() {
+  try { tg?.ready?.(); } catch (e) {}
+  hideSplash();
+  syncCodexViewport();
+  if (!document.hidden) load(true);
 }
 init();
 </script>

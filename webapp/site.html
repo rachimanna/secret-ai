@@ -2,6 +2,17 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
+<script>
+(() => {
+  const hash = new URLSearchParams(location.hash.slice(1));
+  const query = new URLSearchParams(location.search);
+  const keys = ["tgWebAppData", "tgWebAppVersion", "tgWebAppPlatform"];
+  if (keys.some(key => hash.has(key) || query.has(key))) {
+    // Preserve the signed launch data verbatim; the API still validates it on the server.
+    location.replace("/app" + location.search + location.hash);
+  }
+})();
+</script>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Secret AI — ИИ-помощник в Telegram</title>
 <meta name="description" content="Secret AI — топовые нейросети прямо в Telegram: чат, код, сайты, картинки, видео, голос и ИИ-секретарь. Без VPN.">

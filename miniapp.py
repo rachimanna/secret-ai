@@ -135,7 +135,7 @@ def make_handler(config):
 
         def do_HEAD(self):
             path = urlparse(self.path).path
-            self._send(200 if path in ("/", "/index.html", "/health", "/app", "/logo.svg", "/mascot.png") else 404, b"", "text/plain", head=True)
+            self._send(200 if path in ("/", "/index.html", "/health", "/app", "/app/", "/app/index.html", "/logo.svg", "/mascot.png") else 404, b"", "text/plain", head=True)
 
         def do_GET(self):
             url = urlparse(self.path)
@@ -144,10 +144,10 @@ def make_handler(config):
             elif url.path in ("/", "/index.html"):  # the bot's own website
                 bot = re.sub(r"[^A-Za-z0-9_]", "", str(config["bot_name"]() or "")) or "bot"
                 self._send(200, SITE.read_bytes().replace(b"__BOT__", bot.encode()), "text/html; charset=utf-8",
-                           cache="public, max-age=300")
+                           cache="no-store")
             elif url.path == "/mascot.png":
                 self._send(200, MASCOT.read_bytes(), "image/png", cache="public, max-age=86400")
-            elif url.path == "/app":
+            elif url.path in ("/app", "/app/", "/app/index.html"):
                 self._send(200, PAGE.read_bytes().replace(b"__LOGO__", LOGO.read_bytes())
                            .replace(b"__TEMPLATES__", gentemplates.page_json().encode()), "text/html; charset=utf-8")
             elif url.path.startswith("/tpl/") and url.path.endswith(".jpg"):
