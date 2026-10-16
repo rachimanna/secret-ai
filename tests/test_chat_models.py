@@ -10,10 +10,10 @@ from openai import BadRequestError
 
 import bot
 
-GEMINI = 'anymodel:google/gemini-3-flash-preview'
+SONNET = 'anymodel:anthropic/claude-sonnet-4-6'
 HAIKU = 'anymodel:claude-haiku-5-5'
 OPUS = 'anymodel:claude-opus-5-5'
-IDS = [m.split(':', 1)[1] for m in (GEMINI, HAIKU, OPUS)]
+IDS = [m.split(':', 1)[1] for m in (SONNET, HAIKU, OPUS)]
 
 
 class Store:
@@ -38,33 +38,33 @@ def bad_request(message):
 
 class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_default_migration_and_old_selections(self):
-        forbidden = ['claude-sonnet-5-5', 'route-llm', 'gpt-6.1-sol', 'gemini-3.1-flash-lite',
+        forbidden = ['gemini-3-flash-preview', 'google/gemini-3-flash-preview', 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'route-llm', 'gpt-6.1-sol', 'gemini-3.1-flash-lite',
                      'gemini-3-flash-image', 'gemini-3.8-pro', 'claude-opus-4-6', 'claude-haiku-5-50']
-        store = Store(default_model='anymodel:claude-sonnet-5-5', default_pick='old')
+        store = Store(default_model='anymodel:google/gemini-3-flash-preview', default_pick='old')
         data = dict(anymodel_chat=gateway(IDS + forbidden + ['cc/claude-opus-5-5']),
                     abacus=gateway(IDS + forbidden), connections=store,
                     model='gpt-6.1-sol', cursor_models=['cursor:grok-4.7'],
-                    memory=NS(model=lambda uid: 'anymodel:claude-sonnet-5-5' if uid == 1 else OPUS))
+                    memory=NS(model=lambda uid: 'anymodel:google/gemini-3-flash-preview' if uid == 1 else OPUS))
         await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['models'], [GEMINI, HAIKU, OPUS])
-        self.assertEqual(data['chat_default'], GEMINI)
-        self.assertEqual(store.get_meta('default_model'), GEMINI)
+        self.assertEqual(data['models'], [SONNET, HAIKU, OPUS])
+        self.assertEqual(data['chat_default'], SONNET)
+        self.assertEqual(store.get_meta('default_model'), SONNET)
         self.assertEqual(data['cursor_models'], [])
         self.assertEqual(len(data['fallbacks']), 6)
         self.assertTrue(all(any(re.search(p, m) for _, p in bot.MODEL_CATALOG)
                             for m in data['fallbacks']))
-        self.assertEqual(bot.user_model(data, 1), GEMINI)
+        self.assertEqual(bot.user_model(data, 1), SONNET)
         self.assertEqual(bot.user_model(data, 2), OPUS)
-        self.assertEqual(bot.codex_model(data, 'anymodel:claude-sonnet-5-5'), GEMINI)
+        self.assertEqual(bot.codex_model(data, 'anymodel:google/gemini-3-flash-preview'), SONNET)
 
-    async def test_plain_gemini_and_missing_gemini_then_recovery(self):
+    async def test_plain_sonnet_and_missing_sonnet_then_recovery(self):
         store = Store(default_model='anymodel:claude-sonnet-5-5')
         data = dict(anymodel_chat=gateway(['claude-haiku-5-5']), connections=store)
         await bot.discover_models(NS(bot_data=data))
         self.assertEqual(data['chat_default'], HAIKU)
-        data['anymodel_chat'] = gateway(['claude-haiku-5-5', 'gemini-3-flash-preview'])
+        data['anymodel_chat'] = gateway(['claude-haiku-5-5', 'claude-sonnet-4-6'])
         await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['chat_default'], 'anymodel:gemini-3-flash-preview')
+        self.assertEqual(data['chat_default'], 'anymodel:claude-sonnet-4-6')
         self.assertEqual(store.get_meta('default_pick'), bot.DEFAULT_PICK)
 
     async def test_failed_catalog_does_not_guess_or_enable_other_providers(self):
@@ -87,7 +87,7 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
             if len(started) == 2:
                 ready.set()
             await asyncio.wait_for(ready.wait(), 1)
-            return NS(data=[NS(id='gemini-3-flash-preview')])
+            return NS(data=[NS(id='claude-sonnet-4-6')])
 
         async def any_list():
             return await listing('anymodel_chat')
@@ -103,12 +103,12 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         create = AsyncMock(side_effect=[bad_request('unsupported reasoning_effort minimal'),
                                        bad_request('unsupported reasoning_effort low'), 'stream', 'next stream'])
         client = NS(chat=NS(completions=NS(create=create)))
-        data = {}
-        result = await bot.chat_completion(data, GEMINI, client, model=IDS[0], stream=True)
+        data = {'chat_reasoning': 'minimal'}
+        result = await bot.chat_completion(data, SONNET, client, model=IDS[0], stream=True)
         self.assertEqual(result, 'stream')
         self.assertEqual([c.kwargs.get('reasoning_effort') for c in create.call_args_list],
                          ['minimal', 'low', None])
-        await bot.chat_completion(data, GEMINI, client, model=IDS[0], stream=True)
+        await bot.chat_completion(data, SONNET, client, model=IDS[0], stream=True)
         self.assertNotIn('reasoning_effort', create.call_args.kwargs)
         create.side_effect = bad_request('invalid messages')
         with self.assertRaises(BadRequestError):
@@ -126,7 +126,7 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         class Prepared(Exception):
             pass
         refresh, app_tools = AsyncMock(), AsyncMock()
-        data = dict(models=[GEMINI], memory=NS(persona=lambda uid: next(iter(bot.PERSONAS))), pending={},
+        data = dict(models=[SONNET], memory=NS(persona=lambda uid: next(iter(bot.PERSONAS))), pending={},
                     github_apps=NS(fresh_token=refresh), http=NS(), connections=NS())
         update = NS(effective_user=NS(id=1, language_code='ru'))
         with patch.object(bot, 'open_reply', AsyncMock(return_value=NS())), \

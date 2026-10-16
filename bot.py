@@ -1501,7 +1501,7 @@ async def discover_models(app):
     default = next((m for m in models if re.search(DEFAULT_PICK, m, re.I)), None)
     if not default and models:
         default = models[0]
-        LOG.warning("Gemini 3 Flash unavailable; temporarily using %s", default)
+        LOG.warning("%s unavailable; temporarily using %s", MODEL_CATALOG[0][0], default)
     # Migrate the previous global default once. Explicit per-user choices remain valid
     # only if they belong to this catalog. Old env flags cannot activate other models.
     store = data.get("connections")
@@ -1520,9 +1520,9 @@ async def discover_models(app):
         LOG.warning("No requested chat models available; check gateway keys and catalog access")
 
 
-# An explicit allowlist: no Sonnet, auto-router, extra chat models or guessed IDs.
+# Only Sonnet 4.6, Haiku and Opus: no Gemini, auto-router or guessed IDs.
 MODEL_CATALOG = [
-    ("Gemini 3 Flash", r"(?:^|[/:])gemini[-._ ]3(?:[-._ ]0)?[-._ ]flash(?:[-._ ]preview)?(?:[-._ ]\d{6,})?$"),
+    ("Claude Sonnet 4.6", r"(?:^|[/:])claude[-._ ]sonnet[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$"),
     ("Claude Haiku 5.5", r"(?:^|[/:])claude[-._ ]haiku[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
     ("Claude Opus 5.5", r"(?:^|[/:])claude[-._ ]opus[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
 ]
@@ -1590,7 +1590,7 @@ def pick_nano(ids):
 
 
 async def resolve_abacus_model(app):
-    """Find the account's Sonnet 5.5 (model picker) and Nano Banana (pictures) in RouteLLM's model list."""
+    """Find Nano Banana (pictures) in RouteLLM's model list; chat discovery is separate."""
     data = app.bot_data
     if not data.get("abacus"):
         return

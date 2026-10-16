@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import bot
 
-MODEL = 'anymodel:gemini-3-flash-preview'
+MODEL = 'anymodel:claude-sonnet-4-6'
 
 
 class ChatLatencyTest(unittest.IsolatedAsyncioTestCase):

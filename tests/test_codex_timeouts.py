@@ -7,7 +7,7 @@ from openai import APITimeoutError
 
 import bot
 
-MODEL = 'anymodel:gemini-3-flash-preview'
+MODEL = 'anymodel:claude-sonnet-4-6'
 
 
 def timeout():
@@ -51,17 +51,17 @@ class CodexTimeoutTest(unittest.IsolatedAsyncioTestCase):
     async def test_timeout_before_headers_retries_once_and_stays_bounded(self):
         create = AsyncMock(side_effect=[timeout(), text_stream()])
         client = NS(chat=NS(completions=NS(create=create)))
-        result = [c async for c in bot.chat_stream({}, MODEL, client, retries=1, model='gemini-3-flash-preview')]
+        result = [c async for c in bot.chat_stream({}, MODEL, client, retries=1, model='claude-sonnet-4-6')]
         self.assertEqual(len(result), 1)
         self.assertEqual(create.call_count, 2)
         create.reset_mock()
         create.side_effect = timeout()
         with self.assertRaises(APITimeoutError):
-            _ = [c async for c in bot.chat_stream({}, MODEL, client, retries=1, model='gemini-3-flash-preview')]
+            _ = [c async for c in bot.chat_stream({}, MODEL, client, retries=1, model='claude-sonnet-4-6')]
         self.assertEqual(create.call_count, 2)
         create.reset_mock()
         with self.assertRaises(APITimeoutError):
-            _ = [c async for c in bot.chat_stream({}, MODEL, client, model='gemini-3-flash-preview')]
+            _ = [c async for c in bot.chat_stream({}, MODEL, client, model='claude-sonnet-4-6')]
         self.assertEqual(create.call_count, 1)  # ordinary chat has no additional retry
 
     async def test_partial_text_or_tool_call_is_not_replayed(self):
@@ -72,7 +72,7 @@ class CodexTimeoutTest(unittest.IsolatedAsyncioTestCase):
             create = AsyncMock(side_effect=lambda **kwargs: partial())
             client = NS(chat=NS(completions=NS(create=create)))
             with self.assertRaises(APITimeoutError):
-                _ = [c async for c in bot.chat_stream({}, MODEL, client, retries=1, model='gemini-3-flash-preview')]
+                _ = [c async for c in bot.chat_stream({}, MODEL, client, retries=1, model='claude-sonnet-4-6')]
             self.assertEqual(create.call_count, 1)
 
     async def test_codex_passes_longer_timeout_and_reports_failure_clearly(self):
