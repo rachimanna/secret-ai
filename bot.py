@@ -1550,8 +1550,8 @@ async def discover_models(app):
         route = next((i for i in sorted(abacus_ids) if re.fullmatch(r"route-?llm", i, re.I)), None) or "route-llm"
         if abacus_ids and route not in abacus_ids:
             LOG.info("RouteLLM is not in the Abacus list; trying %s anyway", route)
-        chosen_models.insert(0, ABACUS_PREFIX + route)
-        LOG.info("Model: %s (free, the default)", ABACUS_PREFIX + route)
+        chosen_models.append(ABACUS_PREFIX + route)
+        LOG.info("Model: %s (free)", ABACUS_PREFIX + route)
     chosen_models += [m for m in fast + extra if m not in chosen_models]
     backups = []
     if ONLY_MODEL:  # a few models for now: the first gateway's copy of each in the menu, the others as backups
@@ -1591,9 +1591,9 @@ MODEL_CATALOG = [  # all from AnyModel, all free for everyone (the owner's balan
     (r"claude-sonnet[-._]5(?![-._]?\d)", 0),              # Claude Sonnet 5
     (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 0),             # GPT-6 Sol
 ]
-DEFAULT_PICK = r"route-?llm"  # the default for everyone who hasn't picked one: RouteLLM (Abacus), Grok 4.7 if it's off
+DEFAULT_PICK = r"grok[-._ ]?4[-._]7"  # the default for everyone who hasn't picked one: Grok 4.7 (the quickest)
 # Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
-ONLY_MODEL = (r"route-?llm", r"grok[-._ ]?4", r"haiku", r"gemini", r"sonnet", r"gpt[-._ ]?6")
+ONLY_MODEL = (r"grok[-._ ]?4", r"haiku", r"gemini", r"sonnet", r"gpt[-._ ]?6", r"route-?llm")
 ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # which gateway's DeepSeek goes first
 ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
 
@@ -2554,8 +2554,12 @@ async def premium_offer(context, update, model, price):
 
 
 def drop_model(data, model, exc):
-    """A model the gateway won't serve at all (no access, no such model): out of the menu and the fallbacks until restart."""
-    if not isinstance(exc, (PermissionDeniedError, AuthenticationError, NotFoundError)) or model not in data.get("models", []):
+    """A model the gateway won't serve at all (no access, no such model, no credits left): out of the menu and the
+    fallbacks until restart, so nobody waits for its refusal before every answer."""
+    out_of_credits = isinstance(exc, (RateLimitError, APIError)) and re.search(
+        r"no remaining credits|insufficient[_ ]?(quota|balance|credits)|out of credits|balance", str(exc), re.I)
+    if (not isinstance(exc, (PermissionDeniedError, AuthenticationError, NotFoundError)) and not out_of_credits) \
+            or model not in data.get("models", []):
         return
     data["models"] = [m for m in data["models"] if m != model]
     data["fallbacks"] = [m for m in data.get("fallbacks", []) if m != model]
