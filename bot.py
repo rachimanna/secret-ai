@@ -1144,6 +1144,8 @@ EXTRA_PROVIDERS = {
                   [(r"deepseek-?v4-?flash(?!.*vision)", "deepseek-v4-flash")], ""),
     "bai": ("https://api.b.ai/v1",                           # b.ai: its free DeepSeek V4 Flash and Tencent Hy3 (BAI_BASE: the
             [(r"deepseek-?v4-?flash(?!.*vision)", "deepseek-v4-flash"), (r"\bhy-?3", "Hy3")], ""),   # Base URL from its key page)
+    "experiential": ("https://api.experientiallabs.ai/v1",  # platform.experientiallabs.ai (EXPERIENTIAL_API_KEY, xpl_…): the owner's
+                     [], ""),                                 # subscription; its models are picked in MODEL_CATALOG
     "tokenharbor": ("https://tokenharbor.ai/v1",         # tokenharbor.ai: its ":free" models (TOKENHARBOR_BASE if the URL differs)
                     [(r"deepseek", "deepseek-v4.1-flash:free"), (r"mimo", "mimo-v2.6-flash:free")], ":free"),
 }
@@ -1474,7 +1476,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 async def discover_models(app):
     """Only the owner's three models, using IDs confirmed by a configured gateway."""
     data = app.bot_data
-    sources = ((ANYMODEL_PREFIX, "anymodel_chat"), (ABACUS_PREFIX, "abacus"))
+    sources = ((ANYMODEL_PREFIX, "anymodel_chat"), (ABACUS_PREFIX, "abacus"), ("experiential:", "experiential"))
 
     async def catalog(prefix, name):
         if not data.get(name):
@@ -1488,12 +1490,14 @@ async def discover_models(app):
 
     catalogs = await asyncio.gather(*(catalog(*source) for source in sources))
     models, backups = [], []
-    for label, pattern in MODEL_CATALOG:
+    for label, pattern, *first in MODEL_CATALOG:
         routes = []
         for prefix, ids in catalogs:
             found = pick_catalog(ids, pattern, cc_first=False)
             if found:
                 routes.append(prefix + found)
+        if first:  # this model's preferred gateway first (the others back it up)
+            routes.sort(key=lambda route: not route.startswith(first[0]))
         if routes:
             models.append(routes[0])
             backups.extend(routes[1:])
@@ -1522,11 +1526,12 @@ async def discover_models(app):
         LOG.warning("No requested chat models available; check gateway keys and catalog access")
 
 
-# Only Sonnet 4.6, Haiku and Opus: no Gemini, auto-router or guessed IDs.
+# Sonnet 4.6, Haiku, Opus and Gemini 4 Argon: no auto-router or guessed IDs.
 MODEL_CATALOG = [
     ("Claude Sonnet 4.6", r"(?:^|[/:])claude[-._ ]sonnet[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$"),
     ("Claude Haiku 5.5", r"(?:^|[/:])claude[-._ ]haiku[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
     ("Claude Opus 5.5", r"(?:^|[/:])claude[-._ ]opus[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
+    ("Gemini 4 Argon", r"(?:^|[/:])gemini[-._ ]?4[-._ ]?argon(?:[-._ ]\d{6,})?$", "experiential:"),  # the owner's Experiential plan
 ]
 DEFAULT_PICK = MODEL_CATALOG[0][1]
 ENABLED_MODELS = []  # Cursor must not add other models to the picker.
