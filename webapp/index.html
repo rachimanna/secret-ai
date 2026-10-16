@@ -1357,6 +1357,7 @@ const shortModel = id => prettyModel(id).replace(/^Claude /, "");
 function renderHeader() {
   const s = state.settings;
   $("model-name").textContent = shortModel(s.model);
+  $("model-btn").disabled = !s.models.length;
   $("hello").textContent = T.hello(state.user.first_name);
   const n = connectedCount();
   $("cta-text").textContent = n ? T.ctaSome(n) : T.ctaNone;
@@ -1369,6 +1370,12 @@ function renderHeader() {
 }
 function toggleMenu(open) {
   const menu = $("model-menu"), btn = $("model-btn");
+  if (!state?.settings?.models?.length) {
+    menu.classList.remove("open");
+    btn.setAttribute("aria-expanded", false);
+    toast(T.cx.errModels);
+    return;
+  }
   open = open ?? !menu.classList.contains("open");
   menu.classList.toggle("open", open);
   btn.setAttribute("aria-expanded", open);
@@ -1616,6 +1623,7 @@ function cxGrow() { const t = $("cx-text"); if (!t) return; t.style.height = "au
 async function sendCodex() {
   const C = T.cx, text = ($("cx-text")?.value || "").trim();
   if (!text) { $("cx-text").focus(); return; }
+  if (!state.settings.models.length) { toast(C.errModels); return; }
   if (!cx.thread && cx.mode === "repo") { if (!cx.github) return openGitHubSheet(); if (!cx.repo) return pickRepo(); }
   $("cx-send").disabled = true;
   try {
@@ -1668,6 +1676,7 @@ function openCodexMode() {
 }
 function openCodexModels() {
   const C = T.cx, s = state.settings, paid = s.premium || {};
+  if (!s.models.length) { toast(C.errModels); return; }
   openSheet(`<div class="head"><h3>${C.models}</h3></div><div class="list">${s.models.map(m => `<button class="row press" data-model="${esc(m)}">
       <div class="ic sym">${CX_ICON}</div><div class="body"><div class="t">${esc(prettyModel(m))}</div><div class="d">${paid[m] ? C.perAnswer(paid[m] * 3) : C.free}</div></div>
       ${m === s.model ? `<span style="color:var(--accent)">${ICON.check}</span>` : ""}</button>`).join("")}</div>`);

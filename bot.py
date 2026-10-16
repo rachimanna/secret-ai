@@ -1392,6 +1392,14 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 async def discover_models(app):
     """Offer newer models only if this account really has them, so the picker never lists one that fails."""
     data = app.bot_data
+    if not MODEL_CATALOG and not ENABLED_MODELS:
+        # An empty owner catalog means no chat models, including automatic gateway backups.
+        # Ignore old environment overrides and saved user/group defaults until models are added again.
+        data.update(models=[], premium={}, fallbacks=[], cursor_models=[], model=None,
+                    chat_default=None, group_fast=None, vision_model=None, search_model=None,
+                    web_search=False)
+        LOG.info("Chat models are temporarily disconnected")
+        return
     openai_ids = set()
     if data.get("openai"):
         try:
@@ -1584,18 +1592,11 @@ async def discover_models(app):
 
 # The models the bot offers, all through AnyModel, in menu order: (how to find the id, credits per answer; 0 = free).
 # The first free one is the default for everyone. Empty list: no models (the bot says so).
-MODEL_CATALOG = [  # all from AnyModel, all free for everyone (the owner's balance pays), none of the expensive ones
-    (r"grok[-._ ]?4[-._]7", 0),                           # Grok 4.7: the default, the quickest of them
-    (r"claude-haiku-4[-._]5", 0),                         # Claude Haiku 4.5 (cc/: the direct route was 3x slower)
-    (r"gemini[-._ ]?4\b.*argon", 0),                      # Gemini 4 Argon
-    (r"claude-sonnet[-._]5(?![-._]?\d)", 0),              # Claude Sonnet 5
-    (r"gpt[-._ ]?6(?![-._]?\d)[-._ ]?sol", 0),             # GPT-6 Sol
-]
-DEFAULT_PICK = r"grok[-._ ]?4[-._]7"  # the default for everyone who hasn't picked one: Grok 4.7 (the quickest)
-# Only models matching these go into the menu, one per pattern (other gateways' copies back it up); None: everything found.
-ONLY_MODEL = (r"grok[-._ ]?4", r"haiku", r"gemini", r"sonnet", r"gpt[-._ ]?6", r"route-?llm")
-ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")  # which gateway's DeepSeek goes first
-ENABLED_MODELS = ["cursor"] if os.environ.get("CURSOR_FOR_OWNER", "").strip() == "1" else []  # Cursor stays off
+MODEL_CATALOG = []  # Temporarily empty; the owner will choose the next models.
+DEFAULT_PICK = ""
+ONLY_MODEL = None
+ONLY_ORDER = ("dashscope", "bai", "tokenharbor", "nvidia", "openrouter")
+ENABLED_MODELS = []  # No Cursor models, even when old environment variables are still set.
 
 
 def pick_catalog(ids, pattern, cc_first=True):
@@ -1612,11 +1613,7 @@ class NoModels(Exception):
 
 # Paid models, like Mira's: each answer costs credits, and credits are only bought with Telegram Stars.
 # key: (how to find it in the catalogs, credits per answer). PREMIUM_PRICES="fable=6,opus=5,astra=4" overrides prices.
-PREMIUM = {
-    "fable": (re.compile(r"fable[-._ ]?5[-._ ]?1", re.I), 6),
-    "opus": (re.compile(r"opus[-._ ]?5[-._ ]?5", re.I), 5),
-    "astra": (re.compile(r"gpt[-._ ]?6(?:[-._]\d)?[-._ ]?astra", re.I), 4),
-}
+PREMIUM = {}  # No paid chat models until the owner adds them again.
 
 
 def premium_prices():
@@ -2681,6 +2678,9 @@ def fit_history(history, limit=None):
 async def respond(update, context, target, content, saved_question, voice=False):
     """Answer in the chat; voice=True (the user sent a voice message) also sends the answer as a voice message."""
     user_id = update.effective_user.id
+    if not models_for(context.bot_data, user_id):
+        await send(target, ui(update, *error_text(NoModels())))
+        return
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
     prune_pending(context.bot_data["pending"])
@@ -5471,9 +5471,8 @@ def main():
     owner = os.environ.get("OWNER_ID", "").strip()
     connections = Connections(database, os.environ.get("ENCRYPTION_KEY", "").strip() or token,
                               int(owner) if owner.isdigit() else None)
-    model = os.environ.get("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
-    # Models offered in the Mini App picker; the first one stays the default for users who never chose.
-    models = [model] + [m for m in dict.fromkeys(x.strip() for x in os.environ.get("OPENAI_MODELS", "").split(",")) if m and m != model]
+    # Discovery fills the chat catalog only after the owner explicitly adds models.
+    model, models = None, []
     direct = DirectApps(connections, public_url)
     github_apps = GitHubApps(connections, os.environ.get("GITHUB_CLIENT_ID", "").strip(), os.environ.get("GITHUB_CLIENT_SECRET", "").strip())
     pipedream = Pipedream(os.environ.get("PIPEDREAM_CLIENT_ID", "").strip(), os.environ.get("PIPEDREAM_CLIENT_SECRET", "").strip(),
@@ -5505,7 +5504,7 @@ def main():
         fish_voice=fish_voice_id(os.environ.get("FISH_VOICE", "") or FISH_VOICE),
         fish_model=os.environ.get("FISH_MODEL", "").strip(),
         fish_via_anymodel=os.environ.get("FISH_VIA_ANYMODEL", "1").strip() != "0",
-        chat_default=OPUS, chat_override=os.environ.get("CHAT_MODEL", "").strip(),
+        chat_default=None, chat_override="",
         hf_spaces=tuple(x.strip() for x in os.environ.get("HF_SPACES", "").split(",") if x.strip()) or HF_SPACES,
         kling_api=os.environ.get("KLING_API_BASE", "").strip().rstrip("/") or KLING_API,
         cloudflare=(os.environ.get("CF_ACCOUNT_ID", "").strip(), os.environ.get("CF_API_TOKEN", "").strip()),
