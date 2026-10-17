@@ -1235,12 +1235,41 @@ def quick_thinking(data, model):
     return {"reasoning_effort": effort}
 
 
+# A gateway (AnyModel…) refuses requests beyond its key's limit with 429 "overloaded". Requests to one gateway queue
+# here instead (GATEWAY_PARALLEL at a time), and a 429 is retried after a pause before anyone sees an error.
+GATEWAY_PARALLEL = max(1, int(os.environ.get("GATEWAY_PARALLEL", "5") or 5))
+GATEWAY_SLOTS = {}
+RATE_RETRIES = (2, 5, 10)  # seconds to wait before each retry of a 429 (unless the gateway says how long)
+OUT_OF_CREDITS = re.compile(r"no remaining credits|insufficient[_ ]?(quota|balance|credits)|out of credits", re.I)
+
+
+def gateway_slot(model):
+    return GATEWAY_SLOTS.setdefault(chat_provider(model) or "openai", asyncio.Semaphore(GATEWAY_PARALLEL))
+
+
+def gateway_busy(model):
+    """Every slot of this model's gateway is taken: optional extras (uninvited group remarks) skip their turn."""
+    return gateway_slot(model).locked()
+
+
 async def chat_completion(data, model_id, client, **options):
-    """Adapt optional effort once per model without retrying unrelated API errors."""
+    """Adapt optional effort once per model; wait and retry when the gateway is momentarily overloaded (429)."""
     options.update(quick_thinking(data, model_id))
+    waits = list(RATE_RETRIES)
     while True:
         try:
             return await client.chat.completions.create(**options)
+        except RateLimitError as exc:
+            if not waits or OUT_OF_CREDITS.search(str(exc)):
+                raise
+            header = (getattr(getattr(exc, "response", None), "headers", None) or {}).get("retry-after")
+            delay = waits.pop(0)
+            try:
+                delay = min(20.0, max(delay, float(header))) if header else delay
+            except ValueError:
+                pass
+            LOG.warning("%s is overloaded (429); retrying in %.0f s", model_id, delay)
+            await asyncio.sleep(delay)
         except BadRequestError as exc:
             if "reasoning_effort" not in options or not re.search(r"reason|effort|thinking", str(exc), re.I):
                 raise
@@ -1263,6 +1292,8 @@ async def chat_stream(data, model_id, client, *, retries=0, on_retry=None, **opt
 
     for attempt in range(retries + 1):
         stream, emitted = None, False
+        slot = gateway_slot(model_id)
+        await slot.acquire()  # held while the answer streams: the gateway counts open requests
         try:
             try:
                 stream = await chat_completion(data, model_id, client, **options)
@@ -1288,6 +1319,7 @@ async def chat_stream(data, model_id, client, *, retries=0, on_retry=None, **opt
             if on_retry:
                 on_retry()
         finally:
+            slot.release()
             close = (getattr(stream, "close", None) or getattr(stream, "aclose", None)) if stream is not None else None
             if close:
                 try:
@@ -1467,6 +1499,8 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
             if not said.strip() or calls:
                 raise
             LOG.warning("%s stream ended with %s after the answer: %s", model, type(exc).__name__, str(exc)[:200])
+        finally:
+            await stream.aclose()  # frees the gateway slot at once, even when the answer was stopped mid-way
         text += said
         incomplete = finish == "length"
         if not calls:
@@ -3137,6 +3171,8 @@ async def group_chat(update, context):
         quiet = time.monotonic() - data.setdefault("group_surprised", {}).get(chat_id, float("-inf"))
         if counters[chat_id] < due[chat_id] or lock.locked() or quiet < GROUP_RANDOM_PAUSE:
             return
+        if gateway_busy(group_model(data, chat_id) or ""):
+            return  # the model is busy answering people: an uninvited remark can wait for the next time
         counters[chat_id], due[chat_id] = 0, random.randint(*span)
         data["group_surprised"][chat_id] = data["group_spoke"][chat_id] = time.monotonic()
         async with lock:
@@ -3423,9 +3459,10 @@ async def quick_answer_once(data, model, instructions, text, max_tokens=2000):
         model = data.get("chat_default") or model
     provider = chat_provider(model)
     if provider and data.get(CHAT_PROVIDERS[provider]):
-        response = await chat_completion(data, model, data[CHAT_PROVIDERS[provider]],
-            model=model[len(provider):], max_tokens=max_tokens,
-            messages=[{"role": "system", "content": instructions + model_identity(model)}, {"role": "user", "content": text}])
+        async with gateway_slot(model):
+            response = await chat_completion(data, model, data[CHAT_PROVIDERS[provider]],
+                model=model[len(provider):], max_tokens=max_tokens,
+                messages=[{"role": "system", "content": instructions + model_identity(model)}, {"role": "user", "content": text}])
         message = response.choices[0].message if response.choices else None
         content = getattr(message, "content", None)
         if isinstance(content, list):
