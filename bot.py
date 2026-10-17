@@ -90,6 +90,23 @@ SYSTEM = (
     "When the user explicitly requests emoji content, provide it as requested. "
     "Previous photo markers are not images; do not invent unseen visual details."
 )
+# What the models can't know from their training: today's date and the AI models that exist now (their knowledge
+# stops months or years earlier, so asked "what are the newest Claude models" they listed Claude 3/4).
+AI_MODELS_NOW = (
+    "Current AI models (as of October 2026; newer than your training data — trust this list over your memory): "
+    "Anthropic Claude — Claude Fable 5.1 (the most capable), Claude Opus 5.5, Claude Opus 5, Claude Sonnet 5.5, Claude "
+    "Sonnet 5, Claude Haiku 5.5 (the newest generation), and the previous ones still served: Claude Opus 4.8, 4.7, 4.6, "
+    "Claude Sonnet 4.6, Claude Haiku 4.5; Claude 3.x and older are retired. Other labs have newer models than you "
+    "remember too (GPT-6, Gemini 4, Grok 4.7…); for anything about very recent releases, prices or news, say what you "
+    "know may be outdated and use web search when it's available. "
+)
+
+
+def now_note():
+    """Today's date (models don't know it) and the current model lineup, added to every system prompt."""
+    return f" Today is {time.strftime('%Y-%m-%d')}. " + AI_MODELS_NOW
+
+
 # The bot's built-in voice: plain, friendly, no accent.
 ACCENT = (" Speak plain, natural Russian (or the user's language) with no accent or ethnic stylisation: never use «вах», "
           "«брат», «валлах», «э», «дорогой», «клянусь», «слушай» as filler, even if your own earlier messages in the history "
@@ -2853,7 +2870,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
     greeting = persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
     accent = "" if persona is PERSONAS["translator"] else ACCENT
     rules = "" if greeting else TRANSLATION_RULES + CODE_RULES
-    instructions = (SYSTEM + accent + rules + (" " + persona[3] if persona[3] else "") + " Telegram language: "
+    instructions = (SYSTEM + now_note() + accent + rules + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
     if greeting:
         instructions += " This is a simple greeting: reply naturally in one or two short sentences."
@@ -3210,7 +3227,7 @@ async def group_chat(update, context):
 
 
 def group_instructions(update):
-    return GROUP_STYLE + TRANSLATION_RULES + CODE_RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
+    return GROUP_STYLE + now_note() + TRANSLATION_RULES + CODE_RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
 
 
 # The retired accent's filler words, cut out even if the model copies them from its old messages in the chat.
@@ -5340,7 +5357,7 @@ async def live_turn(app, tg_user, audio, image=None, mode=None):
                       extra=[memory_tool(context, user_id)])
     if not use_apps:
         toolbox.mcp = []
-    instructions = (SYSTEM + ACCENT + LIVE_RULES + (LIVE_GERMAN if mode == "de" else "") + model_identity(model)
+    instructions = (SYSTEM + now_note() + ACCENT + LIVE_RULES + (LIVE_GERMAN if mode == "de" else "") + model_identity(model)
                     + " Telegram language: " + (tg_user.get("language_code") or "ru"))
     if toolbox.instructions():
         instructions += " " + toolbox.instructions()
