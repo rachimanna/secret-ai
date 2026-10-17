@@ -42,7 +42,7 @@ from telegram import (BotCommand, BotCommandScopeAllGroupChats, InlineKeyboardBu
 from codefiles import extract_files, site_file
 from fun import LEVELS, GroupStore, ago, MemeError, demotivator, quote_card, tiktok_meme
 from telegram.constants import ChatAction
-from telegram.error import BadRequest, NetworkError, RetryAfter, TelegramError
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           PreCheckoutQueryHandler, TypeHandler, filters)
 
@@ -2197,6 +2197,115 @@ async def promo_typed(update, context):
         return False  # a button is expected: the message goes to the chat as usual
     await promo_step(message, w)
     return True
+
+
+# ---------- Broadcast: the owner sends one message to every private chat and every group the bot is in ----------
+BROADCAST_RATE = 0.05  # 20 messages a second: under Telegram's ~30/s limit for bots
+
+
+def broadcast_targets(data, who):
+    """Chat ids: people who wrote the bot privately, and the groups it has been in."""
+    users, groups = [], []
+    if who in ("all", "users"):
+        memory = data["memory"]
+        rows = memory.db.execute("SELECT DISTINCT user_id FROM messages UNION SELECT user_id FROM settings").fetchall()
+        users = sorted({row[0] for row in rows if row[0] and row[0] > 0})
+    if who in ("all", "groups"):
+        groups = sorted({row[0] for row in data["groups"].db.execute("SELECT chat_id FROM group_info").fetchall() if row[0] < 0})
+    return users, groups
+
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/broadcast: the owner's next message (text, photo, video…) goes to everyone. /broadcast TEXT sends that text."""
+    if not await authorized(update, context):
+        return
+    data, user_id = context.bot_data, update.effective_user.id
+    if data["connections"].get_meta("owner") != user_id:
+        await send(update.effective_message, "Это может только владелец бота.")
+        return
+    text = update.effective_message.text.partition(" ")[2].strip() if update.effective_message.text else ""
+    if text:
+        data.setdefault("broadcast", {})[user_id] = {"text": text}
+        await broadcast_preview(update.effective_message, data, user_id)
+        return
+    data.setdefault("broadcast", {})[user_id] = {"step": "wait"}
+    await reply(update.effective_message, "📣 Рассылка\n\nОтправь сообщение, которое нужно разослать: текст, фото, видео, "
+                                          "голосовое — что угодно, оно уйдёт как есть.",
+                InlineKeyboardMarkup([[promo_button("❌ Отмена", "bc:cancel", "danger")]]))
+
+
+async def broadcast_preview(message, data, user_id):
+    users, groups = broadcast_targets(data, "all")
+    await reply(message, f"📣 Кому отправить?\n\n👤 В личку: {len(users)} чел.\n👥 В группы: {len(groups)}",
+                InlineKeyboardMarkup([
+                    [promo_button(f"✅ Всем ({len(users) + len(groups)})", "bc:all", "success")],
+                    [promo_button(f"👤 Только в личку ({len(users)})", "bc:users", "primary"),
+                     promo_button(f"👥 Только в группы ({len(groups)})", "bc:groups", "primary")],
+                    [promo_button("❌ Отмена", "bc:cancel", "danger")]]))
+
+
+async def broadcast_typed(update, context):
+    """The owner's message after /broadcast becomes the broadcast. True if taken."""
+    data, user_id = context.bot_data, update.effective_user.id
+    pending = data.get("broadcast", {}).get(user_id)
+    message = update.effective_message
+    if not pending or pending.get("step") != "wait" or (message.text or "").startswith("/"):
+        return False
+    data["broadcast"][user_id] = {"copy": (message.chat_id, message.message_id)}
+    await broadcast_preview(message, data, user_id)
+    return True
+
+
+async def broadcast_button(update, context, query, action):
+    data, user_id = context.bot_data, update.effective_user.id
+    if data["connections"].get_meta("owner") != user_id:
+        await query.answer()
+        return
+    pending = data.get("broadcast", {}).pop(user_id, None)
+    if action == "cancel" or not pending or pending.get("step") == "wait":
+        await query.answer()
+        await rich_edit(query, "Рассылка отменена.")
+        return
+    users, groups = broadcast_targets(data, action)
+    await query.answer("Отправляю…")
+    await rich_edit(query, f"📣 Рассылка началась: {len(users) + len(groups)} чатов. Пришлю отчёт, когда закончу.")
+    task = asyncio.create_task(run_broadcast(context.bot, data, user_id, pending, users, groups))
+    data.setdefault("broadcast_tasks", set()).add(task)
+    task.add_done_callback(data["broadcast_tasks"].discard)
+
+
+async def run_broadcast(bot, data, owner, pending, users, groups):
+    sent, failed = {"users": 0, "groups": 0}, {"users": 0, "groups": 0}
+    for kind, chats in (("users", users), ("groups", groups)):
+        for chat_id in chats:
+            for attempt in range(2):
+                try:
+                    if "copy" in pending:
+                        await bot.copy_message(chat_id, pending["copy"][0], pending["copy"][1])
+                    else:
+                        await bot.send_message(chat_id, pending["text"])
+                    sent[kind] += 1
+                    break
+                except RetryAfter as exc:  # Telegram asks to slow down: wait and try this chat once more
+                    await asyncio.sleep(seconds(exc.retry_after) + 1)
+                    if attempt:
+                        failed[kind] += 1
+                except (Forbidden, BadRequest):  # blocked the bot, left the group, chat gone
+                    failed[kind] += 1
+                    break
+                except TelegramError as exc:
+                    LOG.warning("Broadcast to a chat failed: %s", type(exc).__name__)
+                    failed[kind] += 1
+                    break
+            await asyncio.sleep(BROADCAST_RATE)
+    LOG.info("Broadcast done: %s sent, %s failed", sent, failed)
+    try:
+        await bot.send_message(owner, "📣 Рассылка готова\n\n"
+                               f"👤 В личку: доставлено {sent['users']}, не дошло {failed['users']}\n"
+                               f"👥 В группы: доставлено {sent['groups']}, не дошло {failed['groups']}\n\n"
+                               "«Не дошло» — человек заблокировал бота или бота убрали из группы.")
+    except TelegramError:
+        pass
 
 
 async def wipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -4546,6 +4655,8 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await send(message, shown)
             # Keep the catalog out of model history: it is not a sample answer style.
             return
+    if context.bot_data.get("broadcast", {}).get(update.effective_user.id) and await broadcast_typed(update, context):
+        return
     if message.text and await promo_typed(update, context):
         return
     if message.text and await secretary_switch(update, context, message.text):
@@ -4706,6 +4817,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                       reply_markup=persona_keyboard(update, data[5:]))
         return
 
+    if data.startswith("bc:"):
+        await broadcast_button(update, context, query, data[3:])
+        return
+
     if data.startswith("pr:"):
         await promo_button_press(update, context, query, data[3:])
         return
@@ -4846,6 +4961,8 @@ async def unsupported(update, context):
             await group_chat(update, context)  # stickers, videos, gifs: remembered as context, sometimes commented
         return
     if await authorized(update, context):
+        if context.bot_data.get("broadcast", {}).get(update.effective_user.id) and await broadcast_typed(update, context):
+            return  # a video, sticker or gif to broadcast
         await send(update.effective_message, ui(update, "Отправьте текст, голосовое, аудио или фото. Команды: /help", "Send text, voice, audio or a photo. Commands: /help"))
 
 
@@ -5750,6 +5867,7 @@ def main():
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("emoji", emoji_command))
     app.add_handler(CommandHandler("promo", promo_command))
     app.add_handler(CommandHandler("owner", owner_command))
