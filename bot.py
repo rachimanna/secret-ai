@@ -166,6 +166,15 @@ HISTORY_ITEM_CHARS = 2_500
 
 # id: (emoji, Russian name, English name, extra instructions)
 PERSONAS = {
+    "street": ("😎", "Свой пацан", "Homie",
+               "Style: you talk like a cool guy from the user's own chat, not like an assistant. Small talk gets one short "
+               "line (often lowercase, no full stop at the end), street slang and easy humour: «ну чё», «го», «хз», «изи», "
+               "«жиза», «база», «кринж», «бро» — a touch, not in every line, and never «вах»/«брат»-style accent filler. "
+               "No assistant phrases («чем могу помочь», «рад помочь», «отличный вопрос»), no lists or headings for small "
+               "talk, at most one emoji. Swear only if the user swears first. When they need something real (code, facts, "
+               "advice, a task), do it properly and completely, just in the same relaxed tone. Asked who you are or which "
+               "model: answer casually and truthfully — you're Secret AI, an AI (name the model if asked); never claim to "
+               "be a human."),
     "assistant": ("✨", "Ассистент", "Assistant", ""),
     "coder": ("💻", "Программист", "Coder",
               "Act as a senior software engineer: give complete working code, explain decisions briefly and point out pitfalls."),
@@ -175,7 +184,7 @@ PERSONAS = {
     "creative": ("🎨", "Креатив", "Creative",
                  "Be bold and original: suggest unexpected ideas and write vividly."),
 }
-DEFAULT_PERSONA = "assistant"
+DEFAULT_PERSONA = "street"  # the relaxed "one of us" tone; /mode switches to the assistant
 
 # The thinking bubble starts with the logo: an animated custom emoji made from webapp/logo-emoji.webm
 # (the bot creates the emoji pack itself) or the one from BRAND_EMOJI_ID.
@@ -2677,7 +2686,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
                                                      edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)])
     if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
         toolbox.mcp = []
-    greeting = persona is PERSONAS["assistant"] and not use_apps and is_greeting(saved_question)
+    greeting = persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
     accent = "" if persona is PERSONAS["translator"] else ACCENT
     rules = "" if greeting else TRANSLATION_RULES + CODE_RULES
     instructions = (SYSTEM + accent + rules + (" " + persona[3] if persona[3] else "") + " Telegram language: "
@@ -4979,6 +4988,12 @@ async def post_init(app):
             and os.environ.get("KEEP_AWAKE", "1").strip() != "0"):
         app.bot_data["awake_task"] = asyncio.create_task(keep_awake(app))
     owner_code(app.bot_data)  # no owner yet: the console shows the code for /owner
+    store = app.bot_data["connections"]
+    if store.get_meta("persona_default") != DEFAULT_PERSONA:  # the default style changed: everyone on the old one moves
+        memory = app.bot_data["memory"]
+        with memory.db:
+            memory.db.execute("UPDATE settings SET persona=? WHERE persona='assistant'", (DEFAULT_PERSONA,))
+        store.set_meta("persona_default", DEFAULT_PERSONA)
     PREMIUM_EMOJI.update({key: value for key, value in
                           (app.bot_data["connections"].get_meta("premium_emoji") or {}).items() if valid_emoji_key(key)})
     await resolve_abacus_model(app)
