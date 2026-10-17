@@ -194,6 +194,26 @@ CURSOR = ""  # no typing bar after the streamed text: it flashed like a glitch
 # Telegram allows roughly one edit per second per chat; faster edits get RetryAfter.
 ANIMATION_INTERVAL = 1.5
 STREAM_EDIT_INTERVAL = 1.2
+# Groups: Telegram allows about 20 messages a minute per group and edits count, so an answer is edited at most
+# GROUP_EDITS times, GROUP_EDIT_INTERVAL seconds apart (private chats use drafts, which aren't limited like that).
+GROUP_EDITS = 3
+GROUP_EDIT_INTERVAL = 4.0
+
+
+ACTIVE = {"answers": 0}  # answers being written right now: a self-update waits for them before restarting
+
+
+def counted(handler):
+    """Count a running answer so a restart never cuts it off."""
+    async def run(*args, **kwargs):
+        ACTIVE["answers"] += 1
+        try:
+            return await handler(*args, **kwargs)
+        finally:
+            ACTIVE["answers"] -= 1
+    run.__name__, run.__doc__ = handler.__name__, handler.__doc__
+    return run
+
 TYPING_INTERVAL = 4.5
 # Native drafts (sendMessageDraft) animate smoothly and are not limited like edits.
 DRAFT_INTERVAL = 0.3
@@ -2745,6 +2765,7 @@ def is_greeting(text):
     return bool(GREETING.fullmatch(" ".join(normalized.split())))
 
 
+@counted
 async def respond(update, context, target, content, saved_question, voice=False):
     """Answer in the chat; voice=True (the user sent a voice message) also sends the answer as a voice message."""
     user_id = update.effective_user.id
@@ -2918,27 +2939,30 @@ class GroupReply:
 
     def __init__(self, target, config):
         self.target, self.config = target, config
-        self.text, self.message, self.typing, self.edited = "", None, None, 0.0
+        self.text, self.message, self.typing, self.edited, self.edits = "", None, None, 0.0, 0
 
     def status(self, note):
         pass
 
     async def start(self):
+        # No "typing…" loop here: in a group every call counts towards Telegram's ~20 per minute, and the "…" message
+        # already shows the bot is on it. Several busy groups used to hit flood waits and the bot looked frozen.
         frame = f"{self.config['logo']} …"
+        self.started = time.monotonic()
         self.message = await with_logo(self.config, lambda entities: reply(self.target, frame, entities=entities))
-        self.typing = asyncio.create_task(typing_loop(self.target, ChatAction.TYPING))
 
     async def update(self, text):
-        """The answer shows up as it's written: the "…" message is edited every ~1.5 s (code waits for the end)."""
+        """The answer shows up as it's written, but sparingly: a few edits, seconds apart (code waits for the end)."""
         self.text = text
         now = time.monotonic()
-        if not self.message or not text.strip() or "```" in text or len(text) > 3500 or now - self.edited < STREAM_EDIT_INTERVAL + 0.3:
+        if (not self.message or not text.strip() or "```" in text or len(text) > 3500 or self.edits >= GROUP_EDITS
+                or now - max(self.edited, getattr(self, "started", 0)) < GROUP_EDIT_INTERVAL):
             return
-        self.edited = now
+        self.edited, self.edits = now, self.edits + 1
         try:
             await self.message.edit_text(humanize(text) + CURSOR, parse_mode=None)
-        except RetryAfter as exc:
-            self.edited = now + seconds(exc.retry_after)
+        except RetryAfter:  # Telegram asks this group to slow down: no more edits, just the final answer
+            self.edits = GROUP_EDITS
         except TelegramError:
             pass
 
@@ -3274,6 +3298,7 @@ class GroupTools:
         return "Started. It will be posted in reply in a few minutes; say so in a few words."
 
 
+@counted
 async def group_respond(update, context, message, content, voice=False):
     """Answer in the group; a voice message gets only a voice message back."""
     data = context.bot_data
@@ -5098,6 +5123,12 @@ async def post_init(app):
         app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
     if hosting.updates_enabled():  # not Render: pull new commits from GitHub and restart by itself
         async def before_restart():
+            # Let the answers being written finish (up to 90 s): a restart used to cut them off mid-way.
+            for _ in range(90):
+                busy = ACTIVE["answers"] + len(LIVE_DRAFTS) + len(app.bot_data.get("gen_tasks") or ())
+                if not busy:
+                    break
+                await asyncio.sleep(1)
             if app.bot_data.get("snapshots"):
                 await asyncio.wait_for(asyncio.to_thread(app.bot_data["snapshots"].save), 25)
         app.bot_data["update_task"] = asyncio.create_task(hosting.self_update(before_restart))

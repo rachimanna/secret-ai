@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont, ImageOps
 ASSETS = Path(__file__).with_name("assets")
 GROUP_MESSAGES = 300_000  # kept per chat ("forever"); the model sees the last GROUP_CONTEXT and searches the rest
 GROUP_CONTEXT = 150
+SEARCH_WINDOW = 15000  # how far back the old-history search looks in one group (lines)
 GROUP_CONTEXT_CHARS = 16_000  # and at most this much text of them, newest first (older ones come back by search)
 MEDIA_PER_KIND = 150
 PHRASES_PER_CHAT = 400
@@ -107,10 +108,14 @@ class GroupStore:
         stems = [w[:max(4, len(w) - 2)] for w in words]  # "айлы", "айле" -> "айл…": Russian endings vary
         # SQLite's own LIKE (fast, no Python per row) ignores case only for Latin letters: try "ахмед" and "Ахмед".
         variants = list(dict.fromkeys(v for s in stems for v in (s, s.capitalize())))
+        # Only the last SEARCH_WINDOW lines are searched: a busy group's whole history took long enough to stall the bot.
         rows = self.db.execute("SELECT id, line FROM group_messages WHERE chat_id=? AND id < (SELECT COALESCE(MIN(id), 0) "
-                               "FROM (SELECT id FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?)) AND ("
+                               "FROM (SELECT id FROM group_messages WHERE chat_id=? ORDER BY id DESC LIMIT ?)) "
+                               "AND id >= (SELECT COALESCE(MIN(id), 0) FROM (SELECT id FROM group_messages WHERE chat_id=? "
+                               "ORDER BY id DESC LIMIT ?)) AND ("
                                + " OR ".join("line LIKE ?" for _ in variants) + ") ORDER BY id DESC LIMIT 2000",
-                               (chat_id, chat_id, skip_recent, *[f"%{v}%" for v in variants])).fetchall()
+                               (chat_id, chat_id, skip_recent, chat_id, SEARCH_WINDOW,
+                                *[f"%{v}%" for v in variants])).fetchall()
         best = sorted(rows, key=lambda r: (-sum(s in r[1].lower() for s in stems), -r[0]))[:limit]
         if not best:
             return []
