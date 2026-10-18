@@ -344,7 +344,7 @@ def worker_main(action, value, folder=None):
         raise MusicError()
     options.update(format="bestaudio/best", outtmpl=str(Path(folder) / "source.%(ext)s"),
                    match_filter=limits, max_filesize=MAX_BYTES, progress_hooks=[progress],
-                   fixup="never", hls_prefer_native=True)
+                   fixup="never", hls_prefer_native=True, skip_unavailable_fragments=False)
     with YoutubeDL(options) as ydl:
         result = ydl.extract_info("https://www.youtube.com/watch?v=" + value, download=True)
         if not result:

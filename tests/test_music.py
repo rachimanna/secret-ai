@@ -192,6 +192,7 @@ class MusicTest(unittest.IsolatedAsyncioTestCase):
             with patch.object(yt_dlp, "YoutubeDL", return_value=ydl) as factory:
                 self.assertEqual(music.worker_main("download", TRACK.id, folder), {"path": str(source)})
                 options = factory.call_args.args[0]
+                self.assertFalse(options["skip_unavailable_fragments"])
                 for info, code in ((dict(duration=1201), "too_long"), (dict(duration=360, is_live=True), "too_long"),
                                    (dict(duration=360, filesize=music.MAX_BYTES + 1), "too_large"),
                                    (dict(duration=None), "unavailable")):
