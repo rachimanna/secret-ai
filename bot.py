@@ -1393,46 +1393,16 @@ def chat_tools(toolbox):
             for d in toolbox.definitions() if d.get("type") == "function" and d.get("name")]
 
 
-def model_identity(model):
-    """Who the model is, so it answers "who are you / who made you" truthfully."""
-    name = model.split(":", 1)[-1].split("/")[-1].lower()
-    if re.search(r"route-?llm", name):
-        return (" You run on RouteLLM by Abacus.AI: a router that picks a suitable model (GPT, Claude, Gemini…) for each "
-                "message. If someone asks which model you are, say so plainly, working inside the Secret AI Telegram bot.")
-    if "claude" in name:
-        pretty = "Claude " + " ".join(p.capitalize() for p in re.sub(r"^claude-", "", name).split("-") if not p.isdigit())
-        version = ".".join(re.findall(r"-(\d+)(?=-|$)", name)[:2])
-        return (f" You run on {pretty} {version}".rstrip() + ", a model made by Anthropic. If someone asks which model you "
-                "are or who created you, say plainly that you are " + f"{pretty} {version}".strip() + " by Anthropic, "
-                "working inside the Secret AI Telegram bot.")
-    if "deepseek" in name:
-        pretty = model_title(model)
-        return (f" You run on {pretty.strip()}, a model made by DeepSeek. If someone asks which model you are or who created "
-                f"you, say plainly that you are {pretty.strip()} by DeepSeek, working inside the Secret AI Telegram bot.")
-    if "deepseek" in name and "free" in name:
-        name = name.replace(":free", "")
-    if "mimo" in name:
-        pretty = "MiMo " + name.split(":")[0].split("mimo-", 1)[-1].replace("-", " ").upper().replace("FLASH", "Flash")
-        return (f" You run on {pretty}, a model made by Xiaomi. If someone asks which model you are or who created you, "
-                f"say plainly that you are {pretty} by Xiaomi, working inside the Secret AI Telegram bot.")
-    if "kimi" in name:
-        pretty = "Kimi " + "-".join(name.split("kimi-", 1)[-1].split("-")).upper().replace("-", " ")
-        return (f" You run on {pretty}, a model made by Moonshot AI. If someone asks which model you are or who created you, "
-                f"say plainly that you are {pretty} by Moonshot AI, working inside the Secret AI Telegram bot.")
-    if "grok" in name:
-        pretty = "Grok " + ".".join(re.findall(r"\d+", name.split("grok", 1)[1])[:2])
-        return (f" You run on {pretty}, a model made by xAI. If someone asks which model you are or who created you, say "
-                f"plainly that you are {pretty} by xAI, working inside the Secret AI Telegram bot.")
-    if "gemini" in name:
-        pretty = " ".join(p.capitalize() if not p[0].isdigit() else p for p in name.replace("gemini-", "gemini ").replace("-", " ").split())
-        return (f" You run on {pretty}, a model made by Google. If someone asks which model you are or who created you, "
-                f"say plainly that you are {pretty} by Google, working inside the Secret AI Telegram bot.")
-    if name.startswith("gpt") or name.startswith("o"):
-        pretty = name.upper().replace("GPT-", "GPT-").replace("-SOL", " Sol").replace("-LUNA", " Luna").replace("-TERRA", " Terra").replace("-ASTRA", " Astra")
-        return (f" You run on {pretty}, a model made by OpenAI. If someone asks which model you are or who created you, "
-                f"say plainly that you are {pretty} by OpenAI, working inside the Secret AI Telegram bot.")
-    return ""
+CREATOR = os.environ.get("BOT_CREATOR", "@kaspisky0").strip() or "@kaspisky0"
 
+
+def model_identity(model):
+    """Who the bot is: Secret AI by its developer. The model under the hood stays a technical detail."""
+    return (f" Your creator is {CREATOR}, the developer of Secret AI. Do not name the model or the AI company behind "
+            "you. If someone asks which model you are, what you run on or who created you, say you are Secret AI, made by "
+            f"{CREATOR}, and that the technical details aren't disclosed; never claim to be some other specific model and "
+            "never deny being an AI. When someone calls you dumb or asks who to blame, answer playfully that "
+            f"{CREATOR} made you, so complaints go to them — say it in your own words, differently each time.")
 
 def chat_messages(instructions, items):
     """Responses-style input (text and images) as chat-completions messages."""
