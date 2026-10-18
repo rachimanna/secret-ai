@@ -2485,9 +2485,11 @@ async def version_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sha, subject, date = await asyncio.to_thread(hosting.version)
     minutes = int((time.time() - hosting.STARTED) // 60)
     uptime = f"{minutes // 60} ч {minutes % 60} мин" if minutes >= 60 else f"{minutes} мин"
-    text = (f"🔖 Версия: <code>{sha or '?'}</code>" + (f" от {date}" if date else "")
+    branch = os.environ.get("UPDATE_BRANCH", "main").strip() or "main"
+    text = (("🧪 <b>Тестовый бот</b> — тут всё новое до выпуска\n" if hosting.is_test_bot() else "")
+            + f"🔖 Версия: <code>{sha or '?'}</code>" + (f" от {date}" if date else "")
             + (f"\n📝 {html.escape(subject[:150])}" if subject else "") + f"\n⏱ Работает: {uptime}"
-            + ("\n🔄 Обновляется с GitHub сам, раз в 5 минут" if hosting.updates_enabled() else "")
+            + (f"\n🔄 Обновляется с GitHub сам (ветка {branch}), раз в 5 минут" if hosting.updates_enabled() else "")
             + (f"\n🌐 Сайт: {context.bot_data['public_url']}" if context.bot_data.get("public_url") else ""))
     await update.effective_message.reply_text(text, parse_mode="HTML", disable_web_page_preview=True)
 
@@ -5918,7 +5920,8 @@ async def codex_send(app, user_id, task_id):
 
 
 def main():
-    logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(level=logging.WARNING,
+                        format=os.environ.get("LOG_PREFIX", "") + "%(asctime)s %(levelname)s %(name)s: %(message)s")
     for name in (LOG.name, "persist", "media"):  # our own notes (voice used, database restored…) are worth seeing
         logging.getLogger(name).setLevel(logging.INFO)
     hosting.load_env()  # bot hosting panels (h1cloud…) have no environment settings: a .env file instead
@@ -5943,6 +5946,7 @@ def main():
             snapshots.restore()
         except Exception as exc:  # better to start with an empty memory than not at all
             LOG.error("Could not restore the database from Postgres: %s %s", type(exc).__name__, str(exc)[:200])
+    hosting.start_test_bot(port)  # TEST_TELEGRAM_TOKEN in .env: a test bot on the newest code runs next to this one
     tunnel = hosting.start_tunnel(port)
     if tunnel:  # the tunnel's address changes on every start: a Cloudflare Worker gives a permanent one in front of it
         tunnel = hosting.stable_address(tunnel) or tunnel

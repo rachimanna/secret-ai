@@ -26,13 +26,27 @@ def git(*args):
     return subprocess.run(["git", *args], cwd=HOME, capture_output=True, text=True)
 
 
+def branch():
+    """UPDATE_BRANCH from .env: the main bot can run "stable" while a test bot tries "main"."""
+    try:
+        with open(os.path.join(HOME, ".env"), encoding="utf-8") as env:
+            for line in env:
+                name, _, value = line.strip().partition("=")
+                if name.strip() == "UPDATE_BRANCH" and value.strip().strip("\"'"):
+                    return value.strip().strip("\"'")
+    except OSError:
+        pass
+    return "main"
+
+
 def fetch_code():
     if shutil.which("git"):
+        wanted = branch()
         if not os.path.isdir(os.path.join(HOME, ".git")):
             git("init", "-q")
             git("remote", "add", "origin", REPO + ".git")
-        if git("fetch", "-q", "--depth", "50", "origin", "main").returncode == 0:
-            git("checkout", "-q", "-f", "-B", "main", "origin/main")
+        if git("fetch", "-q", "--depth", "50", "origin", wanted).returncode == 0:
+            git("checkout", "-q", "-f", "-B", wanted, f"origin/{wanted}")
             say("Code updated from GitHub (git).")
             return
         say("git fetch failed, downloading a zip instead")

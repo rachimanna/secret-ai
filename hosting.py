@@ -253,3 +253,69 @@ async def self_update(before_restart):
         stop_tunnel()
         logging.shutdown()
         os.execv(sys.executable, [sys.executable, *sys.argv])
+
+
+TEST_DIR = HERE / "testbot"  # a second checkout of the code, on the newest commits
+TEST_PID = HERE / "testbot.pid"
+
+
+def is_test_bot():
+    return os.environ.get("SECRET_AI_TEST", "").strip() == "1"
+
+
+def _test_alive(pid):
+    """True when pid is our test bot (it survives the main bot's restarts: same container, same process id)."""
+    try:
+        if os.waitpid(pid, os.WNOHANG)[0]:  # it exited and was our child: reap it
+            return False
+    except ChildProcessError:  # not our child (the main bot was started again): look at it
+        pass
+    except OSError:
+        return False
+    try:
+        return Path(os.readlink(f"/proc/{pid}/cwd")) == TEST_DIR
+    except OSError:
+        return False
+
+
+def _start_test(port):
+    if not (TEST_DIR / "bot.py").exists():
+        _git("fetch", "-q", "origin", "main")
+        made = _git("worktree", "add", "-f", "--detach", str(TEST_DIR), "origin/main")
+        if made.returncode:
+            LOG.warning("Test bot: could not check out main: %s", (made.stderr or "").strip()[-200:])
+            return None
+    env = {name: value for name, value in os.environ.items()
+           if name not in ("TUNNEL_TOKEN", "PUBLIC_URL", "DATABASE_URL", "PORT", "SERVER_PORT")}  # nothing shared
+    libraries = [path for path in sys.path if ".local" in path]  # the libraries the main bot already installed
+    env.update(TELEGRAM_TOKEN=os.environ["TEST_TELEGRAM_TOKEN"].strip(), SECRET_AI_TEST="1", UPDATE_BRANCH="main",
+               DATABASE_PATH=str(HERE / "test.db"), PORT=os.environ.get("TEST_PORT", "").strip() or str(int(port) + 1),
+               WORKER_NAME=(os.environ.get("WORKER_NAME", "secret-ai").strip() or "secret-ai") + "-test",
+               LOG_PREFIX="[test] ", PYTHONPATH=os.pathsep.join(libraries + [env.get("PYTHONPATH", "")]).strip(os.pathsep))
+    process = subprocess.Popen([sys.executable, "bot.py"], cwd=TEST_DIR, env=env)
+    TEST_PID.write_text(str(process.pid))
+    LOG.info("Test bot started (branch main, its own database test.db)")
+    return process.pid
+
+
+def start_test_bot(port):
+    """With TEST_TELEGRAM_TOKEN in .env, run a test bot next to the main one: it follows main (every new change) while
+    the main bot follows stable (UPDATE_BRANCH=stable), so changes are tried before people see them. It keeps running
+    across the main bot's restarts and is started again if it falls."""
+    if is_test_bot() or not os.environ.get("TEST_TELEGRAM_TOKEN", "").strip() or not (HERE / ".git").exists():
+        return
+
+    def watch():
+        try:
+            pid = int(TEST_PID.read_text())
+        except (OSError, ValueError):
+            pid = 0
+        while True:
+            if not pid or not _test_alive(pid):
+                try:
+                    pid = _start_test(port) or 0
+                except Exception as exc:
+                    LOG.warning("Test bot failed to start: %s %s", type(exc).__name__, str(exc)[:200])
+            time.sleep(60)
+
+    threading.Thread(target=watch, daemon=True).start()
