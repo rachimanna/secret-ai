@@ -149,7 +149,39 @@ def stable_address(target):
         return ""
     address = f"https://{name}.{subdomain}.workers.dev"
     LOG.info("Stable Mini App address: %s", address)
-    return address
+    return _custom_domain(account, headers, name) or address
+
+
+def _custom_domain(account, headers, worker):
+    """CUSTOM_DOMAIN (say secretai.tech, already added to this Cloudflare account) in front of the Worker. The token
+    also needs Zone: Read and Workers Routes: Edit. Returns https://<domain>, or "" to keep the workers.dev one."""
+    import httpx
+
+    host = os.environ.get("CUSTOM_DOMAIN", "").strip().lower().removeprefix("https://").strip("/")
+    if not host:
+        return ""
+    try:
+        with httpx.Client(timeout=30, headers=headers) as http:
+            zone, parts = None, host.split(".")
+            for start in range(len(parts) - 1):  # the zone is the domain itself or one of its parents
+                found = http.get(f"{CF_API}/zones", params={"name": ".".join(parts[start:])}).json().get("result") or []
+                if found:
+                    zone = found[0]["id"]
+                    break
+            if not zone:
+                LOG.warning("Custom domain %s: add it to Cloudflare first (Add a site) and switch its nameservers", host)
+                return ""
+            made = http.put(f"{CF_API}/accounts/{account}/workers/domains",
+                            json={"hostname": host, "service": worker, "zone_id": zone, "environment": "production"}).json()
+            if not made.get("success"):
+                LOG.warning("Custom domain %s refused (the token needs Workers Routes: Edit): %s", host,
+                            str(made.get("errors"))[:200])
+                return ""
+    except Exception as exc:
+        LOG.warning("Custom domain failed: %s %s", type(exc).__name__, str(exc)[:200])
+        return ""
+    LOG.info("Mini App address: https://%s", host)
+    return f"https://{host}"
 
 
 def _drain(stream, lines=None):
@@ -286,7 +318,7 @@ def _start_test(port):
             LOG.warning("Test bot: could not check out main: %s", (made.stderr or "").strip()[-200:])
             return None
     env = {name: value for name, value in os.environ.items()
-           if name not in ("TUNNEL_TOKEN", "PUBLIC_URL", "DATABASE_URL", "PORT", "SERVER_PORT")}  # nothing shared
+           if name not in ("TUNNEL_TOKEN", "PUBLIC_URL", "DATABASE_URL", "PORT", "SERVER_PORT", "CUSTOM_DOMAIN")}  # nothing shared
     libraries = [path for path in sys.path if ".local" in path]  # the libraries the main bot already installed
     env.update(TELEGRAM_TOKEN=os.environ["TEST_TELEGRAM_TOKEN"].strip(), SECRET_AI_TEST="1", UPDATE_BRANCH="main",
                DATABASE_PATH=str(HERE / "test.db"), PORT=os.environ.get("TEST_PORT", "").strip() or str(int(port) + 1),
