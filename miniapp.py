@@ -99,6 +99,9 @@ def make_handler(config):
             if config["allowed"] and user["id"] not in config["allowed"]:
                 self._send(403, {"error": "forbidden"})
                 return None
+            if config.get("closed") and config["closed"]() and user["id"] != config["store"].get_meta("owner"):
+                self._send(503, {"error": "Secret AI сейчас на обновлении — скоро вернусь."})  # /test mode
+                return None
             return user
 
         def _json(self, limit=MAX_BODY):

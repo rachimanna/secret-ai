@@ -43,7 +43,7 @@ from codefiles import extract_files, site_file
 from fun import LEVELS, GroupStore, ago, MemeError, demotivator, quote_card, tiktok_meme
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError
-from telegram.ext import (Application, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
+from telegram.ext import (Application, ApplicationHandlerStop, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
                           PreCheckoutQueryHandler, TypeHandler, filters)
 
 import codex
@@ -1807,6 +1807,64 @@ def persona_keyboard(update, current):
         for pid in PERSONAS
     ]
     return InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)])
+
+
+TEST_CLOSED = ("🛠 Secret AI сейчас на обновлении — скоро вернусь, попробуй чуть позже.",
+               "🛠 Secret AI is being updated — back soon, try again a bit later.")
+
+
+def test_mode(data):
+    """/test: the bot answers only its owner while they try new things."""
+    if "test_mode" not in data:
+        data["test_mode"] = bool(data["connections"].get_meta("test_mode"))
+    return data["test_mode"]
+
+
+async def test_gate(update, context):
+    """In test mode everyone but the owner gets one short "being updated" note (at most every 10 minutes) and nothing
+    more. The secretary keeps working: it answers the owner's own clients."""
+    data = context.bot_data
+    if not test_mode(data) or update.business_message or update.business_connection or not update.effective_user:
+        return
+    user = update.effective_user.id
+    if user == data["connections"].get_meta("owner"):
+        return
+    text = ui(update, *TEST_CLOSED)
+    try:
+        if update.pre_checkout_query:
+            await update.pre_checkout_query.answer(ok=False, error_message=text)
+        elif update.callback_query:
+            await update.callback_query.answer(text, show_alert=True)
+        elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
+            told = data.setdefault("test_told", {})
+            if time.monotonic() - told.get(user, -1e9) > 600:
+                told[user] = time.monotonic()
+                await update.effective_message.reply_text(text)
+    except TelegramError:
+        pass
+    raise ApplicationHandlerStop
+
+
+async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/test (owner): switch test mode on or off."""
+    if not await authorized(update, context):
+        return
+    store = context.bot_data["connections"]
+    if store.get_meta("owner") != update.effective_user.id:
+        await send(update.effective_message, ui(update, "Это команда владельца бота.", "Only the bot owner can do this."))
+        return
+    on = not test_mode(context.bot_data)
+    store.set_meta("test_mode", on)
+    context.bot_data["test_mode"] = on
+    context.bot_data.pop("test_told", None)
+    await send(update.effective_message, ui(
+        update,
+        "🧪 Режим теста включён. Бот отвечает только тебе, остальным пишет, что идёт обновление (секретарь работает "
+        "как обычно).\n\nПроверил — снова /test, и бот откроется для всех." if on else
+        "✅ Режим теста выключен — бот снова работает для всех.",
+        "🧪 Test mode is on. The bot answers only you; everyone else hears it is being updated (the secretary works as "
+        "usual).\n\nDone testing — /test again opens it for everyone." if on else
+        "✅ Test mode is off — the bot works for everyone again."))
 
 
 async def authorized(update, context):
@@ -6017,6 +6075,7 @@ def main():
         locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},
         biz_activity=sec.Activity())
     # Business updates first: their messages must not reach the regular chat handlers.
+    app.add_handler(TypeHandler(Update, test_gate), group=-3)  # /test: only the owner gets through
     app.add_handler(TypeHandler(Update, stop_generation, block=False), group=-2)
     app.add_handler(BusinessConnectionHandler(business_connection))
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGES, business_message))
@@ -6036,6 +6095,7 @@ def main():
     app.add_handler(CommandHandler("emoji", emoji_command))
     app.add_handler(CommandHandler("promo", promo_command))
     app.add_handler(CommandHandler("owner", owner_command))
+    app.add_handler(CommandHandler("test", test_command))
     app.add_handler(CommandHandler(["version", "v"], version_command))
     # "/version" pasted as formatted text isn't a command for Telegram: catch it as text too.
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*/(version|v)(@\w+)?\s*$"), version_command))
@@ -6062,7 +6122,7 @@ def main():
     handler = miniapp.make_handler({
         "token": token, "allowed": allowed, "store": connections, "public_url": public_url,
         "github": github_apps, "direct": direct, "bot_name": lambda: app.bot_data.get("bot_name") or "bot",
-        "bridge": Bridge(app), "pipedream": pipedream, "codex": lambda: app.bot_data["codex"]})
+        "bridge": Bridge(app), "pipedream": pipedream, "closed": lambda: test_mode(app.bot_data), "codex": lambda: app.bot_data["codex"]})
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
