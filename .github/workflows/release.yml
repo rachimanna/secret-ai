@@ -1,0 +1,21 @@
+# The "Release" button: Actions -> Release -> Run workflow. Moves "stable" (what the main bot runs) to the tested main.
+# To roll back, run it with an older commit in the field.
+name: Release
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "What to release (main, or an older commit to roll back)"
+        default: main
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: git push origin "$(git rev-parse "origin/${COMMIT}" 2>/dev/null || git rev-parse "${COMMIT}")":refs/heads/stable --force
+        env:
+          COMMIT: ${{ inputs.commit }}

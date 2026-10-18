@@ -203,15 +203,17 @@ def _compile_errors():
 async def self_update(before_restart):
     """Check GitHub every UPDATE_EVERY seconds; on a new commit pull it, install new requirements and restart."""
     skipped = {}  # commit -> when it failed: tried again only after an hour, not every few minutes
+    # The main bot can follow "stable" (only released code) while a test bot follows "main" (everything new).
+    branch = os.environ.get("UPDATE_BRANCH", "main").strip() or "main"
     while True:
         await asyncio.sleep(UPDATE_EVERY)
         try:
-            fetched = await asyncio.to_thread(_git, "fetch", "-q", "origin", "main")
+            fetched = await asyncio.to_thread(_git, "fetch", "-q", "origin", branch)
             if fetched.returncode:
                 LOG.warning("Update check failed: %s", (fetched.stderr or "").strip()[-200:] or "git fetch error")
                 continue
             head = (await asyncio.to_thread(_git, "rev-parse", "HEAD")).stdout.strip()
-            latest = (await asyncio.to_thread(_git, "rev-parse", "origin/main")).stdout.strip()
+            latest = (await asyncio.to_thread(_git, "rev-parse", f"origin/{branch}")).stdout.strip()
             if not latest or head == latest or time.monotonic() - skipped.get(latest, -1e9) < 3600:
                 continue
             changed = (await asyncio.to_thread(_git, "diff", "--name-only", head, latest)).stdout.split()
@@ -232,7 +234,7 @@ async def self_update(before_restart):
                                 (installed.stderr or installed.stdout or "").strip()[-300:])
                     skipped[latest] = time.monotonic()
                     continue
-            await asyncio.to_thread(_git, "reset", "-q", "--hard", "origin/main")
+            await asyncio.to_thread(_git, "reset", "-q", "--hard", f"origin/{branch}")
             # The new code must at least compile; otherwise go back to the version that was running.
             broken = await asyncio.to_thread(_compile_errors)
             if broken:
