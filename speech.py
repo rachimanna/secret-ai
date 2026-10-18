@@ -120,12 +120,12 @@ def voice_for(text):
     return EDGE_VOICE if cyrillic * 3 >= len([ch for ch in text if ch.isalpha()]) else EDGE_VOICES["en"]
 
 
-async def edge_speech(text, voice=None):
+async def edge_speech(text, voice=None, *, rate="+4%", pitch="+0Hz"):
     """MP3 speech from Microsoft Edge's free neural voices."""
     import edge_tts  # imported here: the dependency is only needed for voices
     voice = voice or voice_for(text)
     audio = bytearray()
-    async for chunk in edge_tts.Communicate(text, voice, rate="+4%").stream():
+    async for chunk in edge_tts.Communicate(text, voice, rate=rate, pitch=pitch).stream():
         if chunk.get("type") == "audio":
             audio += chunk["data"]
     if not audio:

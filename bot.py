@@ -50,6 +50,7 @@ import codex
 import cursor
 import gentemplates
 import digest
+import chatserial
 import game
 import hosting
 import links
@@ -1556,7 +1557,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 
 
 async def discover_models(app):
-    """Only the owner's three models, using IDs confirmed by a configured gateway."""
+    """Only the owner's catalog, using IDs confirmed by a configured gateway."""
     data = app.bot_data
     sources = ((ANYMODEL_PREFIX, "anymodel_chat"), (ABACUS_PREFIX, "abacus"), ("experiential:", "experiential"))
 
@@ -1608,7 +1609,7 @@ async def discover_models(app):
         LOG.warning("No requested chat models available; check gateway keys and catalog access")
 
 
-# Sonnet 4.6, Haiku, Opus and Gemini 4 Argon: no auto-router or guessed IDs.
+# Opus 4.6, Sonnet 4.6, Haiku 5.5 and Opus 5.5: no auto-router or guessed IDs.
 MODEL_CATALOG = [  # the first one is the default for everyone
     ("Claude Opus 4.6", r"(?:^|[/:])claude[-._ ]opus[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$", "anymodel:"),  # the default, from AnyModel
     ("Claude Sonnet 4.6", r"(?:^|[/:])claude[-._ ]sonnet[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$"),
@@ -2399,6 +2400,8 @@ def wipe_all(data):
     with groups.db:
         groups.db.execute("DELETE FROM group_messages")
         groups.db.execute("DELETE FROM group_phrases")
+        if groups.db.execute("SELECT 1 FROM sqlite_master WHERE name='group_serial'").fetchone():
+            groups.db.execute("DELETE FROM group_serial")
 
 
 def owner_code(data):
@@ -3574,6 +3577,68 @@ def day_digest(data):
             return await quick_answer(data, group_model(data, chat_id), instructions, text, max_tokens=1500)
         data["digest"] = digest.Digest(data["groups"], ask)
     return data["digest"]
+
+
+def chat_serial(data):
+    if "serial" not in data:
+        async def ask(chat_id, instructions, text):
+            return await quick_answer(data, group_model(data, chat_id), instructions, text, max_tokens=2400)
+
+        async def image(prompt):
+            return await free_image(data["http"], prompt, "portrait", data.get("cloudflare"))
+
+        data["serial"] = chatserial.Serial(data["groups"], ask, speech.edge_speech, image)
+    return data["serial"]
+
+
+async def serial_command(update, context):
+    message, user, data = update.effective_message, update.effective_user, context.bot_data
+    if not message or not user or (data["allowed"] and user.id not in data["allowed"]):
+        return
+    if message.chat.type not in ("group", "supergroup"):
+        await message.reply_text("Добавьте меня в группу и напишите там /serial.\n\n" + chatserial.HELP)
+        return
+    show = chat_serial(data)
+    arg = context.args[0].lower() if context.args else ""
+    if arg in ("help", "помощь"):
+        await message.reply_text(chatserial.HELP)
+        return
+    if arg == "status":
+        state = show.state(message.chat_id)
+        lines, _ = show.history(message.chat_id)
+        next_at = (time.strftime("%d.%m %H:%M UTC", time.gmtime(state["next_at"]))
+                   if state["enabled"] else "автовыпуск выключен")
+        await message.reply_text(f"Вышло серий: {state['episode']}\nСообщений за неделю: {len(lines)}\n"
+                                 f"Следующая серия: {next_at}\n\n/serial help — команды")
+        return
+    if arg not in ("", "on", "off", "вкл", "выкл"):
+        await message.reply_text(chatserial.HELP)
+        return
+    try:
+        member = await context.bot.get_chat_member(message.chat_id, user.id)
+    except TelegramError:
+        await message.reply_text("Не удалось проверить права. Повторите чуть позже.")
+        return
+    if user.is_bot or member.status not in ("administrator", "creator"):
+        await message.reply_text("Снимать серии и менять расписание может администратор группы.")
+        return
+    data["groups"].touch(message.chat_id, message.chat.title, user.id)
+    if arg:
+        on = arg in ("on", "вкл")
+        show.enable(message.chat_id, on)
+        next_at = time.strftime("%d.%m %H:%M UTC", time.gmtime(show.state(message.chat_id)["next_at"]))
+        await message.reply_text(f"Автовыпуск включён: раз в 7 дней. Следующая серия: {next_at}. Снять сейчас: /serial"
+                                 if on else "Автовыпуск сериала выключен.")
+        return
+    if not data.get("models"):
+        await message.reply_text("Сначала подключите модель для сценария в настройках Secret AI.")
+        return
+    # Track the task so automatic code updates wait for the render to finish.
+    task = asyncio.create_task(show.post(context.bot, message.chat_id, message.chat.title or "Группа", manual=True))
+    jobs = data.setdefault("gen_tasks", set())
+    jobs.add(task)
+    task.add_done_callback(jobs.discard)
+    task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
 
 
 async def day_command(update, context):
@@ -5177,10 +5242,11 @@ async def post_init(app):
         app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
     if hosting.updates_enabled():  # not Render: pull new commits from GitHub and restart by itself
         async def before_restart():
-            # Let the answers being written finish (up to 90 s): a restart used to cut them off mid-way.
-            for _ in range(90):
-                busy = ACTIVE["answers"] + len(LIVE_DRAFTS) + len(app.bot_data.get("gen_tasks") or ())
-                if not busy:
+            # Answers get 90 s; a serial render can need its full 15-minute budget.
+            for elapsed in range(900):
+                busy = (ACTIVE["answers"] + len(LIVE_DRAFTS) + len(app.bot_data.get("gen_tasks") or ())
+                        + len(chat_serial(app.bot_data).busy))
+                if not busy or (elapsed >= 90 and not chat_serial(app.bot_data).busy):
                     break
                 await asyncio.sleep(1)
             if app.bot_data.get("snapshots"):
@@ -5200,6 +5266,7 @@ async def post_init(app):
                           (app.bot_data["connections"].get_meta("premium_emoji") or {}).items() if valid_emoji_key(key)})
     await resolve_abacus_model(app)
     await discover_models(app)
+    app.bot_data["serial_task"] = asyncio.create_task(chat_serial(app.bot_data).run(app))
     app.bot_data["previews_task"] = asyncio.create_task(gentemplates.draw_previews(app.bot_data, free_image))
     app.bot_data["cursor_models"] = cursor.models() if "cursor" in ENABLED_MODELS else []
     if app.bot_data["cursor_models"]:
@@ -5213,12 +5280,14 @@ async def post_init(app):
         group = [BotCommand(game.START, "🧠 Викторина Secret AI для всей группы"),
                  BotCommand(game.RATING, "🏆 Рейтинг викторины"), BotCommand(game.STOP, "⏹ Остановить викторину"),
                  BotCommand(digest.COMMAND, "📊 Итоги дня"),
+                 BotCommand("serial", "🎬 Сериал про ваш чат"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
         await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
                                        BotCommand(game.RATING, "🏆 Quiz leaderboard"), BotCommand(game.STOP, "⏹ Stop the quiz"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
+                                       BotCommand("serial", "🎬 Your group sitcom"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
                                        BotCommand("meme", "A TikTok meme")],
                                       scope=BotCommandScopeAllGroupChats())
@@ -5230,8 +5299,15 @@ async def post_init(app):
 
 
 async def shutdown(app):
+    # Stop workers before saving and closing their DB and HTTP clients.
+    tasks = {value for key, value in app.bot_data.items()
+             if key.endswith("_task") and isinstance(value, asyncio.Task)}
+    tasks.update(app.bot_data.get("gen_tasks") or ())
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
     if app.bot_data.get("snapshots"):  # the last minute of memory before the deploy replaces this machine
-        app.bot_data["snapshot_task"].cancel()
         try:
             await asyncio.wait_for(asyncio.to_thread(app.bot_data["snapshots"].save), 25)
         except Exception as exc:
@@ -5969,6 +6045,7 @@ def main():
     app.add_handler(CommandHandler([game.RATING, "stop10"], top_command))
     app.add_handler(CommandHandler(game.STOP, stop_game_command))
     app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
+    app.add_handler(CommandHandler("serial", serial_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))

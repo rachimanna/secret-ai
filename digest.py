@@ -10,6 +10,7 @@ import logging
 import re
 
 from PIL import Image, ImageDraw
+from telegram.error import BadRequest
 
 import quizart
 from quizart import backdrop, font, label, panel
@@ -35,6 +36,8 @@ class Digest:
         with self.db:
             self.db.execute("CREATE TABLE IF NOT EXISTS group_digest (chat_id INTEGER PRIMARY KEY, enabled INTEGER NOT NULL "
                             "DEFAULT 1, last_day TEXT NOT NULL DEFAULT '')")
+            if "retry_at" not in [row[1] for row in self.db.execute("PRAGMA table_info(group_digest)")]:
+                self.db.execute("ALTER TABLE group_digest ADD COLUMN retry_at INTEGER NOT NULL DEFAULT 0")
 
     # ---------- settings ----------
 
@@ -57,8 +60,9 @@ class Digest:
         since = int(datetime.datetime.now(MSK).timestamp()) - 86400
         rows = self.db.execute("SELECT m.chat_id, COUNT(*) FROM group_messages m LEFT JOIN group_digest d USING(chat_id) "
                                "WHERE m.created >= ? AND m.line NOT LIKE ? AND COALESCE(d.enabled, 1) = 1 AND "
-                               "COALESCE(d.last_day, '') != ? GROUP BY m.chat_id HAVING COUNT(*) >= ?",
-                               (since, BOT_NAME + ":%", day, MIN_MESSAGES)).fetchall()
+                               "COALESCE(d.last_day, '') != ? AND COALESCE(d.retry_at, 0)<=? "
+                               "GROUP BY m.chat_id HAVING COUNT(*) >= ?",
+                               (since, BOT_NAME + ":%", day, since + 86400, MIN_MESSAGES)).fetchall()
         return [row[0] for row in rows]
 
     # ---------- numbers ----------
@@ -96,14 +100,15 @@ class Digest:
         caption = text if len(text) <= 1000 else ""
         try:
             await bot.send_photo(chat_id, card, caption=caption or None, parse_mode="HTML" if caption else None)
-        except Exception:  # the model's HTML didn't parse: plain text
+        except BadRequest:  # the model's HTML didn't parse: plain text; don't duplicate timed-out uploads
             await bot.send_photo(chat_id, card, caption=re.sub(r"<[^>]+>", "", caption)[:1000] or None)
         if text and not caption:
             try:
                 await bot.send_message(chat_id, text[:4000], parse_mode="HTML")
-            except Exception:
+            except BadRequest:
                 await bot.send_message(chat_id, re.sub(r"<[^>]+>", "", text)[:4000])
         self.store.add_line(chat_id, f"{BOT_NAME}: [итоги дня] " + re.sub(r"<[^>]+>", "", text)[:500])
+        self._mark(chat_id, today().isoformat())
 
     async def write_up(self, chat_id, rows, numbers):
         lines, size = [], 0
@@ -138,12 +143,15 @@ class Digest:
                 continue
             day = now.date().isoformat()
             for chat_id in self._due(day):
-                self._mark(chat_id, day)  # once, even if posting fails
                 title = (self.db.execute("SELECT title FROM group_info WHERE chat_id=?", (chat_id,)).fetchone() or [""])[0]
                 try:
                     await self.post(app.bot, chat_id, title)
                 except Exception as exc:  # removed from the group, no rights to post…
                     LOG.warning("Day summary failed in %s: %s", chat_id, type(exc).__name__)
+                    with self.db:
+                        self.db.execute("INSERT INTO group_digest(chat_id, retry_at) VALUES (?, ?) "
+                                        "ON CONFLICT(chat_id) DO UPDATE SET retry_at=excluded.retry_at",
+                                        (chat_id, int(now.timestamp()) + 600))
                 await asyncio.sleep(3)
 
 

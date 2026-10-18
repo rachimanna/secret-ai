@@ -13,7 +13,8 @@ import bot
 SONNET = 'anymodel:anthropic/claude-sonnet-4-6'
 HAIKU = 'anymodel:claude-haiku-5-5'
 OPUS = 'anymodel:claude-opus-5-5'
-IDS = [m.split(':', 1)[1] for m in (SONNET, HAIKU, OPUS)]
+OPUS46 = 'anymodel:claude-opus-4-6'
+IDS = [m.split(':', 1)[1] for m in (OPUS46, SONNET, HAIKU, OPUS)]
 
 
 class Store:
@@ -39,23 +40,23 @@ def bad_request(message):
 class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
     async def test_catalog_default_migration_and_old_selections(self):
         forbidden = ['gemini-3-flash-preview', 'google/gemini-3-flash-preview', 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'route-llm', 'gpt-6.1-sol', 'gemini-3.1-flash-lite',
-                     'gemini-3-flash-image', 'gemini-3.8-pro', 'claude-opus-4-6', 'claude-haiku-5-50']
+                     'gemini-3-flash-image', 'gemini-3.8-pro', 'claude-haiku-5-50']
         store = Store(default_model='anymodel:google/gemini-3-flash-preview', default_pick='old')
         data = dict(anymodel_chat=gateway(IDS + forbidden + ['cc/claude-opus-5-5']),
                     abacus=gateway(IDS + forbidden), connections=store,
                     model='gpt-6.1-sol', cursor_models=['cursor:grok-4.7'],
                     memory=NS(model=lambda uid: 'anymodel:google/gemini-3-flash-preview' if uid == 1 else OPUS))
         await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['models'], [SONNET, HAIKU, OPUS])
-        self.assertEqual(data['chat_default'], SONNET)
-        self.assertEqual(store.get_meta('default_model'), SONNET)
+        self.assertEqual(data['models'], [OPUS46, SONNET, HAIKU, OPUS])
+        self.assertEqual(data['chat_default'], OPUS46)
+        self.assertEqual(store.get_meta('default_model'), OPUS46)
         self.assertEqual(data['cursor_models'], [])
-        self.assertEqual(len(data['fallbacks']), 6)
-        self.assertTrue(all(any(re.search(p, m) for _, p in bot.MODEL_CATALOG)
+        self.assertEqual(len(data['fallbacks']), 8)
+        self.assertTrue(all(any(re.search(p, m) for _, p, *rest in bot.MODEL_CATALOG)
                             for m in data['fallbacks']))
-        self.assertEqual(bot.user_model(data, 1), SONNET)
+        self.assertEqual(bot.user_model(data, 1), OPUS46)
         self.assertEqual(bot.user_model(data, 2), OPUS)
-        self.assertEqual(bot.codex_model(data, 'anymodel:google/gemini-3-flash-preview'), SONNET)
+        self.assertEqual(bot.codex_model(data, 'anymodel:google/gemini-3-flash-preview'), OPUS46)
 
     async def test_plain_sonnet_and_missing_sonnet_then_recovery(self):
         store = Store(default_model='anymodel:claude-sonnet-5-5')
@@ -65,6 +66,10 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         data['anymodel_chat'] = gateway(['claude-haiku-5-5', 'claude-sonnet-4-6'])
         await bot.discover_models(NS(bot_data=data))
         self.assertEqual(data['chat_default'], 'anymodel:claude-sonnet-4-6')
+        self.assertIsNone(store.get_meta('default_pick'))  # fallback must not prevent later Opus recovery
+        data['anymodel_chat'] = gateway(['claude-haiku-5-5', 'claude-sonnet-4-6', 'claude-opus-4-6'])
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['chat_default'], OPUS46)
         self.assertEqual(store.get_meta('default_pick'), bot.DEFAULT_PICK)
 
     async def test_failed_catalog_does_not_guess_or_enable_other_providers(self):
