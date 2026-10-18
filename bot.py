@@ -3647,8 +3647,55 @@ def chat_serial(data):
         async def image(prompt):
             return await free_image(data["http"], prompt, "portrait", data.get("cloudflare"))
 
-        data["serial"] = chatserial.Serial(data["groups"], ask, speech.edge_speech, image)
+        async def speak(text, **style):
+            return await serial_speech(data, text, **style)
+
+        data["serial"] = chatserial.Serial(data["groups"], ask, speak, image)
     return data["serial"]
+
+
+async def serial_voice_style(audio, voice, rate, pitch):
+    """Gateway TTS lacks Edge's prosody fields: keep distinct character timbres locally."""
+    factor = (1.07 if "Svetlana" in voice else .96) + int(pitch.removesuffix("Hz")) / 500
+    tempo = 1 + int(rate.removesuffix("%")) / 100
+    with tempfile.TemporaryDirectory(prefix="secret-ai-serial-voice-") as folder:
+        folder = Path(folder)
+        (folder / "in.audio").write_bytes(audio)
+        await media_ffmpeg("-i", str(folder / "in.audio"), "-vn", "-af",
+                           f"aresample=24000,asetrate={24000 * factor:.2f},aresample=24000,atempo={tempo / factor:.4f}",
+                           "-c:a", "libmp3lame", "-b:a", "96k", str(folder / "out.mp3"), timeout=30)
+        return (folder / "out.mp3").read_bytes()
+
+
+async def serial_speech(data, text, voice, rate="+0%", pitch="+0Hz"):
+    """Direct Edge, then configured API routes. Never disable TLS verification."""
+    last = None
+    if time.monotonic() >= data.get("serial_edge_rest", 0):
+        try:
+            return await asyncio.wait_for(speech.edge_speech(text, voice, rate=rate, pitch=pitch), 20)
+        except Exception as exc:
+            last = exc
+            data["serial_edge_rest"] = time.monotonic() + 1800
+            LOG.warning("Serial direct Edge failed: %s", type(exc).__name__)
+    if data.get("anymodel_key"):
+        for model in ("edge-tts/" + voice, ANYMODEL_FISH):
+            if time.monotonic() < data.setdefault("serial_voice_rest", {}).get(model, 0):
+                continue
+            try:
+                audio = await asyncio.wait_for(anymodel_speech(data["http"], data["anymodel_key"], model, text,
+                                                               data.get("anymodel_api") or ANYMODEL_API), 35)
+                return await serial_voice_style(audio, voice, rate, pitch)
+            except Exception as exc:
+                last = exc
+                data["serial_voice_rest"][model] = time.monotonic() + 600
+                LOG.warning("Serial gateway voice %s failed: %s", model, type(exc).__name__)
+    if data.get("openai") and data.get("tts_model"):
+        try:
+            audio = await asyncio.wait_for(welcome.speech(data["client"], data["tts_model"], data["tts_voice"], text), 25)
+            return await serial_voice_style(audio, voice, rate, pitch)
+        except Exception as exc:
+            last = exc
+    raise RuntimeError("all configured serial voice routes failed") from last
 
 
 async def serial_command(update, context):
@@ -3668,8 +3715,9 @@ async def serial_command(update, context):
         lines, _ = show.history(message.chat_id)
         next_at = (time.strftime("%d.%m %H:%M UTC", time.gmtime(state["next_at"]))
                    if state["enabled"] else "автовыпуск выключен")
+        error = f"\nПоследняя ошибка: {state['last_error']}" if state.get("last_error") else ""
         await message.reply_text(f"Вышло серий: {state['episode']}\nСообщений за неделю: {len(lines)}\n"
-                                 f"Следующая серия: {next_at}\n\n/serial help — команды")
+                                 f"Следующая серия: {next_at}{error}\n\n/serial help — команды")
         return
     if arg not in ("", "on", "off", "вкл", "выкл"):
         await message.reply_text(chatserial.HELP)

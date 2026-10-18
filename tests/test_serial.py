@@ -109,6 +109,64 @@ class SerialTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["episode"], 2)
         self.assertIn("понедельник", context["previous_story"])
 
+    async def test_malformed_screenplay_is_retried_once(self):
+        self.populate()
+        self.ask.side_effect = ["Это будет отличный сериал!", "Вот сценарий:\n" + plan_json()]
+        with patch.object(serial, "make_episode", side_effect=self.fake_render):
+            self.assertTrue(await self.show.post(self.telegram, -1, "Друзья", manual=True))
+        self.assertEqual(self.ask.await_count, 2)
+
+    async def test_stage_specific_errors_are_persisted_without_provider_details(self):
+        self.populate()
+        self.ask.side_effect = RuntimeError("private provider details")
+        self.assertFalse(await self.show.post(self.telegram, -1, "Друзья", manual=True))
+        self.assertEqual(self.show.state(-1)["last_error"], "script/RuntimeError")
+        shown = self.telegram.send_message.call_args.args[1]
+        self.assertIn("сценарий", shown)
+        self.assertNotIn("private provider details", shown)
+        self.assertEqual(self.ask.await_count, 1)  # don't retry provider authentication/network errors blindly
+        self.assertEqual(self.show.state(-1)["episode"], 0)
+
+    async def test_voice_failure_is_not_reported_as_render_failure(self):
+        self.populate()
+        with patch.object(serial, "make_episode", side_effect=serial.SerialError("voice")):
+            self.assertFalse(await self.show.post(self.telegram, -1, "Друзья", manual=True))
+        self.assertTrue(self.show.state(-1)["last_error"].startswith("voice/"))
+        self.assertIn("озвучки", self.telegram.send_message.call_args.args[1])
+
+    def test_error_column_migrates_existing_serial_database(self):
+        self.show.enable(-1, True)
+        with self.store.db:
+            self.store.db.execute("ALTER TABLE group_serial DROP COLUMN last_error")
+        migrated = serial.Serial(self.store, self.ask, AsyncMock())
+        self.assertTrue(migrated.state(-1)["enabled"])
+        self.assertEqual(migrated.state(-1)["last_error"], "")
+
+    async def test_gateway_voice_fallback_and_outage_cache(self):
+        data = dict(http=NS(), anymodel_key="test", anymodel_api="https://voice.test/v1")
+        with patch.object(bot.speech, "edge_speech", AsyncMock(side_effect=OSError("unreachable"))) as edge, \
+             patch.object(bot, "anymodel_speech", AsyncMock(return_value=wav_audio())) as gateway, \
+             patch.object(bot, "serial_voice_style", AsyncMock(return_value=b"styled")):
+            self.assertEqual(await bot.serial_speech(data, "Первая реплика", "ru-RU-DmitryNeural"), b"styled")
+            self.assertEqual(await bot.serial_speech(data, "Вторая реплика", "ru-RU-SvetlanaNeural"), b"styled")
+        self.assertEqual(edge.await_count, 1)
+        self.assertEqual(gateway.await_count, 2)
+        self.assertEqual(gateway.call_args.args[2], "edge-tts/ru-RU-SvetlanaNeural")
+
+    async def test_fish_fallback_when_gateway_edge_voice_unavailable(self):
+        data = dict(http=NS(), anymodel_key="test", serial_edge_rest=float("inf"))
+        with patch.object(bot, "anymodel_speech", AsyncMock(side_effect=[RuntimeError("not offered"), wav_audio()])) as gateway, \
+             patch.object(bot, "serial_voice_style", AsyncMock(return_value=b"styled")):
+            self.assertEqual(await bot.serial_speech(data, "Реплика", "ru-RU-DmitryNeural"), b"styled")
+        self.assertEqual(gateway.call_args.args[2], bot.ANYMODEL_FISH)
+
+    async def test_gateway_voice_style_is_real_decodable_audio(self):
+        audio = await bot.serial_voice_style(wav_audio(), "ru-RU-SvetlanaNeural", "+9%", "+5Hz")
+        target = Path(self.tmp.name) / "styled.mp3"
+        target.write_bytes(audio)
+        self.assertTrue(await _has_audio(target))
+        self.assertGreater(await _duration(target), .7)
+
     async def test_failed_upload_does_not_advance_and_has_retry_backoff(self):
         self.populate()
         self.show.enable(-1, True)

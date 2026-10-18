@@ -25,6 +25,21 @@ LOG = logging.getLogger("secret_ai.serial")
 WEEK = 7 * 86400
 MIN_MESSAGES = 12
 COOLDOWN = 300
+ERRORS = {
+    "script": "Модель не смогла подготовить сценарий. Проверьте, отвечает ли обычный чат бота.",
+    "voice": "Сервис озвучки не ответил. Попробуйте позже или проверьте подключение голосового API.",
+    "render": "Ошибка монтажа на сервере. Проверьте FFmpeg, свободное место и память хостинга.",
+    "upload": "Telegram не подтвердил отправку ролика. Проверьте права бота и соединение.",
+    "timeout": "Создание серии превысило 15 минут. Попробуйте позже.",
+    "internal": "Внутренняя ошибка создания серии. Код причины доступен через /serial status.",
+}
+
+
+class SerialError(RuntimeError):
+    def __init__(self, stage):
+        self.stage = stage
+        super().__init__(ERRORS[stage])
+
 HELP = ("Сериал про ваш чат: короткий анимированный комикс с голосами, субтитрами и музыкой.\n\n"
         "/serial — снять следующую серию\n/serial on — включить выпуск раз в 7 дней\n"
         "/serial off — выключить автовыпуск\n/serial status — состояние сериала\n\n"
@@ -56,10 +71,19 @@ def short(value, limit):
 
 def screenplay(raw, cast):
     """Validate untrusted model output before any media calls or drawing."""
+    if not isinstance(raw, str):
+        raise ValueError("screenplay is not text")
     text = raw.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
-    obj = json.loads(text)
+    # Some chat models add an introduction even when JSON was requested.
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        start = text.find("{")
+        if start < 0:
+            raise ValueError("no screenplay object") from None
+        obj, _ = json.JSONDecoder().raw_decode(text[start:])
     if not isinstance(obj, dict) or not isinstance(obj.get("scenes"), list):
         raise ValueError("invalid screenplay")
     allowed = set(cast) | {NARRATOR}
@@ -106,12 +130,14 @@ class Serial:
                 retry_at INTEGER NOT NULL DEFAULT 0, lease_until INTEGER NOT NULL DEFAULT 0,
                 last_attempt INTEGER NOT NULL DEFAULT 0)""")
             self.db.execute("CREATE INDEX IF NOT EXISTS group_messages_time ON group_messages(chat_id, created)")
+            if "last_error" not in [row[1] for row in self.db.execute("PRAGMA table_info(group_serial)")]:
+                self.db.execute("ALTER TABLE group_serial ADD COLUMN last_error TEXT NOT NULL DEFAULT ''")
 
     def state(self, chat_id):
-        row = self.db.execute("SELECT enabled, episode, recap, voices, next_at, retry_at, lease_until, last_attempt "
+        row = self.db.execute("SELECT enabled, episode, recap, voices, next_at, retry_at, lease_until, last_attempt, last_error "
                               "FROM group_serial WHERE chat_id=?", (chat_id,)).fetchone()
-        return dict(zip(("enabled", "episode", "recap", "cast", "next_at", "retry_at", "lease_until", "last_attempt"),
-                        row or (0, 0, "", "{}", 0, 0, 0, 0)))
+        return dict(zip(("enabled", "episode", "recap", "cast", "next_at", "retry_at", "lease_until", "last_attempt", "last_error"),
+                        row or (0, 0, "", "{}", 0, 0, 0, 0, "")))
 
     def enable(self, chat_id, on):
         with self.db:
@@ -165,10 +191,15 @@ class Serial:
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            LOG.warning("Serial failed in %s: %s", chat_id, type(exc).__name__)
+            stage = exc.stage if isinstance(exc, SerialError) else "timeout" if isinstance(exc, asyncio.TimeoutError) else "internal"
+            cause = exc.__cause__ or exc
+            code = f"{stage}/{type(cause).__name__}"
+            LOG.exception("Serial failed in %s (%s)", chat_id, code)
+            with self.db:
+                self.db.execute("UPDATE group_serial SET last_error=? WHERE chat_id=?", (code, chat_id))
             if manual:
-                await bot.send_message(chat_id, "Не удалось закончить серию: модель, озвучка или монтаж недоступны. "
-                                       "Номер серии и прошлый сюжет сохранены. Попробуйте позже.")
+                await bot.send_message(chat_id, ERRORS[stage] + f"\nКод: {code}\n"
+                                       "Номер серии и сюжет сохранены. Повторный запуск: /serial через 5 минут.")
             return False
         finally:
             self.busy.discard(chat_id)
@@ -189,25 +220,44 @@ class Serial:
                                    "Обычно это занимает несколько минут.")
         context = json.dumps(dict(episode=state["episode"] + 1, group=(title or "Группа")[:120], actors=names[:50],
                                   previous_story=state["recap"], messages=lines), ensure_ascii=False)
-        plan = screenplay(await self.ask(chat_id, RULES, context), names)
+        plan = None
+        for attempt in range(2):
+            try:
+                raw = await self.ask(chat_id, RULES + ("\nПредыдущий ответ не прошёл проверку. Верни только полный JSON, "
+                                     "6 коротких сцен и visual до 80 знаков." if attempt else ""), context)
+                plan = screenplay(raw, names)
+                break
+            except (ValueError, TypeError) as exc:
+                if attempt:
+                    raise SerialError("script") from exc
+            except Exception as exc:
+                raise SerialError("script") from exc
         cast = json.loads(state["cast"])
         with tempfile.TemporaryDirectory(prefix="secret-ai-serial-") as folder:
             folder = Path(folder)
-            await make_episode(folder, plan, state["episode"] + 1, cast, self.speak, self.image)
+            try:
+                await make_episode(folder, plan, state["episode"] + 1, cast, self.speak, self.image)
+            except SerialError:
+                raise
+            except Exception as exc:
+                raise SerialError("render") from exc
             if self.state(chat_id)["last_attempt"] != state["last_attempt"]:
                 return False  # the owner wiped the story while this episode was rendering
             # Do not post a queued automatic episode after an admin switched the series off.
             if not manual and not self.state(chat_id)["enabled"]:
                 return False
-            with (folder / "episode.mp4").open("rb") as video:
-                await bot.send_video(chat_id, video, filename=f"serial-{state['episode'] + 1}.mp4",
-                                     caption=f"Серия {state['episode'] + 1} · {plan['title']}\n"
-                                             "Вымышленная комедия по мотивам вашего чата. Продолжение следует…",
-                                     supports_streaming=True, width=540, height=960,
-                                     read_timeout=120, write_timeout=120)
+            try:
+                with (folder / "episode.mp4").open("rb") as video:
+                    await bot.send_video(chat_id, video, filename=f"serial-{state['episode'] + 1}.mp4",
+                                         caption=f"Серия {state['episode'] + 1} · {plan['title']}\n"
+                                                 "Вымышленная комедия по мотивам вашего чата. Продолжение следует…",
+                                         supports_streaming=True, width=540, height=960,
+                                         read_timeout=120, write_timeout=120)
+            except Exception as exc:
+                raise SerialError("upload") from exc
         # Only successfully delivered episodes advance the continuing story.
         with self.db:
-            self.db.execute("UPDATE group_serial SET episode=episode+1, recap=?, voices=?, next_at=? WHERE chat_id=?",
+            self.db.execute("UPDATE group_serial SET episode=episode+1, recap=?, voices=?, next_at=?, last_error='' WHERE chat_id=?",
                             (plan["recap"], json.dumps(cast, ensure_ascii=False), int(time.time()) + WEEK, chat_id))
         return True
 
@@ -314,12 +364,17 @@ def music(path, seconds):
 async def make_episode(folder, plan, episode, cast, speak, image=None):
     total_seconds, listing = 0, []
     for index, scene in enumerate(plan["scenes"]):
-        audio = await asyncio.wait_for(speak(scene["text"], **voice_for(scene["speaker"], cast)), 60)
+        try:
+            audio = await asyncio.wait_for(speak(scene["text"], **voice_for(scene["speaker"], cast)), 125)
+            if not audio:
+                raise ValueError("empty voice audio")
+        except Exception as exc:
+            raise SerialError("voice") from exc
         source = folder / f"voice{index}.mp3"
         source.write_bytes(audio)
         length = await _duration(source)
         if not 0 < length <= 18:
-            raise ValueError("invalid narration duration")
+            raise SerialError("voice") from ValueError("invalid narration duration")
         seconds = max(2.5, length + .45)
         total_seconds += seconds
         if total_seconds > 95:
