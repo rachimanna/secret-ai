@@ -82,14 +82,14 @@ def build_input(kind, prompt, fmt, seconds=5, model=""):
 
 
 def result_url(data):
-    """URL of the generated file in a fal response (images[0], image or video)."""
+    """URL of the generated file in a fal response (images[0], image, video or audio)."""
     if not isinstance(data, dict):
         return None
     for key in ("images", "videos"):
         items = data.get(key)
         if isinstance(items, list) and items and isinstance(items[0], dict) and items[0].get("url"):
             return items[0]["url"]
-    for key in ("image", "video"):
+    for key in ("image", "video", "audio", "audio_file"):
         item = data.get(key)
         if isinstance(item, dict) and item.get("url"):
             return item["url"]

@@ -51,6 +51,7 @@ import cursor
 import gentemplates
 import digest
 import chatserial
+import songs
 import game
 import hosting
 import links
@@ -3787,6 +3788,74 @@ async def top_command(update, context):
     await quiz(context).top(context.bot, message.chat_id, message.chat.title or "Группа")
 
 
+SONGS_PER_DAY = int(os.environ.get("SONGS_PER_DAY", "3") or 3)  # per person; the owner has no limit
+SONG_SLOTS = asyncio.Semaphore(2)  # songs being recorded at once
+
+
+async def song_command(update, context):
+    """/song <about whom, genre>: lyrics, a sung track and a cover, sent as an audio track."""
+    message, user, data = update.effective_message, update.effective_user, context.bot_data
+    if not message or not user or (data["allowed"] and user.id not in data["allowed"]):
+        return
+    request = " ".join(context.args).strip()
+    if not request:
+        await message.reply_text(songs.HELP)
+        return
+    key, _ = gen_settings(data)
+    owner = data["connections"].get_meta("owner") == user.id
+    if not key:
+        await message.reply_text("🎵 Песни пока не подключены." + (
+            " Добавь FAL_KEY в .env (ключ с fal.ai) и перезапусти бота." if owner else " Скоро включим!"))
+        return
+    today = time.strftime("%Y-%m-%d")
+    made = data.setdefault("songs_made", {})
+    if not owner and made.get((user.id, today), 0) >= SONGS_PER_DAY:
+        await message.reply_text(f"🎵 На сегодня лимит — {SONGS_PER_DAY} песни. Завтра можно ещё!")
+        return
+    busy = data.setdefault("songs_busy", set())
+    if user.id in busy:
+        await message.reply_text("🎵 Твоя прошлая песня ещё записывается, подожди немного.")
+        return
+    busy.add(user.id)
+    status = await message.reply_text("✍️ Пишу текст песни…")
+    try:
+        model = group_model(data, message.chat_id) if message.chat.type != "private" else user_model(data, user.id)
+
+        async def ask(instructions, text):
+            return await quick_answer(data, model, instructions, text, max_tokens=1500)
+
+        try:
+            song = await songs.write(ask, request)
+        except Exception as exc:
+            LOG.warning("Song lyrics failed: %s %s", type(exc).__name__, str(exc)[:150])
+            await status.edit_text("Не получилось написать текст, попробуй ещё раз чуть позже.")
+            return
+        await status.edit_text(f"🎵 «{song['title']}»\n\n{song['lyrics'][:3500]}\n\n🎙 Записываю трек… это 1–3 минуты.")
+        await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_VOICE)
+        drawing = asyncio.create_task(songs.cover(
+            lambda prompt: free_image(data["http"], prompt, "square", data.get("cloudflare")), song))
+        try:
+            async with SONG_SLOTS:
+                audio = await songs.sing(data["http"], key, song)
+        except MediaError as exc:
+            drawing.cancel()
+            LOG.warning("Song failed: %s", exc)
+            text = ("Ключ fal не подошёл — проверь FAL_KEY." if exc.code == "bad_key" and owner else
+                    "Не получилось записать песню, сервис музыки не ответил. Попробуй позже — текст выше сохранится.")
+            await message.reply_text(text, reply_parameters=reply_to(message.message_id))
+            return
+        picture, thumb = await drawing
+        made[(user.id, today)] = made.get((user.id, today), 0) + 1
+        caption = f"🎵 {song['title']}\nСделано в Secret AI · /song — закажи свою"
+        if picture:
+            await message.reply_photo(picture, caption=f"Обложка · {song['title']}")
+        await message.reply_audio(audio, title=song["title"], performer="Secret AI", caption=caption,
+                                  filename=f"{song['title']}.mp3", thumbnail=thumb,
+                                  read_timeout=120, write_timeout=120)
+    finally:
+        busy.discard(user.id)
+
+
 async def meme_command(update, context):
     """/meme [about what]: a TikTok meme."""
     message = update.effective_message
@@ -5254,9 +5323,9 @@ def error_text(error):
 
 
 COMMANDS = {
-    "ru": [("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
+    "ru": [("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("song", "🎵 Песня на заказ"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
            ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
-    "en": [("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
+    "en": [("app", "Connections"), ("secretary", "AI secretary"), ("song", "🎵 A song to order"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
            ("export", "Download history"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
@@ -5362,14 +5431,14 @@ async def post_init(app):
         group = [BotCommand(game.START, "🧠 Викторина Secret AI для всей группы"),
                  BotCommand(game.RATING, "🏆 Рейтинг викторины"), BotCommand(game.STOP, "⏹ Остановить викторину"),
                  BotCommand(digest.COMMAND, "📊 Итоги дня"),
-                 BotCommand("serial", "🎬 Сериал про ваш чат"),
+                 BotCommand("serial", "🎬 Сериал про ваш чат"), BotCommand("song", "🎵 Песня на заказ"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
         await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
                                        BotCommand(game.RATING, "🏆 Quiz leaderboard"), BotCommand(game.STOP, "⏹ Stop the quiz"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
-                                       BotCommand("serial", "🎬 Your group sitcom"),
+                                       BotCommand("serial", "🎬 Your group sitcom"), BotCommand("song", "🎵 A song to order"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
                                        BotCommand("meme", "A TikTok meme")],
                                       scope=BotCommandScopeAllGroupChats())
@@ -6132,6 +6201,7 @@ def main():
     app.add_handler(CommandHandler(game.STOP, stop_game_command))
     app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
     app.add_handler(CommandHandler("serial", serial_command))
+    app.add_handler(CommandHandler(["song", "pesnya"], song_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
