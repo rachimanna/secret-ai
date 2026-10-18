@@ -1779,8 +1779,8 @@ def persona_keyboard(update, current):
     return InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)])
 
 
-TEST_CLOSED = ("🛠 Secret AI сейчас на обновлении — скоро вернусь, попробуй чуть позже.",
-               "🛠 Secret AI is being updated — back soon, try again a bit later.")
+TEST_CLOSED = ("🛠 Secret AI временно отключён — идёт обновление и обучение. Скоро снова включусь!",
+               "🛠 Secret AI is switched off for a while — an update is under way. I'll be back on soon!")
 
 
 def test_mode(data):
@@ -1805,11 +1805,15 @@ async def test_gate(update, context):
             await update.pre_checkout_query.answer(ok=False, error_message=text)
         elif update.callback_query:
             await update.callback_query.answer(text, show_alert=True)
-        elif update.effective_chat and update.effective_chat.type == "private" and update.effective_message:
-            told = data.setdefault("test_told", {})
-            if time.monotonic() - told.get(user, -1e9) > 600:
-                told[user] = time.monotonic()
-                await update.effective_message.reply_text(text)
+        elif update.effective_chat and update.effective_message:
+            # Private chats: any message. Groups: only when someone talks to the bot, once per chat every 10 minutes.
+            message, private = update.effective_message, update.effective_chat.type == "private"
+            command = (message.text or "").startswith("/")
+            if private or command or addressed_to_bot(message, context.bot, data):
+                told, key = data.setdefault("test_told", {}), user if private else update.effective_chat.id
+                if time.monotonic() - told.get(key, -1e9) > 600:
+                    told[key] = time.monotonic()
+                    await message.reply_text(text)
     except TelegramError:
         pass
     raise ApplicationHandlerStop
@@ -1829,8 +1833,8 @@ async def test_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.bot_data.pop("test_told", None)
     await send(update.effective_message, ui(
         update,
-        "🧪 Режим теста включён. Бот отвечает только тебе, остальным пишет, что идёт обновление (секретарь работает "
-        "как обычно).\n\nПроверил — снова /test, и бот откроется для всех." if on else
+        "🧪 Режим теста включён. Бот отвечает только тебе — в личке и в группах. Остальным пишет, что он временно "
+        "отключён и скоро включится (секретарь работает как обычно).\n\nПроверил — снова /test, и бот откроется для всех." if on else
         "✅ Режим теста выключен — бот снова работает для всех.",
         "🧪 Test mode is on. The bot answers only you; everyone else hears it is being updated (the secretary works as "
         "usual).\n\nDone testing — /test again opens it for everyone." if on else
