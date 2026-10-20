@@ -50,6 +50,8 @@ import codex
 import cursor
 import gentemplates
 import digest
+import awards
+import predictions
 import chatserial
 import music
 import game
@@ -3674,6 +3676,24 @@ def day_digest(data):
     return data["digest"]
 
 
+def week_awards(data):
+    """The groups' weekly awards, created on first use (it shares the groups' database)."""
+    if "awards" not in data:
+        async def ask(chat_id, instructions, text):
+            return await quick_answer(data, group_model(data, chat_id), instructions, text, max_tokens=1500)
+        data["awards"] = awards.Awards(data["groups"], ask)
+    return data["awards"]
+
+
+def predict_cards(data):
+    """Personal prediction cards, created on first use (it shares the groups' database)."""
+    if "predictions" not in data:
+        async def ask(chat_id, instructions, text):
+            return await quick_answer(data, group_model(data, chat_id), instructions, text, max_tokens=900)
+        data["predictions"] = predictions.Predictions(data["groups"], ask)
+    return data["predictions"]
+
+
 def chat_serial(data):
     if "serial" not in data:
         async def ask(chat_id, instructions, text):
@@ -3809,6 +3829,55 @@ async def day_command(update, context):
         return
     await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
     await summary.post(context.bot, message.chat_id, message.chat.title, manual=True)
+
+
+async def awards_command(update, context):
+    """/awards: the week's chat awards now; "/awards off" / "/awards on" (admins) toggle the weekly post."""
+    message, user = update.effective_message, update.effective_user
+    if not message or not user:
+        return
+    if message.chat.type == "private":
+        await reply(message, "«Премии недели» — для групп: добавь меня в группу и напиши там /awards")
+        return
+    show, arg = week_awards(context.bot_data), (context.args[0].lower() if context.args else "")
+    if arg in ("off", "on", "выкл", "вкл"):
+        try:
+            member = await context.bot.get_chat_member(message.chat_id, user.id)
+            is_admin = member.status in ("administrator", "creator")
+        except TelegramError:
+            is_admin = False
+        if not is_admin:
+            await message.reply_text("Включать и выключать премии недели может только админ группы")
+            return
+        on = arg in ("on", "вкл")
+        show.set_enabled(message.chat_id, on)
+        await message.reply_text(f"Премии недели (воскресенье {awards.HOUR}:00 мск) "
+                                 + ("включены ✅" if on else "выключены ⏸")
+                                 + f". Получить сейчас: /{awards.COMMAND}")
+        return
+    context.bot_data["groups"].touch(message.chat_id, message.chat.title, user.id)
+    await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
+    await show.post(context.bot, message.chat_id, message.chat.title, manual=True)
+
+
+async def predict_command(update, context):
+    """/predict: a personal "forecast by the chat" card. Reply to someone to make theirs."""
+    message, user = update.effective_message, update.effective_user
+    if not message or not user:
+        return
+    data = context.bot_data
+    show = predict_cards(data)
+    # In a group, replying to someone makes their card; otherwise the caller's. In private, use cross-group history.
+    target_user = message.reply_to_message.from_user if message.reply_to_message else user
+    if target_user.is_bot:
+        target_user = user
+    by_id = message.chat.type == "private"
+    if message.chat.type in GROUP_TYPES:
+        data["groups"].touch(message.chat_id, message.chat.title, user.id)
+    name = speaker(target_user)
+    avatar = await avatar_bytes(context.bot, target_user.id)
+    await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
+    await show.post(context.bot, message.chat_id, target_user.id, name, avatar=avatar, by_id=by_id)
 
 
 async def game_command(update, context):
@@ -5386,6 +5455,7 @@ async def post_init(app):
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
     app.bot_data["digest_task"] = asyncio.create_task(day_digest(app.bot_data).run(app))  # 22:00 Moscow, every group
+    app.bot_data["awards_task"] = asyncio.create_task(week_awards(app.bot_data).run(app))  # Sunday 20:00 Moscow
     if app.bot_data.get("snapshots"):
         app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
     if hosting.updates_enabled():  # not Render: pull new commits from GitHub and restart by itself
@@ -5428,6 +5498,8 @@ async def post_init(app):
         group = [BotCommand(game.START, "🧠 Викторина Secret AI для всей группы"),
                  BotCommand(game.RATING, "🏆 Рейтинг викторины"), BotCommand(game.STOP, "⏹ Остановить викторину"),
                  BotCommand(digest.COMMAND, "📊 Итоги дня"),
+                 BotCommand(awards.COMMAND, "🏆 Премии недели"),
+                 BotCommand(predictions.COMMAND, "🔮 Прогноз от чата"),
                  BotCommand("serial", "🎬 Сериал про ваш чат"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
@@ -5435,6 +5507,8 @@ async def post_init(app):
         await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
                                        BotCommand(game.RATING, "🏆 Quiz leaderboard"), BotCommand(game.STOP, "⏹ Stop the quiz"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
+                                       BotCommand(awards.COMMAND, "🏆 Weekly awards"),
+                                       BotCommand(predictions.COMMAND, "🔮 Forecast by the chat"),
                                        BotCommand("serial", "🎬 Your group sitcom"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
                                        BotCommand("meme", "A TikTok meme")],
@@ -6207,6 +6281,8 @@ def main():
     app.add_handler(CommandHandler([game.RATING, "stop10"], top_command))
     app.add_handler(CommandHandler(game.STOP, stop_game_command))
     app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
+    app.add_handler(CommandHandler([awards.COMMAND, "spremii"], awards_command))
+    app.add_handler(CommandHandler([predictions.COMMAND, "prognoz"], predict_command))
     app.add_handler(CommandHandler("serial", serial_command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
