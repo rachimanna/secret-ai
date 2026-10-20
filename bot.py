@@ -3851,7 +3851,8 @@ async def awards_command(update, context):
             return
         on = arg in ("on", "вкл")
         show.set_enabled(message.chat_id, on)
-        await message.reply_text(f"Премии недели (воскресенье {awards.HOUR}:00 мск) "
+        weekday_ru = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"][awards.WEEKDAY]
+        await message.reply_text(f"Премии недели ({weekday_ru}, {awards.HOUR}:00 мск) "
                                  + ("включены ✅" if on else "выключены ⏸")
                                  + f". Получить сейчас: /{awards.COMMAND}")
         return

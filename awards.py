@@ -22,8 +22,9 @@ from quizart import backdrop, font, label, panel
 
 LOG = logging.getLogger("secret_ai.awards")
 MSK = datetime.timezone(datetime.timedelta(hours=3))
-WEEKDAY = 6  # Sunday (Monday is 0)
-HOUR = 20  # Moscow time
+# Monday late morning: reads as "last week's results", and doesn't clash with the daily summary at 22:00.
+WEEKDAY = 0  # Monday (Monday is 0)
+HOUR = 11  # Moscow time
 MIN_MESSAGES = 40  # a quiet week gets no weekly post
 COMMAND = "awards"
 BOT_NAME = "Secret AI"
@@ -33,9 +34,10 @@ MONTHS = ["января", "февраля", "марта", "апреля", "ма�
           "декабря"]
 
 # Fixed, computable nominations: (emoji, title, how it's measured). The model only writes the intro and a couple
-# of soft extra lines; medals and the "ghost" are decided from the numbers so nobody is invented.
+# of soft extra lines; the winners are decided from the numbers so nobody is invented.
+# "Most messages" is deliberately left out: the daily summary already crowns a "Болтун дня" every evening, so the
+# weekly awards keep only nominations the daily post doesn't have.
 NOMINATIONS = [
-    ("🏆", "Болтун недели", "most messages"),
     ("🌙", "Ночной житель", "most messages between 00:00 and 06:00"),
     ("🔗", "Поставщик контента", "most links, stickers and media"),
     ("📢", "Главный по буквам", "longest total text"),
@@ -116,17 +118,17 @@ class Awards:
             best = counter.most_common(1)
             return best[0] if best else None
 
-        # "Ghost": wrote at least once but the fewest, and isn't the top talker.
+        # "Ghost": wrote at least once but the fewest, and isn't the week's top talker.
         ghost = None
         if len(messages) >= 3:
             quiet = sorted(messages.items(), key=lambda kv: kv[1])
-            if quiet and quiet[0][0] != (top(messages) or (None,))[0]:
+            busiest = (messages.most_common(1) or [(None,)])[0][0]
+            if quiet and quiet[0][0] != busiest:
                 ghost = quiet[0]
 
         return {
             "messages": messages,
             "winners": [
-                ("🏆", "Болтун недели", top(messages)),
                 ("🌙", "Ночной житель", top(night)),
                 ("🔗", "Поставщик контента", top(content)),
                 ("📢", "Главный по буквам", top(letters)),
