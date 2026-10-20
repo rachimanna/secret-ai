@@ -69,6 +69,14 @@ from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLIN
 from integrations import (GITHUB_TOOLS, Connections, GitHub, GitHubError, Toolbox, apply_change, delete_repos, describe,
                           describe_deletion, prune_pending)
 
+# New features: rate limiting, caching, preferences, analytics, error handling
+from ratelimit import RateLimiter
+from response_cache import ResponseCache
+from user_preferences import UserPreferences
+from analytics import Analytics
+from error_handler import StructuredLogger, RetryHandler, UserFriendlyErrors, logger as error_logger
+from stats_commands import stats_command, preferences_command
+
 LOG = logging.getLogger("secret_ai")
 SYSTEM = (
     "You are Secret AI, a brilliant, knowledgeable and friendly assistant. "
@@ -2860,11 +2868,32 @@ def is_greeting(text):
 async def respond(update, context, target, content, saved_question, voice=False):
     """Answer in the chat; voice=True (the user sent a voice message) also sends the answer as a voice message."""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    chat_type = update.effective_chat.type
+    start_time = time.time()
+
+    # Rate limiting (skip for groups as per requirements)
+    if chat_type == "private":
+        rate_limiter = context.bot_data.get("rate_limiter")
+        if rate_limiter:
+            allowed, limit_msg = rate_limiter.check_quota(chat_id, user_id, chat_type, "requests")
+            if not allowed:
+                await send(target, limit_msg)
+                return
+
     if not models_for(context.bot_data, user_id):
         await send(target, ui(update, *error_text(NoModels())))
         return
     memory = context.bot_data["memory"]
     persona = PERSONAS[memory.persona(user_id)]
+
+    # Get user preferences
+    prefs_manager = context.bot_data.get("preferences")
+    if prefs_manager:
+        prefs = prefs_manager.get(user_id)
+    else:
+        prefs = {}
+
     prune_pending(context.bot_data["pending"])
     # The logo shows at once (or "recording a voice message…" for voice); tokens and apps are prepared meanwhile.
     if voice and context.bot_data.get("tts_model"):
@@ -3002,6 +3031,32 @@ async def respond(update, context, target, content, saved_question, voice=False)
     context.bot_data["last_answer"][user_id] = last.message_id
     await send_files(update, context, target, files)
     answer = text
+
+    # Track analytics
+    analytics = context.bot_data.get("analytics")
+    if analytics:
+        response_time_ms = int((time.time() - start_time) * 1000)
+        analytics.track_activity(
+            user_id=user_id,
+            chat_id=chat_id,
+            chat_type=chat_type,
+            activity_type="message",
+            model=attempt,
+            response_time_ms=response_time_ms,
+            success=True
+        )
+
+    # Cache response if appropriate
+    cache = context.bot_data.get("cache")
+    if cache and prefs.get("enable_cache", True):
+        if cache.should_cache(saved_question, answer):
+            ttl = cache.get_cache_ttl(saved_question)
+            cache.set(saved_question, answer, model=attempt, user_id=user_id, chat_id=chat_id, ttl=ttl)
+
+    # Log model usage
+    if prefs_manager:
+        prefs_manager.log_model_usage(user_id, attempt)
+
     if voice and context.bot_data.get("tts_model") and not speak_only:
         # Recorded in the background: the user's next message must not wait for the voice (it keeps the lock otherwise).
         task = asyncio.create_task(voice_reply(update, context, target, answer))
@@ -6106,7 +6161,14 @@ def main():
         reasoning=os.environ.get("REASONING_EFFORT", "low").strip(),
         chat_reasoning=os.environ.get("CHAT_REASONING_EFFORT", "low").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},
-        biz_activity=sec.Activity())
+        biz_activity=sec.Activity(),
+        # Initialize new features
+        rate_limiter=RateLimiter(db_path=os.environ.get("RATELIMIT_DB", "quotas.db")),
+        cache=ResponseCache(db_path=os.environ.get("CACHE_DB", "cache.db")),
+        preferences=UserPreferences(db_path=os.environ.get("PREFS_DB", "preferences.db")),
+        analytics=Analytics(db_path=os.environ.get("ANALYTICS_DB", "analytics.db")),
+        structured_logger=StructuredLogger("secret_ai", db_path=os.environ.get("ERROR_DB", "errors.db")),
+        admins=set(int(x.strip()) for x in os.environ.get("ADMIN_USERS", "").split(",") if x.strip().isdigit()))
     # Business updates first: their messages must not reach the regular chat handlers.
     app.add_handler(TypeHandler(Update, test_gate), group=-3)  # /test: only the owner gets through
     app.add_handler(TypeHandler(Update, stop_generation, block=False), group=-2)
@@ -6134,6 +6196,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^\s*/(version|v)(@\w+)?\s*$"), version_command))
     app.add_handler(CommandHandler("emojiid", emojiid))
     app.add_handler(CommandHandler(["app", "connect"], open_app))
+    # New feature commands
+    app.add_handler(CommandHandler(["stats", "statistics"], stats_command))
+    app.add_handler(CommandHandler(["prefs", "preferences", "settings"], preferences_command))
     app.add_handler(CommandHandler(["q", "quote"], quote_command))
     app.add_handler(CommandHandler(["dem", "demotivator"], demotivator_command))
     app.add_handler(CommandHandler(["meme", "mem"], meme_command))
