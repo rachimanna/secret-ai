@@ -50,6 +50,7 @@ import codex
 import cursor
 import gentemplates
 import digest
+import docreader
 import chatserial
 import music
 import game
@@ -91,7 +92,7 @@ SYSTEM = (
     "never in every sentence or between words. Do not copy emoji density from conversation history or emoji catalogs. "
     "When the user explicitly requests emoji content, provide it as requested. "
     "Previous photo markers are not images; do not invent unseen visual details."
-)
+) + docreader.RULES
 # What the models can't know from their training: today's date and the AI models that exist now (their knowledge
 # stops months or years earlier, so asked "what are the newest Claude models" they listed Claude 3/4).
 AI_MODELS_NOW = (
@@ -266,6 +267,8 @@ class Memory:
         if "created" not in [row[1] for row in self.db.execute("PRAGMA table_info(messages)")]:
             self.db.execute("ALTER TABLE messages ADD COLUMN created INTEGER")
         self.db.execute("CREATE TABLE IF NOT EXISTS settings (user_id INTEGER PRIMARY KEY, persona TEXT NOT NULL)")
+        self.db.execute("CREATE TABLE IF NOT EXISTS file_context (user_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, "
+                        "content TEXT NOT NULL, PRIMARY KEY(user_id, chat_id))")
         if "model" not in [row[1] for row in self.db.execute("PRAGMA table_info(settings)")]:
             self.db.execute("ALTER TABLE settings ADD COLUMN model TEXT")
         # Generation: free photos per day, bought credits, and paid Stars charges (each counted once).
@@ -322,6 +325,16 @@ class Memory:
             self.db.execute("UPDATE messages SET content = content || ? WHERE id = (SELECT MAX(id) FROM messages "
                             "WHERE user_id=? AND role='assistant')", ("\n" + note, user_id))
 
+    def save_document(self, user_id, chat_id, document):
+        with self.db:
+            self.db.execute("INSERT INTO file_context(user_id, chat_id, content) VALUES (?, ?, ?) "
+                            "ON CONFLICT(user_id, chat_id) DO UPDATE SET content=excluded.content",
+                            (user_id, chat_id, json.dumps(document, ensure_ascii=False)))
+
+    def document(self, user_id, chat_id):
+        row = self.db.execute("SELECT content FROM file_context WHERE user_id=? AND chat_id=?", (user_id, chat_id)).fetchone()
+        return json.loads(row[0]) if row else None
+
     def _last_turn(self, user_id):
         rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT 2", (user_id,)).fetchall()
         if len(rows) < 2 or rows[0][1] != "assistant" or rows[1][1] != "user":
@@ -368,6 +381,7 @@ class Memory:
         with self.db:
             self.db.execute("DELETE FROM messages WHERE user_id=?", (user_id,))
             self.db.execute("DELETE FROM facts WHERE user_id=?", (user_id,))
+            self.db.execute("DELETE FROM file_context WHERE user_id=?", (user_id,))
 
     def persona(self, user_id):
         row = self.db.execute("SELECT persona FROM settings WHERE user_id=?", (user_id,)).fetchone()
@@ -1858,6 +1872,9 @@ async def authorized(update, context):
 
 
 HELP_RU = (
+    "Документы: отправь PDF, DOCX, XLSX, PPTX, текст/код, ZIP, APK или IPA до 19 МБ с вопросом. "
+    "Могу объяснить содержимое, найти ошибки и предложить исправления. Уточняй по последнему файлу или отвечай на него. "
+    "APK/IPA: статический разбор структуры и доступных настроек, без запуска приложения.\n\n"
     "Я Secret AI ✨ Отправьте текст, голосовое, аудио, кружок или фото (можно файлом) с вопросом.\n\n"
     "Пока я думаю, вы увидите мой логотип, а ответ будет появляться прямо по ходу печати.\n"
     "На голосовое и кружок я отвечаю только голосом.\n"
@@ -1877,6 +1894,9 @@ HELP_RU = (
     "Я помню последние 300 сообщений нашего диалога."
 )
 HELP_EN = (
+    "Documents: send PDF, DOCX, XLSX, PPTX, text/code, ZIP, APK or IPA up to 19 MB with a question. "
+    "Ask about contents, errors and fixes, then follow up or reply to the file. "
+    "APK/IPA: static structure/configuration inspection, without running the app.\n\n"
     "I'm Secret AI ✨ Send text, a voice message, audio, a video note or a photo (also as a file) with a question.\n\n"
     "While I'm thinking you'll see my logo, and the answer appears as it is being written.\n"
     "I answer voice messages with my voice.\n"
@@ -2430,6 +2450,7 @@ def wipe_all(data):
     with memory.db:
         memory.db.execute("DELETE FROM messages")
         memory.db.execute("DELETE FROM facts")
+        memory.db.execute("DELETE FROM file_context")
     with groups.db:
         groups.db.execute("DELETE FROM group_messages")
         groups.db.execute("DELETE FROM group_phrases")
@@ -2615,9 +2636,65 @@ async def media_text(media, client, language=None):
         return result.text.strip()
 
 
+def is_document_file(document):
+    return bool(document and not (document.mime_type or "").startswith("image/"))
+
+
+async def document_question(update, context, document):
+    message = update.effective_message
+    status = await reply(message, ui(update, "Читаю файл…", "Reading the file…"))
+    try:
+        result = await docreader.read_attachment(document)
+    except (docreader.DocumentError, asyncio.TimeoutError) as exc:
+        code = str(exc)
+        errors = {
+            "size": ("Файл слишком большой. Пришли файл до 19 МБ или нужную часть отдельно.",
+                     "The file is too large. Send up to 19 MB or send the relevant part separately."),
+            "unsupported": ("Этот формат пока не читаю. Поддерживаются PDF, DOCX, XLSX, PPTX, текст/код, ZIP, APK и IPA. "
+                            "Старые DOC/XLS/PPT сохрани в новом формате.",
+                            "Supported: PDF, DOCX, XLSX, PPTX, text/code, ZIP, APK and IPA. Convert old DOC/XLS/PPT to the newer format."),
+            "encrypted": ("Документ защищён паролем. Пришли копию без пароля.", "The document is password protected. Send an unlocked copy."),
+            "archive_limit": ("Архив защищён, содержит слишком много файлов или слишком велик после распаковки. Пришли нужные файлы отдельно.",
+                              "The archive is protected, has too many entries or expands beyond the limit. Send the relevant files separately."),
+            "empty": ("В файле не удалось найти текст. Пришли текст или фотографии нужных страниц.",
+                      "No text was found. Send text or photos of the relevant pages."),
+        }
+        shown = ui(update, *errors.get(code, ("Не удалось прочитать файл: он повреждён, не содержит читаемого текста или разбор занял слишком долго. "
+                                              "Пришли другую копию или нужную часть текстом.",
+                                              "Couldn't read the file: it may be damaged, unreadable or took too long. Send another copy or the relevant text.")))
+        await status.edit_text(shown)
+        return None
+    except BaseException:
+        try:
+            await status.delete()
+        except TelegramError:
+            pass
+        raise
+    try:
+        await status.delete()
+    except TelegramError:
+        pass
+    context.bot_data["memory"].save_document(update.effective_user.id, update.effective_chat.id, result)
+    question = message.text or message.caption or ui(update,
+        "Проанализируй файл: кратко объясни содержимое, найди ошибки и предложи исправления. Указывай, где именно они находятся.",
+        "Analyse the file: briefly explain its contents, find errors and suggest fixes. Cite their locations.")
+    saved = f"[Attachment: {result['name']}] {question}"
+    return question, docreader.prompt(result, question), saved
+
+
 async def read_question(update, context):
     """Return (question, model content, text to remember) or None if nothing to answer."""
     message = update.effective_message
+    if is_document_file(message.document):
+        return await document_question(update, context, message.document)
+    parent = message.reply_to_message
+    if message.text and parent and is_document_file(parent.document):
+        return await document_question(update, context, parent.document)
+    if message.text and (docreader.REFERENCE.search(message.text) or
+                         (parent and parent.from_user and parent.from_user.is_bot)):
+        result = context.bot_data["memory"].document(update.effective_user.id, update.effective_chat.id)
+        if result:
+            return message.text, docreader.prompt(result, message.text), f"[Attachment: {result['name']}] {message.text}"
     client = context.bot_data["stt"]
     question = message.text or message.caption or ui(update, "Что изображено на фото?", "What is in this photo?")
     media = message.voice or message.audio or message.video_note
@@ -2873,14 +2950,15 @@ async def respond(update, context, target, content, saved_question, voice=False)
     live = CleanChatReply(live)
     try:
         prepared = time.monotonic()
-        use_apps = wants_apps(context.bot_data, user_id, saved_question)
+        document_turn = isinstance(content, str) and docreader.MARKER in content
+        use_apps = not document_turn and wants_apps(context.bot_data, user_id, saved_question)
         apps = ([], [])
         if use_apps:
             taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
             _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
                                            app_tools(context.bot_data, user_id, taken))
             context.bot_data.setdefault("app_names", {})[user_id] = list(apps[1])
-        if apps_named(context.bot_data, user_id, saved_question):
+        if not document_turn and apps_named(context.bot_data, user_id, saved_question):
             context.bot_data.setdefault("apps_until", {})[user_id] = time.monotonic() + APPS_FOLLOW_UP
         LOG.info("Prepared in %.1f s (apps %s)", time.monotonic() - prepared, "loaded" if use_apps else "skipped")
     except BaseException:
@@ -3248,7 +3326,7 @@ async def group_chat(update, context):
             await quiz(context).open_lobby(context.bot, message, user, name)
             return
         readable = (message.text or message.caption or message.voice or message.audio or message.video_note or message.photo
-                    or (message.document and (message.document.mime_type or "").startswith("image/")))
+                    or message.document)
         if readable:
             parsed = await read_question(update, context)
             if not parsed:
@@ -3268,7 +3346,7 @@ async def group_chat(update, context):
 
 
 def group_instructions(update):
-    return GROUP_STYLE + now_note() + TRANSLATION_RULES + CODE_RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
+    return GROUP_STYLE + now_note() + TRANSLATION_RULES + CODE_RULES + docreader.RULES + " Reply in the chat's language. Telegram language: " + (update.effective_user.language_code or "ru")
 
 
 # The retired accent's filler words, cut out even if the model copies them from its old messages in the chat.
@@ -3405,7 +3483,9 @@ async def group_respond(update, context, message, content, voice=False):
         if is_abacus(model) and MEDIA_TALK.search(str(content)):
             model = data["model"]  # the media tool needs function calls, which the Abacus path doesn't do
         answer, _ = await generate(context, live, GroupTools(update, context, message), model=model,
-                                   instructions=group_instructions(update) + gen_status(data, message.chat_id)
+                                   instructions=group_instructions(update) + (" For this document question, give a complete useful analysis with locations and fixes, overriding the usual one-line chat style."
+                                                                           if isinstance(content, str) and docreader.MARKER in content else "")
+                                   + gen_status(data, message.chat_id)
                                    + memory_notes(data, update.effective_user.id, speaker(update.effective_user))
                                    + " Save lasting facts about the person writing with the remember tool." + (
                                        " This person sent a voice message: your answer will be read aloud, so talk like "
@@ -4899,7 +4979,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remember_reply(context, update, shown)
         return
     remember_photo(context.bot_data, update.effective_user.id, message)
-    if message.media_group_id and (message.photo or message.document):
+    if message.media_group_id and (message.photo or (message.document and not is_document_file(message.document))):
         # An album arrives as separate messages: collect them for a moment and answer once.
         key = (update.effective_user.id, message.media_group_id)
         album = context.bot_data.setdefault("albums", {}).setdefault(key, [])
@@ -5198,7 +5278,7 @@ async def unsupported(update, context):
     if await authorized(update, context):
         if context.bot_data.get("broadcast", {}).get(update.effective_user.id) and await broadcast_typed(update, context):
             return  # a video, sticker or gif to broadcast
-        await send(update.effective_message, ui(update, "Отправьте текст, голосовое, аудио или фото. Команды: /help", "Send text, voice, audio or a photo. Commands: /help"))
+        await send(update.effective_message, ui(update, "Отправьте текст, голосовое, фото или документ (PDF, DOCX, XLSX, PPTX, TXT, ZIP, APK, IPA). Команды: /help", "Send text, voice, a photo or document (PDF, DOCX, XLSX, PPTX, TXT, ZIP, APK, IPA). Commands: /help"))
 
 
 def remember_reply(context, update, shown):
@@ -6146,7 +6226,7 @@ def main():
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
     app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, added_to_group))
     app.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.PHOTO | filters.Document.IMAGE,
+        filters.TEXT & ~filters.COMMAND | filters.VOICE | filters.AUDIO | filters.VIDEO_NOTE | filters.PHOTO | filters.Document.ALL,
         chat))
     app.add_handler(MessageHandler(filters.ALL, unsupported))
     app.add_error_handler(on_error)
