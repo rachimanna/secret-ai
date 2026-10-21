@@ -1573,6 +1573,10 @@ async def discover_models(app):
             return prefix, ids
         except Exception as exc:
             data.setdefault("model_catalog_errors", {})[name] = type(exc).__name__
+            if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
+                # A rejected key cannot serve as a backup, even with a cached model ID.
+                LOG.warning("%s catalog access refused: %s", name, type(exc).__name__)
+                return prefix, []
             known = list(data.get("models") or [])
             if store:
                 cached = store.get_meta("confirmed_chat_models:" + name)
@@ -1651,9 +1655,10 @@ async def refresh_models_loop(app):
             LOG.warning("Model recovery failed: %s", type(exc).__name__)
 
 
-# Only Grok 4.7 Fast, using an ID confirmed by the current gateway.
+# Grok 4.7 uses the exact AnyModel ID observed in the owner's catalog.
+# Keep previously supported Fast IDs for gateways that explicitly list them.
 MODEL_CATALOG = [
-    ("Grok 4.7 Fast", r"(?:^|[/:])grok[-._ ]4[-._ ]7[-._ ]fast(?:[-._ ](?:non[-._ ]reasoning|reasoning))?(?::free)?$"),
+    ("Grok 4.7", r"(?:^|:)xai/grok-4\.7$|(?:^|[/:])grok[-._ ]4[-._ ]7[-._ ]fast(?:[-._ ](?:non[-._ ]reasoning|reasoning))?(?::free)?$"),
 ]
 DEFAULT_PICK = MODEL_CATALOG[0][1]
 ENABLED_MODELS = []  # Cursor must not add other models to the picker.
@@ -4471,7 +4476,7 @@ async def api_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ids = [m.id for m in result.data]
             matching = [i for i in ids if any(re.search(pattern, i, re.I) for _, pattern, *rest in MODEL_CATALOG)]
             grok = [i for i in ids if "grok" in i.lower()][:12]
-            return (f"{title}: каталог доступен, моделей {len(ids)}.\nGrok 4.7 Fast: "
+            return (f"{title}: каталог доступен, моделей {len(ids)}.\nGrok 4.7: "
                     + (", ".join(matching[:6]) if matching else "точного совпадения нет")
                     + "\nМодели Grok в каталоге: " + (", ".join(grok) if grok else "нет"))
         except Exception as exc:
