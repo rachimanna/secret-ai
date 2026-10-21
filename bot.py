@@ -1543,41 +1543,47 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     return (text if prefix else text.strip()), incomplete
 
 
+CHAT_SOURCES = ((ANYMODEL_PREFIX, "anymodel_chat"), ("reformboss:", "reformboss"))
+
+
 async def discover_models(app):
     """Only the owner's catalog, using IDs confirmed by a configured gateway."""
     data = app.bot_data
-    sources = (("reformboss:", "reformboss"),) if MODEL_CATALOG else ()
+    sources = CHAT_SOURCES if MODEL_CATALOG else ()
 
     store = data.get("connections")
 
-    def approved(model):
-        return (isinstance(model, str) and model.startswith("reformboss:")
+    def approved(model, prefix):
+        return (isinstance(model, str) and model.startswith(prefix)
                 and any(re.search(pattern, model, re.I) for _, pattern, *rest in MODEL_CATALOG))
 
     async def catalog(prefix, name):
         if not data.get(name):
-            data["model_catalog_error"] = "missing_key"
+            data.setdefault("model_catalog_errors", {})[name] = "missing_key"
             return prefix, []
         try:
             result = await asyncio.wait_for(data[name].models.list(), 20)
             ids = [m.id for m in result.data]
-            confirmed = [prefix + i for i in ids if approved(prefix + i)]
+            confirmed = [prefix + i for i in ids if approved(prefix + i, prefix)]
             # Persist only gateway-confirmed IDs, never credentials. Do not rewrite unchanged metadata.
-            if store and store.get_meta("confirmed_chat_models") != confirmed:
-                store.set_meta("confirmed_chat_models", confirmed)
-            data.pop("model_catalog_error", None)
+            cache_key = "confirmed_chat_models:" + name
+            if store and store.get_meta(cache_key) != confirmed:
+                store.set_meta(cache_key, confirmed)
+            data.setdefault("model_catalog_errors", {}).pop(name, None)
             return prefix, ids
         except Exception as exc:
-            data["model_catalog_error"] = type(exc).__name__
+            data.setdefault("model_catalog_errors", {})[name] = type(exc).__name__
             known = list(data.get("models") or [])
             if store:
-                cached = store.get_meta("confirmed_chat_models")
+                cached = store.get_meta("confirmed_chat_models:" + name)
+                if cached is None:
+                    cached = store.get_meta("confirmed_chat_models")  # migrate the original Reformboss cache
                 if isinstance(cached, list):
                     known.extend(cached)
                 else:
                     # Earlier releases persisted the catalog-confirmed default here.
                     known.append(store.get_meta("default_model"))
-            ids = list(dict.fromkeys(m[len(prefix):] for m in known if approved(m)))
+            ids = list(dict.fromkeys(m[len(prefix):] for m in known if approved(m, prefix)))
             LOG.warning("%s model list unavailable: %s; reusing %d confirmed IDs", name, type(exc).__name__, len(ids))
             return prefix, ids
 
@@ -1624,7 +1630,7 @@ MODEL_RETRY_SECONDS = 30
 
 async def refresh_chat_models(data, force=False):
     """One bounded discovery at a time; concurrent messages share the same retry."""
-    if not MODEL_CATALOG or not data.get("reformboss"):
+    if not MODEL_CATALOG or not any(data.get(name) for _, name in CHAT_SOURCES):
         return bool(data.get("models"))
     async with data.setdefault("model_refresh_lock", asyncio.Lock()):
         now = time.monotonic()
@@ -1933,6 +1939,7 @@ async def workbench_authorized(update, context):
 
 
 HELP_RU = (
+    "Владельцу: /apistatus — проверить ключи и каталог моделей без раскрытия секретов; /speed — реальный тест ответа.\n\n"
     "Проекты и файлы: /project, /files, /find, /compare, /report, /diagnose. /project help — инструкции.\n\n"
     "Документы: отправь PDF, DOCX, XLSX, PPTX, текст/код, ZIP, APK или IPA до 19 МБ с вопросом. "
     "Могу объяснить содержимое, найти ошибки и предложить исправления. Уточняй по последнему файлу или отвечай на него. "
@@ -2875,7 +2882,8 @@ def drop_model(data, model, exc):
     if (not isinstance(exc, (PermissionDeniedError, AuthenticationError, NotFoundError)) and not out_of_credits) \
             or model not in data.get("models", []):
         return
-    if model.startswith("reformboss:"):
+    if model.startswith(("reformboss:", ANYMODEL_PREFIX)) and any(
+            re.search(pattern, model, re.I) for _, pattern, *rest in MODEL_CATALOG):
         # The only approved model must not disappear permanently after a refused request.
         # Its actual error is shown to the user; background discovery rechecks availability.
         LOG.warning("%s request refused (%s); keeping the configured route for recovery", model, type(exc).__name__)
@@ -4423,14 +4431,67 @@ async def probe_model(data, model):
         return None, "не ответила за 40 с"
     except Exception as exc:
         drop_model(data, model, exc)
-        said = ""
-        body = getattr(exc, "body", None)
-        if isinstance(body, dict):  # the provider's own words: "insufficient balance", "verify your account"…
-            said = str((body.get("error") or {}).get("message") if isinstance(body.get("error"), dict) else body.get("error") or body.get("message") or "")
-        said = (said or str(exc)).strip().replace("\n", " ")[:140]
-        return None, f"ошибка {type(exc).__name__}" + (f": «{said}»" if said else "") + (
+        return None, safe_api_error(client, exc) + (
             " — убрал из меню" if model not in data.get("models", []) else "")
     return first if first is not None else time.monotonic() - started, time.monotonic() - started
+
+
+def safe_api_error(client, exc):
+    body = getattr(exc, "body", None)
+    detail = body.get("error", body) if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        detail = detail.get("message") or detail.get("code")
+    text = str(detail or str(exc)).replace("\n", " ")
+    key = getattr(client, "api_key", "")
+    if isinstance(key, str) and len(key) >= 8:
+        text = text.replace(key, "[REDACTED]")
+    text = workbench.redact(text)[:250]
+    status = getattr(exc, "status_code", None)
+    return (f"HTTP {status} · " if status else "") + type(exc).__name__ + (f": {text}" if text else "")
+
+
+async def api_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner-only, read-only diagnosis without displaying API keys or private chat data."""
+    if not await authorized(update, context):
+        return
+    data = context.bot_data
+    if data["connections"].get_meta("owner") != update.effective_user.id:
+        await send(update.effective_message, "Диагностика API доступна только владельцу бота.")
+        return
+    status = await reply(update.effective_message, "Проверяю подключения AnyModel и Reformboss…")
+
+    async def check(prefix, name):
+        title = "AnyModel" if name == "anymodel_chat" else "Reformboss"
+        client = data.get(name)
+        if not client:
+            variable = "ANYMODEL_API_KEY" if name == "anymodel_chat" else "REFORMBOSS_API_KEY"
+            return f"{title}: ключ не настроен ({variable})."
+        try:
+            result = await asyncio.wait_for(client.models.list(), 10)
+            ids = [m.id for m in result.data]
+            matching = [i for i in ids if any(re.search(pattern, i, re.I) for _, pattern, *rest in MODEL_CATALOG)]
+            grok = [i for i in ids if "grok" in i.lower()][:12]
+            return (f"{title}: каталог доступен, моделей {len(ids)}.\nGrok 4.7 Fast: "
+                    + (", ".join(matching[:6]) if matching else "точного совпадения нет")
+                    + "\nМодели Grok в каталоге: " + (", ".join(grok) if grok else "нет"))
+        except Exception as exc:
+            return f"{title}: " + safe_api_error(client, exc)
+
+    try:
+        results = await asyncio.gather(*(check(*source) for source in CHAT_SOURCES))
+        selected = data.get("chat_default") or "нет"
+        report = "Текущая модель: " + selected + "\n\n" + "\n\n".join(results)
+        for _, name in CHAT_SOURCES:
+            key = getattr(data.get(name), "api_key", "")
+            if isinstance(key, str) and len(key) >= 8:
+                report = report.replace(key, "[REDACTED]")
+        await send(update.effective_message, workbench.redact(report)
+                   + "\n\nКлючи в отчёте скрыты. Каталог не гарантирует успешный ответ модели; /speed проверяет реальный запрос.")
+    finally:
+        try:
+            await status.delete()
+        except TelegramError:
+            pass
 
 
 async def speed_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -5060,7 +5121,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not models_for(context.bot_data, update.effective_user.id):
         shown = (ui(update, "Сервис ИИ сейчас недоступен. Попробуй немного позже — подключение проверяется автоматически.",
                             "The AI service is unavailable. Please try shortly; the connection is checked automatically.")
-                 if context.bot_data.get("reformboss") else ui(update,
+                 if any(context.bot_data.get(name) for _, name in CHAT_SOURCES) else ui(update,
                      "Сервис ИИ сейчас недоступен. Администратору нужно проверить подключение.",
                      "The AI service is unavailable. The administrator needs to check its connection."))
         await send(message, shown)
@@ -6289,6 +6350,7 @@ def main():
     app.add_handler(CommandHandler(["secretary", "sekretar"], secretary_command))
     app.add_handler(CommandHandler(["voice", "golos"], voice_command))
     app.add_handler(CommandHandler(["speed", "skorost"], speed_command))
+    app.add_handler(CommandHandler("apistatus", api_status))
     app.add_handler(CommandHandler("wipe", wipe))
     app.add_handler(CommandHandler("welcome", welcome_command))
     app.add_handler(CommandHandler("setwelcome", set_welcome))
