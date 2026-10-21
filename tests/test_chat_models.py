@@ -58,11 +58,11 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
                 client.models.list.assert_not_called()
         await bot.discover_models(NS(bot_data={}))
 
-    async def test_only_requested_deepseek_is_enabled_and_becomes_default(self):
-        for model_id in ('deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash', 'deepseek-v4-1-flash'):
+    async def test_only_requested_grok_fast_is_enabled_and_becomes_default(self):
+        for model_id in ('grok-4.7-fast', 'x-ai/grok-4.7-fast', 'grok-4-7-fast', 'grok-4.7-fast-non-reasoning', 'grok-4.7-fast-reasoning'):
             with self.subTest(model_id=model_id):
-                client = gateway([model_id, 'deepseek-v4.1-pro', 'deepseek-v4-flash',
-                                  'deepseek-v4.10-flash', 'claude-sonnet-4-6', 'deepseek-v4.1-flash-vision'])
+                client = gateway([model_id, 'deepseek-v4.1-flash', 'grok-4.7', 'grok-4.6-fast', 'grok-4.70-fast', 'deepseek-v4.1-pro', 'deepseek-v4-flash',
+                                  'deepseek-v4.10-flash', 'claude-sonnet-4-6', 'grok-4.7-fast-vision'])
                 store = Store(default_model=OPUS46, default_pick='old')
                 data = dict(reformboss=client, anymodel_chat=gateway(IDS), connections=store,
                             memory=NS(model=lambda uid: OPUS46))
@@ -78,16 +78,16 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
     async def test_failed_gateway_catalog_does_not_guess_an_id(self):
         client = gateway([])
         client.models.list.side_effect = RuntimeError('offline')
-        data = dict(reformboss=client, anymodel_chat=gateway(['deepseek-v4.1-flash']))
+        data = dict(reformboss=client, anymodel_chat=gateway(['grok-4.7-fast']))
         await bot.discover_models(NS(bot_data=data))
         self.assertEqual(data['models'], [])
         self.assertIsNone(data['chat_default'])
         data['anymodel_chat'].models.list.assert_not_called()
 
     async def test_gateway_outage_after_restart_uses_persisted_confirmed_id(self):
-        expected = 'reformboss:deepseek-v4.1-flash'
+        expected = 'reformboss:grok-4.7-fast'
         store = Store()
-        data = dict(reformboss=gateway(['deepseek-v4.1-flash']), connections=store)
+        data = dict(reformboss=gateway(['grok-4.7-fast']), connections=store)
         await bot.discover_models(NS(bot_data=data))
         self.assertEqual(store.get_meta('confirmed_chat_models'), [expected])
         offline = gateway([])
@@ -100,18 +100,18 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
     async def test_legacy_confirmed_default_recovers_without_enabling_old_models(self):
         offline = gateway([])
         offline.models.list.side_effect = RuntimeError('offline')
-        for saved, wanted in [('reformboss:deepseek-v4.1-flash', ['reformboss:deepseek-v4.1-flash']),
-                              (OPUS46, []), ('reformboss:deepseek-v4.1-pro', [])]:
+        for saved, wanted in [('reformboss:grok-4.7-fast', ['reformboss:grok-4.7-fast']),
+                              (OPUS46, []), ('reformboss:deepseek-v4.1-flash', []), ('reformboss:deepseek-v4.1-pro', [])]:
             with self.subTest(saved=saved):
                 data = dict(reformboss=offline, connections=Store(default_model=saved))
                 await bot.discover_models(NS(bot_data=data))
                 self.assertEqual(data['models'], wanted)
-        missing_key = dict(connections=Store(default_model='reformboss:deepseek-v4.1-flash'))
+        missing_key = dict(connections=Store(default_model='reformboss:grok-4.7-fast'))
         await bot.discover_models(NS(bot_data=missing_key))
         self.assertEqual(missing_key['models'], [])
 
     async def test_successful_catalog_removal_is_not_undone_by_stale_default(self):
-        store = Store(default_model='reformboss:deepseek-v4.1-flash')
+        store = Store(default_model='reformboss:grok-4.7-fast')
         client = gateway([])
         data = dict(reformboss=client, connections=store)
         await bot.discover_models(NS(bot_data=data))
@@ -127,14 +127,14 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*(bot.refresh_chat_models(data) for _ in range(10)))
         client.models.list.assert_awaited_once()
         client.models.list.side_effect = None
-        client.models.list.return_value = NS(data=[NS(id='deepseek-v4.1-flash')])
+        client.models.list.return_value = NS(data=[NS(id='grok-4.7-fast')])
         data['model_refresh_at'] -= bot.MODEL_RETRY_SECONDS + 1
         self.assertTrue(await bot.refresh_chat_models(data))
         self.assertEqual(client.models.list.await_count, 2)
-        self.assertEqual(data['models'], ['reformboss:deepseek-v4.1-flash'])
+        self.assertEqual(data['models'], ['reformboss:grok-4.7-fast'])
 
-    async def test_refused_sole_deepseek_route_is_not_removed_permanently(self):
-        model = 'reformboss:deepseek-v4.1-flash'
+    async def test_refused_sole_grok_route_is_not_removed_permanently(self):
+        model = 'reformboss:grok-4.7-fast'
         for cls, status, text in [(AuthenticationError, 401, 'unauthorized'),
                                    (NotFoundError, 404, 'not found'),
                                    (RateLimitError, 429, 'insufficient_quota')]:
@@ -147,11 +147,25 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(data['chat_default'], model)
 
     async def test_periodic_loop_rediscovers_model_and_propagates_cancellation(self):
-        data = dict(reformboss=gateway(['deepseek-v4.1-flash']), models=[])
+        data = dict(reformboss=gateway(['grok-4.7-fast']), models=[])
         with patch.object(bot.asyncio, 'sleep', AsyncMock(side_effect=[None, asyncio.CancelledError])):
             with self.assertRaises(asyncio.CancelledError):
                 await bot.refresh_models_loop(NS(bot_data=data))
-        self.assertEqual(data['models'], ['reformboss:deepseek-v4.1-flash'])
+        self.assertEqual(data['models'], ['reformboss:grok-4.7-fast'])
+
+    async def test_grok_fast_prefers_plain_then_non_reasoning_and_excludes_deepseek(self):
+        ids = ['deepseek-v4.1-flash', 'grok-4.7', 'grok-4.7-fast-reasoning', 'grok-4.7-fast-non-reasoning']
+        store = Store(default_model='reformboss:deepseek-v4.1-flash', default_pick='old')
+        data = dict(reformboss=gateway(ids), connections=store,
+                    memory=NS(model=lambda uid: 'reformboss:deepseek-v4.1-flash'))
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['models'], ['reformboss:grok-4.7-fast-non-reasoning'])
+        self.assertEqual(bot.user_model(data, 1), data['models'][0])
+        self.assertEqual(store.get_meta('default_model'), data['models'][0])
+        data['reformboss'] = gateway(ids + ['grok-4.7-fast'])
+        store.set_meta('default_model', None)
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['models'], ['reformboss:grok-4.7-fast'])
 
     async def test_new_gateway_routes_chat_completions(self):
         self.assertEqual(bot.EXTRA_PROVIDERS['reformboss'][0], 'https://api.reformboss.com/v1')
