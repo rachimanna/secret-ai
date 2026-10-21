@@ -51,6 +51,8 @@ import cursor
 import gentemplates
 import digest
 import docreader
+import workbench
+import workbench_ui
 import chatserial
 import music
 import game
@@ -286,6 +288,7 @@ class Memory:
         self.db.execute("CREATE TABLE IF NOT EXISTS promo_uses (code TEXT NOT NULL, user_id INTEGER NOT NULL, at INTEGER NOT NULL, "
                         "PRIMARY KEY (code, user_id))")
         self.db.commit()
+        self.workbench = workbench.Store(self.db)
 
     def history(self, user_id, limit=HISTORY_LIMIT):
         rows = self.db.execute("SELECT id, role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, limit)).fetchall()
@@ -326,14 +329,11 @@ class Memory:
                             "WHERE user_id=? AND role='assistant')", ("\n" + note, user_id))
 
     def save_document(self, user_id, chat_id, document):
-        with self.db:
-            self.db.execute("INSERT INTO file_context(user_id, chat_id, content) VALUES (?, ?, ?) "
-                            "ON CONFLICT(user_id, chat_id) DO UPDATE SET content=excluded.content",
-                            (user_id, chat_id, json.dumps(document, ensure_ascii=False)))
+        return self.workbench.add(user_id, chat_id, document)
 
     def document(self, user_id, chat_id):
-        row = self.db.execute("SELECT content FROM file_context WHERE user_id=? AND chat_id=?", (user_id, chat_id)).fetchone()
-        return json.loads(row[0]) if row else None
+        item = self.workbench.file(user_id, chat_id)
+        return item['document'] if item else None
 
     def _last_turn(self, user_id):
         rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT 2", (user_id,)).fetchall()
@@ -382,6 +382,7 @@ class Memory:
             self.db.execute("DELETE FROM messages WHERE user_id=?", (user_id,))
             self.db.execute("DELETE FROM facts WHERE user_id=?", (user_id,))
             self.db.execute("DELETE FROM file_context WHERE user_id=?", (user_id,))
+        self.workbench.reset(user_id)
 
     def persona(self, user_id):
         row = self.db.execute("SELECT persona FROM settings WHERE user_id=?", (user_id,)).fetchone()
@@ -1871,7 +1872,17 @@ async def authorized(update, context):
     return True
 
 
+async def workbench_authorized(update, context):
+    # A group's workbench only contains that user's files from this group.
+    if update.effective_chat and update.effective_chat.type in GROUP_TYPES:
+        user = update.effective_user
+        return bool(user and not user.is_bot and update.effective_message and
+                    (not context.bot_data["allowed"] or user.id in context.bot_data["allowed"]))
+    return await authorized(update, context)
+
+
 HELP_RU = (
+    "Проекты и файлы: /project, /files, /find, /compare, /report, /diagnose. /project help — инструкции.\n\n"
     "Документы: отправь PDF, DOCX, XLSX, PPTX, текст/код, ZIP, APK или IPA до 19 МБ с вопросом. "
     "Могу объяснить содержимое, найти ошибки и предложить исправления. Уточняй по последнему файлу или отвечай на него. "
     "APK/IPA: статический разбор структуры и доступных настроек, без запуска приложения.\n\n"
@@ -1894,6 +1905,7 @@ HELP_RU = (
     "Я помню последние 300 сообщений нашего диалога."
 )
 HELP_EN = (
+    "Projects and files: /project, /files, /find, /compare, /report, /diagnose. /project help — instructions.\n\n"
     "Documents: send PDF, DOCX, XLSX, PPTX, text/code, ZIP, APK or IPA up to 19 MB with a question. "
     "Ask about contents, errors and fixes, then follow up or reply to the file. "
     "APK/IPA: static structure/configuration inspection, without running the app.\n\n"
@@ -2451,6 +2463,7 @@ def wipe_all(data):
         memory.db.execute("DELETE FROM messages")
         memory.db.execute("DELETE FROM facts")
         memory.db.execute("DELETE FROM file_context")
+    memory.workbench.reset()
     with groups.db:
         groups.db.execute("DELETE FROM group_messages")
         groups.db.execute("DELETE FROM group_phrases")
@@ -2674,11 +2687,15 @@ async def document_question(update, context, document):
         await status.delete()
     except TelegramError:
         pass
-    context.bot_data["memory"].save_document(update.effective_user.id, update.effective_chat.id, result)
+    try:
+        item = context.bot_data["memory"].save_document(update.effective_user.id, update.effective_chat.id, result)
+    except workbench.WorkspaceError as exc:
+        await send(message, workbench_ui.error_text(update, SimpleNamespace(ui=ui), exc))
+        return None
     question = message.text or message.caption or ui(update,
         "Проанализируй файл: кратко объясни содержимое, найди ошибки и предложи исправления. Указывай, где именно они находятся.",
         "Analyse the file: briefly explain its contents, find errors and suggest fixes. Cite their locations.")
-    saved = f"[Attachment: {result['name']}] {question}"
+    saved = f"[Attachment #{item['id']}: {result['name']} v{item['version']}] {question}"
     return question, docreader.prompt(result, question), saved
 
 
@@ -2690,6 +2707,12 @@ async def read_question(update, context):
     parent = message.reply_to_message
     if message.text and parent and is_document_file(parent.document):
         return await document_question(update, context, parent.document)
+    space = context.bot_data["memory"].workbench
+    if message.text and space.project(update.effective_user.id, update.effective_chat.id) and not is_greeting(message.text):
+        content = space.context(update.effective_user.id, update.effective_chat.id, message.text)
+        if content:
+            project = space.project(update.effective_user.id, update.effective_chat.id)
+            return message.text, content, f"[Project #{project['id']} {project['name']}] {message.text}"
     if message.text and (docreader.REFERENCE.search(message.text) or
                          (parent and parent.from_user and parent.from_user.is_bot)):
         result = context.bot_data["memory"].document(update.effective_user.id, update.effective_chat.id)
@@ -3328,7 +3351,8 @@ async def group_chat(update, context):
         readable = (message.text or message.caption or message.voice or message.audio or message.video_note or message.photo
                     or message.document)
         if readable:
-            parsed = await read_question(update, context)
+            async with user_lock(context, user.id):
+                parsed = await read_question(update, context)
             if not parsed:
                 return
             question, content, _ = parsed
@@ -5343,9 +5367,9 @@ def error_text(error):
 
 
 COMMANDS = {
-    "ru": [("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
+    "ru": [("project", "Проекты и файлы"), ("files", "Мои документы"), ("find", "Поиск по документам"), ("compare", "Сравнить файлы"), ("report", "Отчёт в Word"), ("diagnose", "Разобрать ошибки"), ("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
            ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
-    "en": [("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
+    "en": [("project", "Projects and files"), ("files", "My documents"), ("find", "Search documents"), ("compare", "Compare files"), ("report", "Word report"), ("diagnose", "Diagnose errors"), ("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
            ("export", "Download history"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
@@ -5454,13 +5478,14 @@ async def post_init(app):
                  BotCommand("serial", "🎬 Сериал про ваш чат"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
+        group += [BotCommand(*c) for c in COMMANDS["ru"][:6]]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
         await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
                                        BotCommand(game.RATING, "🏆 Quiz leaderboard"), BotCommand(game.STOP, "⏹ Stop the quiz"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
                                        BotCommand("serial", "🎬 Your group sitcom"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
-                                       BotCommand("meme", "A TikTok meme")],
+                                       BotCommand("meme", "A TikTok meme")] + [BotCommand(*c) for c in COMMANDS["en"][:6]],
                                       scope=BotCommandScopeAllGroupChats())
         if app.bot_data["public_url"]:
             # The button next to the message field opens the Mini App, like in large AI bots.
@@ -6221,6 +6246,9 @@ def main():
     app.add_handler(CommandHandler(game.STOP, stop_game_command))
     app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
     app.add_handler(CommandHandler("serial", serial_command))
+    workbench_ui.Controls(SimpleNamespace(
+        authorized=workbench_authorized, user_lock=user_lock, counted=counted, send=send, reply=reply,
+        ui=ui, error_text=error_text, user_model=user_model, quick_answer=quick_answer)).register(app)
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
