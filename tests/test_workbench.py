@@ -199,7 +199,7 @@ class ControlsTests(unittest.IsolatedAsyncioTestCase):
                       user_lock=lambda ctx, uid: ctx.bot_data['locks'][uid],
                       send=AsyncMock(), reply=AsyncMock(return_value=self.status),
                       ui=lambda u, ru, en: ru if u.effective_user.language_code == 'ru' else en,
-                      error_text=lambda e: ('Ошибка запроса', 'Request failed'), user_model=lambda data, uid: 'reformboss:deepseek-v4.1-flash',
+                      error_text=lambda e: ('Ошибка запроса', 'Request failed'), user_model=lambda data, uid: 'reformboss:grok-4.7-fast',
                       quick_answer=AsyncMock(return_value='# Отчёт\nПодтверждённые выводы.'))
         self.controls = workbench_ui.Controls(self.api)
 
