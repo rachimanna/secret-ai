@@ -6,7 +6,7 @@ from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
-from openai import BadRequestError
+from openai import AuthenticationError, BadRequestError, NotFoundError, RateLimitError
 
 import bot
 
@@ -83,6 +83,75 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data['models'], [])
         self.assertIsNone(data['chat_default'])
         data['anymodel_chat'].models.list.assert_not_called()
+
+    async def test_gateway_outage_after_restart_uses_persisted_confirmed_id(self):
+        expected = 'reformboss:deepseek-v4.1-flash'
+        store = Store()
+        data = dict(reformboss=gateway(['deepseek-v4.1-flash']), connections=store)
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(store.get_meta('confirmed_chat_models'), [expected])
+        offline = gateway([])
+        offline.models.list.side_effect = RuntimeError('temporary outage')
+        restarted = dict(reformboss=offline, connections=store)
+        await bot.discover_models(NS(bot_data=restarted))
+        self.assertEqual(restarted['models'], [expected])
+        self.assertEqual(restarted['chat_default'], expected)
+
+    async def test_legacy_confirmed_default_recovers_without_enabling_old_models(self):
+        offline = gateway([])
+        offline.models.list.side_effect = RuntimeError('offline')
+        for saved, wanted in [('reformboss:deepseek-v4.1-flash', ['reformboss:deepseek-v4.1-flash']),
+                              (OPUS46, []), ('reformboss:deepseek-v4.1-pro', [])]:
+            with self.subTest(saved=saved):
+                data = dict(reformboss=offline, connections=Store(default_model=saved))
+                await bot.discover_models(NS(bot_data=data))
+                self.assertEqual(data['models'], wanted)
+        missing_key = dict(connections=Store(default_model='reformboss:deepseek-v4.1-flash'))
+        await bot.discover_models(NS(bot_data=missing_key))
+        self.assertEqual(missing_key['models'], [])
+
+    async def test_successful_catalog_removal_is_not_undone_by_stale_default(self):
+        store = Store(default_model='reformboss:deepseek-v4.1-flash')
+        client = gateway([])
+        data = dict(reformboss=client, connections=store)
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(store.get_meta('confirmed_chat_models'), [])
+        client.models.list.side_effect = RuntimeError('offline')
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['models'], [])
+
+    async def test_concurrent_recovery_is_single_and_throttled_then_succeeds(self):
+        client = gateway([])
+        client.models.list.side_effect = RuntimeError('offline')
+        data = dict(reformboss=client, models=[])
+        await asyncio.gather(*(bot.refresh_chat_models(data) for _ in range(10)))
+        client.models.list.assert_awaited_once()
+        client.models.list.side_effect = None
+        client.models.list.return_value = NS(data=[NS(id='deepseek-v4.1-flash')])
+        data['model_refresh_at'] -= bot.MODEL_RETRY_SECONDS + 1
+        self.assertTrue(await bot.refresh_chat_models(data))
+        self.assertEqual(client.models.list.await_count, 2)
+        self.assertEqual(data['models'], ['reformboss:deepseek-v4.1-flash'])
+
+    async def test_refused_sole_deepseek_route_is_not_removed_permanently(self):
+        model = 'reformboss:deepseek-v4.1-flash'
+        for cls, status, text in [(AuthenticationError, 401, 'unauthorized'),
+                                   (NotFoundError, 404, 'not found'),
+                                   (RateLimitError, 429, 'insufficient_quota')]:
+            with self.subTest(error=cls):
+                data = dict(models=[model], model=model, chat_default=model, fallbacks=[model])
+                response = httpx.Response(status, request=httpx.Request('POST', 'https://provider.test/v1/chat/completions'))
+                error = cls(text, response=response, body={'error': text})
+                bot.drop_model(data, model, error)
+                self.assertEqual(data['models'], [model])
+                self.assertEqual(data['chat_default'], model)
+
+    async def test_periodic_loop_rediscovers_model_and_propagates_cancellation(self):
+        data = dict(reformboss=gateway(['deepseek-v4.1-flash']), models=[])
+        with patch.object(bot.asyncio, 'sleep', AsyncMock(side_effect=[None, asyncio.CancelledError])):
+            with self.assertRaises(asyncio.CancelledError):
+                await bot.refresh_models_loop(NS(bot_data=data))
+        self.assertEqual(data['models'], ['reformboss:deepseek-v4.1-flash'])
 
     async def test_new_gateway_routes_chat_completions(self):
         self.assertEqual(bot.EXTRA_PROVIDERS['reformboss'][0], 'https://api.reformboss.com/v1')

@@ -1548,15 +1548,38 @@ async def discover_models(app):
     data = app.bot_data
     sources = (("reformboss:", "reformboss"),) if MODEL_CATALOG else ()
 
+    store = data.get("connections")
+
+    def approved(model):
+        return (isinstance(model, str) and model.startswith("reformboss:")
+                and any(re.search(pattern, model, re.I) for _, pattern, *rest in MODEL_CATALOG))
+
     async def catalog(prefix, name):
         if not data.get(name):
+            data["model_catalog_error"] = "missing_key"
             return prefix, []
         try:
             result = await asyncio.wait_for(data[name].models.list(), 20)
-            return prefix, [m.id for m in result.data]
+            ids = [m.id for m in result.data]
+            confirmed = [prefix + i for i in ids if approved(prefix + i)]
+            # Persist only gateway-confirmed IDs, never credentials. Do not rewrite unchanged metadata.
+            if store and store.get_meta("confirmed_chat_models") != confirmed:
+                store.set_meta("confirmed_chat_models", confirmed)
+            data.pop("model_catalog_error", None)
+            return prefix, ids
         except Exception as exc:
-            LOG.warning("%s model list unavailable: %s", name, type(exc).__name__)
-            return prefix, []
+            data["model_catalog_error"] = type(exc).__name__
+            known = list(data.get("models") or [])
+            if store:
+                cached = store.get_meta("confirmed_chat_models")
+                if isinstance(cached, list):
+                    known.extend(cached)
+                else:
+                    # Earlier releases persisted the catalog-confirmed default here.
+                    known.append(store.get_meta("default_model"))
+            ids = list(dict.fromkeys(m[len(prefix):] for m in known if approved(m)))
+            LOG.warning("%s model list unavailable: %s; reusing %d confirmed IDs", name, type(exc).__name__, len(ids))
+            return prefix, ids
 
     catalogs = await asyncio.gather(*(catalog(*source) for source in sources))
     models, backups = [], []
@@ -1580,7 +1603,6 @@ async def discover_models(app):
         LOG.warning("%s unavailable; temporarily using %s", MODEL_CATALOG[0][0], default)
     # Migrate the previous global default once. Explicit per-user choices remain valid
     # only if they belong to this catalog. Old env flags cannot activate other models.
-    store = data.get("connections")
     if store and default and store.get_meta("default_pick") != DEFAULT_PICK:
         store.set_meta("default_model", default)
         if re.search(DEFAULT_PICK, default, re.I):
@@ -1594,6 +1616,33 @@ async def discover_models(app):
                 vision_model=None, search_model=None, web_search=False)
     if not models:
         LOG.warning("No requested chat models available; check gateway keys and catalog access")
+
+
+MODEL_REFRESH_SECONDS = 60
+MODEL_RETRY_SECONDS = 30
+
+
+async def refresh_chat_models(data, force=False):
+    """One bounded discovery at a time; concurrent messages share the same retry."""
+    if not MODEL_CATALOG or not data.get("reformboss"):
+        return bool(data.get("models"))
+    async with data.setdefault("model_refresh_lock", asyncio.Lock()):
+        now = time.monotonic()
+        last = data.get("model_refresh_at")
+        if not force and last is not None and now - last < MODEL_RETRY_SECONDS:
+            return bool(data.get("models"))
+        data["model_refresh_at"] = now
+        await discover_models(SimpleNamespace(bot_data=data))
+        return bool(data.get("models"))
+
+
+async def refresh_models_loop(app):
+    while True:
+        await asyncio.sleep(MODEL_REFRESH_SECONDS)
+        try:
+            await refresh_chat_models(app.bot_data)
+        except Exception as exc:
+            LOG.warning("Model recovery failed: %s", type(exc).__name__)
 
 
 # Only the requested DeepSeek version, using the actual ID returned by the new gateway.
@@ -2824,6 +2873,11 @@ def drop_model(data, model, exc):
     if (not isinstance(exc, (PermissionDeniedError, AuthenticationError, NotFoundError)) and not out_of_credits) \
             or model not in data.get("models", []):
         return
+    if model.startswith("reformboss:"):
+        # The only approved model must not disappear permanently after a refused request.
+        # Its actual error is shown to the user; background discovery rechecks availability.
+        LOG.warning("%s request refused (%s); keeping the configured route for recovery", model, type(exc).__name__)
+        return
     data["models"] = [m for m in data["models"] if m != model]
     data["fallbacks"] = [m for m in data.get("fallbacks", []) if m != model]
     data.get("premium", {}).pop(model, None)
@@ -3315,6 +3369,8 @@ async def group_chat(update, context):
     if await music.handle_text(update, context):
         remember_group_message(store, message, name)
         return
+    if not data.get("models") and addressed_to_bot(message, context.bot, data):
+        await refresh_chat_models(data)
     if not data.get("models"):  # no models: the chat is remembered, nothing is said
         remember_group_message(store, message, name)
         return
@@ -4998,7 +5054,13 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await music.handle_text(update, context):
         return
     if not models_for(context.bot_data, update.effective_user.id):
-        shown = ui(update, "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon.")
+        await refresh_chat_models(context.bot_data)
+    if not models_for(context.bot_data, update.effective_user.id):
+        shown = (ui(update, "Сервис ИИ сейчас недоступен. Попробуй немного позже — подключение проверяется автоматически.",
+                            "The AI service is unavailable. Please try shortly; the connection is checked automatically.")
+                 if context.bot_data.get("reformboss") else ui(update,
+                     "Сервис ИИ сейчас недоступен. Администратору нужно проверить подключение.",
+                     "The AI service is unavailable. The administrator needs to check its connection."))
         await send(message, shown)
         remember_reply(context, update, shown)
         return
@@ -5348,7 +5410,7 @@ def error_text(error):
     """(Russian, English) explanation of a failed answer."""
     ru, en = "Не удалось обработать сообщение. Попробуйте ещё раз чуть позже.", "Couldn't process your message. Please try again later."
     if isinstance(error, NoModels):
-        ru, en = "🛠 Модели пока не подключены — скоро вернусь.", "🛠 No models are connected yet — back soon."
+        ru, en = "Сервис ИИ сейчас недоступен. Попробуй немного позже.", "The AI service is unavailable. Please try shortly."
     elif isinstance(error, cursor.CursorError):
         ru, en = f"Cursor не ответил: {str(error)[:200]}", f"Cursor didn't answer: {str(error)[:200]}"
     elif isinstance(error, RateLimitError):
@@ -5461,6 +5523,8 @@ async def post_init(app):
                           (app.bot_data["connections"].get_meta("premium_emoji") or {}).items() if valid_emoji_key(key)})
     await resolve_abacus_model(app)
     await discover_models(app)
+    app.bot_data["model_refresh_at"] = time.monotonic()
+    app.bot_data["models_task"] = asyncio.create_task(refresh_models_loop(app))
     app.bot_data["serial_task"] = asyncio.create_task(chat_serial(app.bot_data).run(app))
     app.bot_data["previews_task"] = asyncio.create_task(gentemplates.draw_previews(app.bot_data, free_image))
     app.bot_data["cursor_models"] = cursor.models() if "cursor" in ENABLED_MODELS else []
