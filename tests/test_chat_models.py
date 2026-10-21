@@ -38,7 +38,7 @@ def bad_request(message):
 
 
 class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
-    async def test_paused_catalog_clears_old_routes_and_selections(self):
+    async def test_missing_requested_model_clears_old_routes_and_selections(self):
         clients = {name: gateway(IDS) for name in ('anymodel_chat', 'abacus', 'experiential', 'reformboss')}
         data = dict(**clients, connections=Store(default_model=OPUS46),
                     models=[OPUS46], model=OPUS46, chat_default=OPUS46,
@@ -52,8 +52,37 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(bot.user_model(data, 1))
         self.assertIsNone(bot.codex_model(data, OPUS46))
         for client in clients.values():
-            client.models.list.assert_not_called()
+            if client is clients["reformboss"]:
+                client.models.list.assert_awaited_once()
+            else:
+                client.models.list.assert_not_called()
         await bot.discover_models(NS(bot_data={}))
+
+    async def test_only_requested_deepseek_is_enabled_and_becomes_default(self):
+        for model_id in ('deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash', 'deepseek-v4-1-flash'):
+            with self.subTest(model_id=model_id):
+                client = gateway([model_id, 'deepseek-v4.1-pro', 'deepseek-v4-flash',
+                                  'deepseek-v4.10-flash', 'claude-sonnet-4-6', 'deepseek-v4.1-flash-vision'])
+                store = Store(default_model=OPUS46, default_pick='old')
+                data = dict(reformboss=client, anymodel_chat=gateway(IDS), connections=store,
+                            memory=NS(model=lambda uid: OPUS46))
+                await bot.discover_models(NS(bot_data=data))
+                expected = 'reformboss:' + model_id
+                self.assertEqual(data['models'], [expected])
+                self.assertEqual(data['fallbacks'], [expected])
+                self.assertEqual(data['chat_default'], expected)
+                self.assertEqual(store.get_meta('default_model'), expected)
+                self.assertEqual(bot.user_model(data, 1), expected)
+                data['anymodel_chat'].models.list.assert_not_called()
+
+    async def test_failed_gateway_catalog_does_not_guess_an_id(self):
+        client = gateway([])
+        client.models.list.side_effect = RuntimeError('offline')
+        data = dict(reformboss=client, anymodel_chat=gateway(['deepseek-v4.1-flash']))
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['models'], [])
+        self.assertIsNone(data['chat_default'])
+        data['anymodel_chat'].models.list.assert_not_called()
 
     async def test_new_gateway_routes_chat_completions(self):
         self.assertEqual(bot.EXTRA_PROVIDERS['reformboss'][0], 'https://api.reformboss.com/v1')
