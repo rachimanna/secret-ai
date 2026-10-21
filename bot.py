@@ -1186,6 +1186,7 @@ def is_abacus(model):
 # More gateways for free models (the key is <NAME>_API_KEY): name -> (base URL, [(how to find a model, id to try if the
 # list is closed)], what an id must contain). Each found model goes into the menu as a free one.
 EXTRA_PROVIDERS = {
+    "reformboss": ("https://api.reformboss.com/v1", [], ""),  # REFORMBOSS_API_KEY; models added explicitly later
     "nvidia": ("https://integrate.api.nvidia.com/v1",       # build.nvidia.com: DeepSeek, Kimi, Qwen for free
                [(r"deepseek-(v\d|chat)", None), (r"qwen-?3", None)], ""),
     "openrouter": ("https://openrouter.ai/api/v1",           # openrouter.ai: only its ":free" models
@@ -1530,7 +1531,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 async def discover_models(app):
     """Only the owner's catalog, using IDs confirmed by a configured gateway."""
     data = app.bot_data
-    sources = ((ANYMODEL_PREFIX, "anymodel_chat"), (ABACUS_PREFIX, "abacus"), ("experiential:", "experiential"))
+    sources = (("reformboss:", "reformboss"),) if MODEL_CATALOG else ()
 
     async def catalog(prefix, name):
         if not data.get(name):
@@ -1580,12 +1581,9 @@ async def discover_models(app):
         LOG.warning("No requested chat models available; check gateway keys and catalog access")
 
 
-# Opus 4.6, Sonnet 4.6, Haiku 5.5 and Opus 5.5: no auto-router or guessed IDs.
-MODEL_CATALOG = [  # the first one is the default for everyone
-    ("Claude Opus 4.6", r"(?:^|[/:])claude[-._ ]opus[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$", "anymodel:"),  # the default, from AnyModel
-    ("Claude Sonnet 4.6", r"(?:^|[/:])claude[-._ ]sonnet[-._ ]4[-._ ]6(?:[-._ ]\d{6,})?$"),
-    ("Claude Haiku 5.5", r"(?:^|[/:])claude[-._ ]haiku[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
-    ("Claude Opus 5.5", r"(?:^|[/:])claude[-._ ]opus[-._ ]5[-._ ]5(?:[-._ ]\d{6,})?$"),
+# Only the requested DeepSeek version, using the actual ID returned by the new gateway.
+MODEL_CATALOG = [
+    ("DeepSeek Flash 4.1", r"(?:^|[/:])deepseek[-._ ]v?4[-._ ]1[-._ ]flash(?::free)?$"),
 ]
 DEFAULT_PICK = MODEL_CATALOG[0][1]
 ENABLED_MODELS = []  # Cursor must not add other models to the picker.

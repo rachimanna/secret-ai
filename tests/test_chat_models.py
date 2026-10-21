@@ -38,71 +38,59 @@ def bad_request(message):
 
 
 class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
-    async def test_catalog_default_migration_and_old_selections(self):
-        forbidden = ['gemini-3-flash-preview', 'google/gemini-3-flash-preview', 'claude-sonnet-4-5', 'claude-sonnet-5-5', 'route-llm', 'gpt-6.1-sol', 'gemini-3.1-flash-lite',
-                     'gemini-3-flash-image', 'gemini-3.8-pro', 'claude-haiku-5-50']
-        store = Store(default_model='anymodel:google/gemini-3-flash-preview', default_pick='old')
-        data = dict(anymodel_chat=gateway(IDS + forbidden + ['cc/claude-opus-5-5']),
-                    abacus=gateway(IDS + forbidden), connections=store,
-                    model='gpt-6.1-sol', cursor_models=['cursor:grok-4.7'],
-                    memory=NS(model=lambda uid: 'anymodel:google/gemini-3-flash-preview' if uid == 1 else OPUS))
+    async def test_missing_requested_model_clears_old_routes_and_selections(self):
+        clients = {name: gateway(IDS) for name in ('anymodel_chat', 'abacus', 'experiential', 'reformboss')}
+        data = dict(**clients, connections=Store(default_model=OPUS46),
+                    models=[OPUS46], model=OPUS46, chat_default=OPUS46,
+                    fallbacks=[SONNET], cursor_models=['cursor:grok-4.7'], premium={OPUS: 5},
+                    memory=NS(model=lambda uid: OPUS46))
         await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['models'], [OPUS46, SONNET, HAIKU, OPUS])
-        self.assertEqual(data['chat_default'], OPUS46)
-        self.assertEqual(store.get_meta('default_model'), OPUS46)
+        self.assertEqual(data['models'], [])
+        self.assertEqual(data['fallbacks'], [])
         self.assertEqual(data['cursor_models'], [])
-        self.assertEqual(len(data['fallbacks']), 8)
-        self.assertTrue(all(any(re.search(p, m) for _, p, *rest in bot.MODEL_CATALOG)
-                            for m in data['fallbacks']))
-        self.assertEqual(bot.user_model(data, 1), OPUS46)
-        self.assertEqual(bot.user_model(data, 2), OPUS)
-        self.assertEqual(bot.codex_model(data, 'anymodel:google/gemini-3-flash-preview'), OPUS46)
-
-    async def test_plain_sonnet_and_missing_sonnet_then_recovery(self):
-        store = Store(default_model='anymodel:claude-sonnet-5-5')
-        data = dict(anymodel_chat=gateway(['claude-haiku-5-5']), connections=store)
-        await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['chat_default'], HAIKU)
-        data['anymodel_chat'] = gateway(['claude-haiku-5-5', 'claude-sonnet-4-6'])
-        await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['chat_default'], 'anymodel:claude-sonnet-4-6')
-        self.assertIsNone(store.get_meta('default_pick'))  # fallback must not prevent later Opus recovery
-        data['anymodel_chat'] = gateway(['claude-haiku-5-5', 'claude-sonnet-4-6', 'claude-opus-4-6'])
-        await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['chat_default'], OPUS46)
-        self.assertEqual(store.get_meta('default_pick'), bot.DEFAULT_PICK)
-
-    async def test_failed_catalog_does_not_guess_or_enable_other_providers(self):
-        failed = gateway([])
-        failed.models.list.side_effect = RuntimeError('offline')
-        data = dict(anymodel_chat=failed, abacus=gateway(['claude-opus-5.5']),
-                    groq=gateway(['llama-4']), client=gateway(['gpt-6.1-sol']))
-        await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(data['models'], ['abacus:claude-opus-5.5'])
-        data['groq'].models.list.assert_not_called()
-        data['client'].models.list.assert_not_called()
+        self.assertEqual(data['premium'], {})
+        self.assertIsNone(bot.user_model(data, 1))
+        self.assertIsNone(bot.codex_model(data, OPUS46))
+        for client in clients.values():
+            if client is clients["reformboss"]:
+                client.models.list.assert_awaited_once()
+            else:
+                client.models.list.assert_not_called()
         await bot.discover_models(NS(bot_data={}))
 
-    async def test_catalog_requests_run_concurrently(self):
-        started = set()
-        ready = asyncio.Event()
+    async def test_only_requested_deepseek_is_enabled_and_becomes_default(self):
+        for model_id in ('deepseek-v4.1-flash', 'deepseek/deepseek-v4.1-flash', 'deepseek-v4-1-flash'):
+            with self.subTest(model_id=model_id):
+                client = gateway([model_id, 'deepseek-v4.1-pro', 'deepseek-v4-flash',
+                                  'deepseek-v4.10-flash', 'claude-sonnet-4-6', 'deepseek-v4.1-flash-vision'])
+                store = Store(default_model=OPUS46, default_pick='old')
+                data = dict(reformboss=client, anymodel_chat=gateway(IDS), connections=store,
+                            memory=NS(model=lambda uid: OPUS46))
+                await bot.discover_models(NS(bot_data=data))
+                expected = 'reformboss:' + model_id
+                self.assertEqual(data['models'], [expected])
+                self.assertEqual(data['fallbacks'], [expected])
+                self.assertEqual(data['chat_default'], expected)
+                self.assertEqual(store.get_meta('default_model'), expected)
+                self.assertEqual(bot.user_model(data, 1), expected)
+                data['anymodel_chat'].models.list.assert_not_called()
 
-        async def listing(name):
-            started.add(name)
-            if len(started) == 2:
-                ready.set()
-            await asyncio.wait_for(ready.wait(), 1)
-            return NS(data=[NS(id='claude-sonnet-4-6')])
-
-        async def any_list():
-            return await listing('anymodel_chat')
-        async def abacus_list():
-            return await listing('abacus')
-        data = dict(anymodel_chat=NS(models=NS(list=AsyncMock(side_effect=any_list))),
-                    abacus=NS(models=NS(list=AsyncMock(side_effect=abacus_list))))
+    async def test_failed_gateway_catalog_does_not_guess_an_id(self):
+        client = gateway([])
+        client.models.list.side_effect = RuntimeError('offline')
+        data = dict(reformboss=client, anymodel_chat=gateway(['deepseek-v4.1-flash']))
         await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(len(started), 2)
-        self.assertEqual(len(data['models']), 1)
+        self.assertEqual(data['models'], [])
+        self.assertIsNone(data['chat_default'])
+        data['anymodel_chat'].models.list.assert_not_called()
+
+    async def test_new_gateway_routes_chat_completions(self):
+        self.assertEqual(bot.EXTRA_PROVIDERS['reformboss'][0], 'https://api.reformboss.com/v1')
+        model = 'reformboss:chosen-model'
+        create = AsyncMock(return_value=NS(choices=[NS(message=NS(content='Привет'))]))
+        data = dict(reformboss=NS(chat=NS(completions=NS(create=create))))
+        self.assertEqual(await bot.quick_answer_once(data, model, 'Be helpful', 'Привет', 2000), 'Привет')
+        self.assertEqual(create.call_args.kwargs['model'], 'chosen-model')
 
     async def test_effort_compatibility_is_remembered_and_bounded(self):
         create = AsyncMock(side_effect=[bad_request('unsupported reasoning_effort minimal'),
