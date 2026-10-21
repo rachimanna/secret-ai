@@ -52,7 +52,7 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(bot.user_model(data, 1))
         self.assertIsNone(bot.codex_model(data, OPUS46))
         for client in clients.values():
-            if client is clients["reformboss"]:
+            if client is clients["reformboss"] or client is clients["anymodel_chat"]:
                 client.models.list.assert_awaited_once()
             else:
                 client.models.list.assert_not_called()
@@ -73,23 +73,23 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(data['chat_default'], expected)
                 self.assertEqual(store.get_meta('default_model'), expected)
                 self.assertEqual(bot.user_model(data, 1), expected)
-                data['anymodel_chat'].models.list.assert_not_called()
+                data['anymodel_chat'].models.list.assert_awaited_once()
 
     async def test_failed_gateway_catalog_does_not_guess_an_id(self):
         client = gateway([])
         client.models.list.side_effect = RuntimeError('offline')
-        data = dict(reformboss=client, anymodel_chat=gateway(['grok-4.7-fast']))
+        data = dict(reformboss=client, anymodel_chat=gateway(['deepseek-v4.1-flash']))
         await bot.discover_models(NS(bot_data=data))
         self.assertEqual(data['models'], [])
         self.assertIsNone(data['chat_default'])
-        data['anymodel_chat'].models.list.assert_not_called()
+        data['anymodel_chat'].models.list.assert_awaited_once()
 
     async def test_gateway_outage_after_restart_uses_persisted_confirmed_id(self):
         expected = 'reformboss:grok-4.7-fast'
         store = Store()
         data = dict(reformboss=gateway(['grok-4.7-fast']), connections=store)
         await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(store.get_meta('confirmed_chat_models'), [expected])
+        self.assertEqual(store.get_meta('confirmed_chat_models:reformboss'), [expected])
         offline = gateway([])
         offline.models.list.side_effect = RuntimeError('temporary outage')
         restarted = dict(reformboss=offline, connections=store)
@@ -115,7 +115,7 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         client = gateway([])
         data = dict(reformboss=client, connections=store)
         await bot.discover_models(NS(bot_data=data))
-        self.assertEqual(store.get_meta('confirmed_chat_models'), [])
+        self.assertEqual(store.get_meta('confirmed_chat_models:reformboss'), [])
         client.models.list.side_effect = RuntimeError('offline')
         await bot.discover_models(NS(bot_data=data))
         self.assertEqual(data['models'], [])
@@ -166,6 +166,59 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         store.set_meta('default_model', None)
         await bot.discover_models(NS(bot_data=data))
         self.assertEqual(data['models'], ['reformboss:grok-4.7-fast'])
+
+    async def test_anymodel_is_preferred_and_reformboss_is_backup(self):
+        data = dict(anymodel_chat=gateway(['x-ai/grok-4.7-fast']),
+                    reformboss=gateway(['grok-4.7-fast']), connections=Store())
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['models'], ['anymodel:x-ai/grok-4.7-fast'])
+        self.assertEqual(data['fallbacks'], ['anymodel:x-ai/grok-4.7-fast', 'reformboss:grok-4.7-fast'])
+        data['anymodel_chat'].models.list.side_effect = RuntimeError('offline')
+        data['models'] = []
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['models'], ['anymodel:x-ai/grok-4.7-fast'])
+        self.assertEqual(data['connections'].get_meta('confirmed_chat_models:reformboss'), ['reformboss:grok-4.7-fast'])
+        self.assertEqual(data['connections'].get_meta('confirmed_chat_models:anymodel_chat'), ['anymodel:x-ai/grok-4.7-fast'])
+
+    async def test_anymodel_works_when_reformboss_client_is_absent(self):
+        data = dict(anymodel_chat=gateway(['grok-4.7-fast']))
+        self.assertTrue(await bot.refresh_chat_models(data))
+        self.assertEqual(data['models'], ['anymodel:grok-4.7-fast'])
+        response = httpx.Response(401, request=httpx.Request('POST', 'https://provider.test'))
+        bot.drop_model(data, data['models'][0], AuthenticationError('bad key', response=response, body={}))
+        self.assertEqual(data['models'], ['anymodel:grok-4.7-fast'])
+
+    def test_diagnostic_errors_hide_exact_key_and_report_http_status(self):
+        key = 'a-provider-secret-token-1234'
+        response = httpx.Response(401, request=httpx.Request('GET', 'https://provider.test/models'))
+        error = AuthenticationError('bad key ' + key, response=response, body={'error': {'message': 'invalid key ' + key}})
+        shown = bot.safe_api_error(NS(api_key=key), error)
+        self.assertIn('HTTP 401', shown)
+        self.assertIn('invalid key', shown)
+        self.assertNotIn(key, shown)
+
+    async def test_owner_diagnostic_reports_missing_key_and_catalog_without_secrets(self):
+        status = NS(delete=AsyncMock())
+        data = dict(connections=Store(owner=1), reformboss=gateway(['grok-4.7', 'deepseek-v4.1-flash']),
+                    chat_default=None)
+        update = NS(effective_user=NS(id=1), effective_message=NS())
+        context = NS(bot_data=data)
+        with patch.object(bot, 'authorized', AsyncMock(return_value=True)), \
+             patch.object(bot, 'reply', AsyncMock(return_value=status)), \
+             patch.object(bot, 'send', AsyncMock()) as send:
+            await bot.api_status(update, context)
+        shown = send.call_args.args[1]
+        self.assertIn('ANYMODEL_API_KEY', shown)
+        self.assertIn('точного совпадения нет', shown)
+        self.assertIn('grok-4.7', shown)
+        status.delete.assert_awaited_once()
+
+    async def test_nonowner_cannot_probe_provider_configuration(self):
+        client = gateway(['grok-4.7-fast'])
+        data = dict(connections=Store(owner=1), anymodel_chat=client)
+        with patch.object(bot, 'authorized', AsyncMock(return_value=True)), patch.object(bot, 'send', AsyncMock()):
+            await bot.api_status(NS(effective_user=NS(id=2), effective_message=NS()), NS(bot_data=data))
+        client.models.list.assert_not_called()
 
     async def test_new_gateway_routes_chat_completions(self):
         self.assertEqual(bot.EXTRA_PROVIDERS['reformboss'][0], 'https://api.reformboss.com/v1')
