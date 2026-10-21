@@ -1531,8 +1531,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 async def discover_models(app):
     """Only the owner's catalog, using IDs confirmed by a configured gateway."""
     data = app.bot_data
-    sources = (("reformboss:", "reformboss"), (ANYMODEL_PREFIX, "anymodel_chat"),
-               (ABACUS_PREFIX, "abacus"), ("experiential:", "experiential")) if MODEL_CATALOG else ()
+    sources = (("reformboss:", "reformboss"),) if MODEL_CATALOG else ()
 
     async def catalog(prefix, name):
         if not data.get(name):
@@ -1582,9 +1581,11 @@ async def discover_models(app):
         LOG.warning("No requested chat models available; check gateway keys and catalog access")
 
 
-# Chat models are paused at the owner's request. A key alone never enables models.
-MODEL_CATALOG = []
-DEFAULT_PICK = r"(?!)"  # matches nothing until a new default is explicitly selected
+# Only the requested DeepSeek version, using the actual ID returned by the new gateway.
+MODEL_CATALOG = [
+    ("DeepSeek Flash 4.1", r"(?:^|[/:])deepseek[-._ ]v?4[-._ ]1[-._ ]flash(?::free)?$"),
+]
+DEFAULT_PICK = MODEL_CATALOG[0][1]
 ENABLED_MODELS = []  # Cursor must not add other models to the picker.
 
 
