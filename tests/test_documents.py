@@ -175,7 +175,7 @@ class TelegramDocuments(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(docs.DocumentError, 'format'):
             await docs.read_attachment(doc)
 
-    def test_context_survives_restart_and_replaces_previous_file(self):
+    def test_context_survives_restart_and_selects_latest_file(self):
         with tempfile.TemporaryDirectory() as folder:
             path = str(Path(folder) / 'memory.db')
             memory = bot.Memory(path)
@@ -184,7 +184,7 @@ class TelegramDocuments(unittest.IsolatedAsyncioTestCase):
             memory.close()
             memory = bot.Memory(path)
             self.assertEqual(memory.document(1, 100)['text'], 'second')
-            self.assertEqual(memory.db.execute('SELECT COUNT(*) FROM file_context').fetchone()[0], 1)
+            self.assertEqual(memory.db.execute('SELECT COUNT(*) FROM wb_files').fetchone()[0], 2)
             memory.close()
 
 
