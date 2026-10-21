@@ -1645,9 +1645,9 @@ async def refresh_models_loop(app):
             LOG.warning("Model recovery failed: %s", type(exc).__name__)
 
 
-# Only the requested DeepSeek version, using the actual ID returned by the new gateway.
+# Only Grok 4.7 Fast, using an ID confirmed by the current gateway.
 MODEL_CATALOG = [
-    ("DeepSeek Flash 4.1", r"(?:^|[/:])deepseek[-._ ]v?4[-._ ]1[-._ ]flash(?::free)?$"),
+    ("Grok 4.7 Fast", r"(?:^|[/:])grok[-._ ]4[-._ ]7[-._ ]fast(?:[-._ ](?:non[-._ ]reasoning|reasoning))?(?::free)?$"),
 ]
 DEFAULT_PICK = MODEL_CATALOG[0][1]
 ENABLED_MODELS = []  # Cursor must not add other models to the picker.
@@ -1656,7 +1656,9 @@ ENABLED_MODELS = []  # Cursor must not add other models to the picker.
 def pick_catalog(ids, pattern, cc_first=True):
     """The best id in a catalog for a pattern: a plain one before fast/thinking/preview/dated variants, cc/ routes first."""
     found = [i for i in ids if re.search(pattern, i, re.I) and not re.search(r"image|audio|tts|embed|vision", i, re.I)]
-    found.sort(key=lambda i: (bool(re.search(r"fast|mini|lite|flash", i, re.I)), "thinking" in i.lower(), "preview" in i.lower(),
+    found.sort(key=lambda i: (bool(re.search(r"fast|mini|lite|flash", i, re.I)),
+                              "reasoning" in i.lower() and not bool(re.search(r"non[-._ ]reasoning", i, re.I)),
+                              "thinking" in i.lower(), "preview" in i.lower(),
                               i.startswith("cc/") != cc_first, bool(re.search(r"\d{6,}", i)), len(i)))  # cc/ first, or last
     return found[0] if found else None
 
@@ -5415,8 +5417,12 @@ def error_text(error):
         ru, en = f"Cursor не ответил: {str(error)[:200]}", f"Cursor didn't answer: {str(error)[:200]}"
     elif isinstance(error, RateLimitError):
         ru, en = "Модель сейчас перегружена или у провайдера закончился лимит. Попробуй чуть позже или выбери другую модель в Secret AI.", "The model is overloaded or its provider's limit is reached. Try later or pick another model in Secret AI."
-    elif isinstance(error, (AuthenticationError, NotFoundError, PermissionDeniedError)):
-        ru, en = "Выбранная модель недоступна на ключе бота. Выбери другую модель в Secret AI.", "The chosen model isn't available on the bot's key. Pick another model in Secret AI."
+    elif isinstance(error, AuthenticationError):
+        ru, en = "Сервис ИИ отклонил ключ доступа. Администратору нужно проверить подключение.", "The AI service rejected the access key. The administrator needs to check the connection."
+    elif isinstance(error, PermissionDeniedError):
+        ru, en = "У ключа бота нет доступа к выбранной модели. Администратору нужно проверить права в сервисе.", "The bot's key has no access to this model. The administrator needs to check provider permissions."
+    elif isinstance(error, NotFoundError):
+        ru, en = "Сервис ИИ не нашёл выбранную модель или адрес API. Администратору нужно проверить настройки.", "The AI service could not find the model or API route. The administrator needs to check the settings."
     elif isinstance(error, BadRequestError):
         ru, en = "Модель отклонила запрос. Попробуй написать текстом или прислать другое фото/голосовое.", "The model rejected the request. Try text or different media."
     elif isinstance(error, APIConnectionError):
