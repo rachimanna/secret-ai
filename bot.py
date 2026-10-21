@@ -44,7 +44,7 @@ from fun import LEVELS, GroupStore, ago, MemeError, demotivator, quote_card, tik
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError
 from telegram.ext import (Application, ApplicationHandlerStop, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
-                          PreCheckoutQueryHandler, TypeHandler, filters)
+                          PreCheckoutQueryHandler, InlineQueryHandler, TypeHandler, filters)
 
 import codex
 import cursor
@@ -53,6 +53,7 @@ import digest
 import docreader
 import workbench
 import workbench_ui
+import inline_ai
 import chatserial
 import music
 import game
@@ -1879,6 +1880,8 @@ async def test_gate(update, context):
     try:
         if update.pre_checkout_query:
             await update.pre_checkout_query.answer(ok=False, error_message=text)
+        elif update.inline_query:
+            await update.inline_query.answer([], cache_time=0, is_personal=True)
         elif update.callback_query:
             await update.callback_query.answer(text, show_alert=True)
         elif update.effective_chat and update.effective_message:
@@ -1934,6 +1937,25 @@ async def authorized(update, context):
     return True
 
 
+async def inline_help(update, context):
+    if not await authorized(update, context):
+        return
+    username = context.bot.username
+    text = (f"Помощник в любых чатах Telegram\n\nВ поле сообщения напиши @{username} и текст. "
+            "Выбери перевод, исправленный текст, сокращение или вариант ответа — выбранный результат отправится в чат.\n\n"
+            f"Можно сразу задать действие:\n@{username} перевести Guten Morgen\n"
+            f"@{username} исправить Я севодня приду\n@{username} сократить длинный текст\n"
+            f"@{username} ответить Ты придёшь сегодня?\n\n"
+            "Перевод по умолчанию: на русский, а с русского — на английский; другой язык укажи в тексте. "
+            "Передаётся только набранный текст: история лички, файлы и сообщения собеседника не используются. "
+            "До 256 символов. Генерация занимает несколько секунд; если нет результата, повтори запрос.\n\n"
+            "Если Telegram не показывает варианты: владелец должен включить /setinline в @BotFather, "
+            "выбрать этого бота и задать подсказку «Напиши текст: перевод, правки, кратко, ответ».")
+    await send(update.effective_message, text, InlineKeyboardMarkup([[
+        InlineKeyboardButton("Попробовать в другом чате", switch_inline_query=""),
+        InlineKeyboardButton("Попробовать здесь", switch_inline_query_current_chat="")]]))
+
+
 async def workbench_authorized(update, context):
     # A group's workbench only contains that user's files from this group.
     if update.effective_chat and update.effective_chat.type in GROUP_TYPES:
@@ -1944,6 +1966,7 @@ async def workbench_authorized(update, context):
 
 
 HELP_RU = (
+    "Помощник в любых чатах: /inline — перевод, правки, сокращение и варианты ответа через @имя_бота текст.\n\n"
     "Владельцу: /apistatus — проверить ключи и каталог моделей без раскрытия секретов; /speed — реальный тест ответа.\n\n"
     "Проекты и файлы: /project, /files, /find, /compare, /report, /diagnose. /project help — инструкции.\n\n"
     "Документы: отправь PDF, DOCX, XLSX, PPTX, текст/код, ZIP, APK или IPA до 19 МБ с вопросом. "
@@ -1993,6 +2016,9 @@ HELP_EN = (
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await authorized(update, context):
+        return
+    if context.args and context.args[0] == "inline":
+        await inline_help(update, context)
         return
     store, user_id = context.bot_data["connections"], update.effective_user.id
     if not store.get_meta(f"welcomed:{user_id}"):
@@ -6351,6 +6377,9 @@ def main():
     app.add_handler(TypeHandler(Update, stop_generation, block=False), group=-2)
     app.add_handler(BusinessConnectionHandler(business_connection))
     app.add_handler(MessageHandler(filters.UpdateType.BUSINESS_MESSAGES, business_message))
+    inline_assistant = inline_ai.InlineAssistant(SimpleNamespace(quick_answer=quick_answer, test_mode=test_mode))
+    app.add_handler(InlineQueryHandler(inline_assistant.handle))
+    app.add_handler(CommandHandler("inline", inline_help))
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler(["secretary", "sekretar"], secretary_command))
     app.add_handler(CommandHandler(["voice", "golos"], voice_command))
@@ -6404,7 +6433,7 @@ def main():
     thread.start()
     try:
         app.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query", "business_connection", "business_message",
-                                        "stopped_message_generation"], drop_pending_updates=False, bootstrap_retries=3)
+                                        "stopped_message_generation", "inline_query"], drop_pending_updates=False, bootstrap_retries=3)
     finally:
         server.shutdown()
         server.server_close()
