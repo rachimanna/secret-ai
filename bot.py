@@ -54,6 +54,7 @@ import docreader
 import workbench
 import workbench_ui
 import inline_ai
+import reply_context
 import chatserial
 import music
 import game
@@ -1759,8 +1760,9 @@ async def generate(context, live, toolbox=None, **request):
     if chat_provider(request["model"]):
         answer, incomplete = await chat_answer(context, live, request, toolbox)
         return await continue_answer(context, live, request, answer, incomplete)
+    no_web = request.pop("no_web", False)
     tools = list(toolbox.definitions()) if toolbox else []
-    if context.bot_data.get("web_search"):
+    if context.bot_data.get("web_search") and not no_web:
         tools.append({"type": "web_search"})
     if tools:
         # store=False: reasoning must travel with the tool calls we send back.
@@ -1966,6 +1968,7 @@ async def workbench_authorized(update, context):
 
 
 HELP_RU = (
+    "Ответь реплаем на нужное сообщение или выдели цитату и напиши «сократи», «переведи», «исправь» — изменю выбранный текст.\n\n"
     "Помощник в любых чатах: /inline — перевод, правки, сокращение и варианты ответа через @имя_бота текст.\n\n"
     "Владельцу: /apistatus — проверить ключи и каталог моделей без раскрытия секретов; /speed — реальный тест ответа.\n\n"
     "Проекты и файлы: /project, /files, /find, /compare, /report, /diagnose. /project help — инструкции.\n\n"
@@ -2794,6 +2797,10 @@ async def read_question(update, context):
     if is_document_file(message.document):
         return await document_question(update, context, message.document)
     parent = message.reply_to_message
+    if message.text and not message.photo:
+        focused = reply_context.prepare(message, message.text)
+        if focused:
+            return focused
     if message.text and parent and is_document_file(parent.document):
         return await document_question(update, context, parent.document)
     space = context.bot_data["memory"].workbench
@@ -2802,8 +2809,7 @@ async def read_question(update, context):
         if content:
             project = space.project(update.effective_user.id, update.effective_chat.id)
             return message.text, content, f"[Project #{project['id']} {project['name']}] {message.text}"
-    if message.text and (docreader.REFERENCE.search(message.text) or
-                         (parent and parent.from_user and parent.from_user.is_bot)):
+    if message.text and not parent and docreader.REFERENCE.search(message.text):
         result = context.bot_data["memory"].document(update.effective_user.id, update.effective_chat.id)
         if result:
             return message.text, docreader.prompt(result, message.text), f"[Attachment: {result['name']}] {message.text}"
@@ -2824,6 +2830,10 @@ async def read_question(update, context):
             return None
         await status.delete()  # the answer comes as a voice message; no transcript bubble in between
         question = transcript if not message.caption else f"{message.caption}\n\n{transcript}"
+    if media:
+        focused = reply_context.prepare(message, question)
+        if focused:
+            return focused
     image = message.photo[-1] if message.photo else message.document
     if image:
         if (image.file_size or 0) > 19_000_000:
@@ -3053,6 +3063,7 @@ def is_greeting(text):
 async def respond(update, context, target, content, saved_question, voice=False):
     """Answer in the chat; voice=True (the user sent a voice message) also sends the answer as a voice message."""
     user_id = update.effective_user.id
+    scoped_reply = isinstance(content, reply_context.Prompt)
     if not models_for(context.bot_data, user_id):
         await send(target, ui(update, *error_text(NoModels())))
         return
@@ -3069,14 +3080,14 @@ async def respond(update, context, target, content, saved_question, voice=False)
     try:
         prepared = time.monotonic()
         document_turn = isinstance(content, str) and docreader.MARKER in content
-        use_apps = not document_turn and wants_apps(context.bot_data, user_id, saved_question)
+        use_apps = not scoped_reply and not document_turn and wants_apps(context.bot_data, user_id, saved_question)
         apps = ([], [])
         if use_apps:
             taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
             _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
                                            app_tools(context.bot_data, user_id, taken))
             context.bot_data.setdefault("app_names", {})[user_id] = list(apps[1])
-        if not document_turn and apps_named(context.bot_data, user_id, saved_question):
+        if not scoped_reply and not document_turn and apps_named(context.bot_data, user_id, saved_question):
             context.bot_data.setdefault("apps_until", {})[user_id] = time.monotonic() + APPS_FOLLOW_UP
         LOG.info("Prepared in %.1f s (apps %s)", time.monotonic() - prepared, "loaded" if use_apps else "skipped")
     except BaseException:
@@ -3096,16 +3107,20 @@ async def respond(update, context, target, content, saved_question, voice=False)
         if error:
             return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
         return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
-    toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
-                      apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
-                                                     edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)])
-    if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
-        toolbox.mcp = []
-    greeting = persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
+    toolbox = None
+    if not scoped_reply:
+        toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
+                          apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
+                                                         edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)])
+        if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
+            toolbox.mcp = []
+    greeting = not scoped_reply and persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
     accent = "" if persona is PERSONAS["translator"] else ACCENT
     rules = "" if greeting else TRANSLATION_RULES + CODE_RULES
     instructions = (SYSTEM + now_note() + accent + rules + (" " + persona[3] if persona[3] else "") + " Telegram language: "
                     + (update.effective_user.language_code or "ru"))
+    if scoped_reply:
+        instructions += reply_context.RULES
     if greeting:
         instructions += " This is a simple greeting: reply naturally in one or two short sentences."
     speak_only = voice and bool(context.bot_data.get("tts_model"))
@@ -3115,17 +3130,17 @@ async def respond(update, context, target, content, saved_question, voice=False)
     model = user_model(context.bot_data, user_id)
     # Gateway small talk skips tool definitions and unnecessary app handshakes.
     slow_gateway = bool(model) and bool(chat_provider(model))
-    light = slow_gateway and not use_apps and not needs_tools(saved_question)
+    light = scoped_reply or (slow_gateway and not use_apps and not needs_tools(saved_question))
     if not light and toolbox.instructions():
         instructions += " " + toolbox.instructions()
-    history = memory.history(user_id, limit=6) if greeting else memory.history(user_id)
+    history = [] if scoped_reply else memory.history(user_id, limit=6) if greeting else memory.history(user_id)
     history_limit = 2400 if greeting else ANYMODEL_HISTORY_CHARS if model.startswith(ANYMODEL_PREFIX) else None
     shown = fit_history(history, history_limit)
     if shown:  # everything older than what the model reads comes back by search when the talk touches it
         oldest = history[len(history) - len(shown)]["id"]
     else:
         oldest = history[-1]["id"] + 1 if history else None
-    if not greeting:
+    if not greeting and not scoped_reply:
         instructions += recall_note(memory.recall(user_id, saved_question, oldest))
     price = context.bot_data.get("premium", {}).get(model)
     if price and context.bot_data["connections"].get_meta("owner") == user_id:
@@ -3143,7 +3158,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
                     context, live, toolbox, model=attempt, instructions=instructions,
                     input=shown + [{"role": "user", "content": content}],
                     store=False, max_output_tokens=1024 if greeting else 32000,
-                    light=light and bool(chat_provider(attempt))))
+                    light=scoped_reply or (light and bool(chat_provider(attempt)))))
                 break
             except MODEL_ERRORS as exc:
                 LOG.warning("Model %s failed: %s %s", attempt, type(exc).__name__, str(exc)[:300])
@@ -3169,7 +3184,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
         raise
     answer = keep_language(clean_chat_text(drop_accent(answer.strip())), saved_question)
-    if not answer and toolbox.proposals:
+    if not answer and toolbox and toolbox.proposals:
         answer = ui(update, "Подготовил изменения — проверьте и подтвердите ниже.", "Changes are ready — review and confirm below.")
     if not answer:
         if paid:
@@ -3184,7 +3199,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         answer = ui(update, f"⚠️ {swapped[0]} сейчас не отвечает, ответил {swapped[1]}.{free}\n\n",
                     f"⚠️ {swapped[0]} isn't answering right now, {swapped[1]} answered.{free}\n\n") + answer
     text, files = extract_files(answer)
-    if speak_only and not files and not toolbox.proposals:
+    if speak_only and not files and not (toolbox and toolbox.proposals):
         await live.stop()
         try:
             await asyncio.wait_for(speak(context, target, text), VOICE_TIMEOUT)
@@ -3202,7 +3217,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
         tasks = context.bot_data.setdefault("voice_tasks", set())
         tasks.add(task)
         task.add_done_callback(tasks.discard)
-    await show_proposals(update, context, toolbox, target)
+    if toolbox:
+        await show_proposals(update, context, toolbox, target)
 
 
 async def send_files(update, context, target, files):
@@ -3407,7 +3423,7 @@ async def group_chat(update, context):
     if message.sticker and data.get("vision_model"):
         # Looked at once (updates run in parallel, so nobody waits): the answer and the chat's history know what it is.
         await see_sticker(context, message.sticker)
-    if await music.handle_text(update, context):
+    if reply_context.target(message) is None and await music.handle_text(update, context):
         remember_group_message(store, message, name)
         return
     if not data.get("models") and addressed_to_bot(message, context.bot, data):
@@ -3438,11 +3454,11 @@ async def group_chat(update, context):
                 LOG.warning("Group surprise failed: %s", type(exc).__name__)
         return
     async with data.setdefault("group_slots", {}).setdefault(chat_id, asyncio.Semaphore(GROUP_PARALLEL)):
-        if await group_generation(update, context):
+        if reply_context.target(message) is None and await group_generation(update, context):
             return
-        if await meme_request(update, context):
+        if reply_context.target(message) is None and await meme_request(update, context):
             return
-        if game.GAME_ASK.search(message.text or "") and len(message.text or "") < 120:
+        if reply_context.target(message) is None and game.GAME_ASK.search(message.text or "") and len(message.text or "") < 120:
             await quiz(context).open_lobby(context.bot, message, user, name)
             return
         readable = (message.text or message.caption or message.voice or message.audio or message.video_note or message.photo
@@ -3455,13 +3471,15 @@ async def group_chat(update, context):
             question, content, _ = parsed
         else:  # a sticker, gif or video in reply to the bot
             question = content = describe_message(message) or "…"
-        before = "\n".join(store.lines(chat_id))
-        older = store.search(chat_id, question)  # from everything kept: the old messages this one is about
+        scoped_reply = isinstance(content, reply_context.Prompt)
+        before = "" if scoped_reply else "\n".join(store.lines(chat_id))
+        older = [] if scoped_reply else store.search(chat_id, question)  # from everything kept: the old messages this one is about
         store.add_line(chat_id, f"{name}: {question}", message.message_id, user.id)
         head = ((f"From this group's older history (beyond the recent messages; you remember it — bring it up naturally when it matters, never say you searched), oldest first:\n" + "\n".join(older) + "\n\n"
                  if older else "")
                 + (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:")
-        content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
+        if not scoped_reply:
+            content = ([{"type": "input_text", "text": head}] + content if isinstance(content, list) else f"{head}\n{content}")
         data["group_spoke"][chat_id] = time.monotonic()
         await group_respond(update, context, message, content, voice=bool(message.voice or message.video_note))
 
@@ -3603,20 +3621,26 @@ async def group_respond(update, context, message, content, voice=False):
         model = group_model(data, message.chat_id)
         if is_abacus(model) and MEDIA_TALK.search(str(content)):
             model = data["model"]  # the media tool needs function calls, which the Abacus path doesn't do
-        answer, _ = await generate(context, live, GroupTools(update, context, message), model=model,
-                                   instructions=group_instructions(update) + (" For this document question, give a complete useful analysis with locations and fixes, overriding the usual one-line chat style."
-                                                                           if isinstance(content, str) and docreader.MARKER in content else "")
-                                   + gen_status(data, message.chat_id)
-                                   + memory_notes(data, update.effective_user.id, speaker(update.effective_user))
-                                   + " Save lasting facts about the person writing with the remember tool." + (
-                                       " This person sent a voice message: your answer will be read aloud, so talk like "
-                                       "in a live chat, 1-3 short sentences, no lists, no links, no emoji." if voice else ""),
-                                   input=[{"role": "user", "content": content}], store=False, max_output_tokens=32000)
+        scoped_reply = isinstance(content, reply_context.Prompt)
+        instructions = (SYSTEM + now_note() + TRANSLATION_RULES + CODE_RULES + reply_context.RULES
+                        if scoped_reply else group_instructions(update)
+                        + (" For this document question, give a complete useful analysis with locations and fixes, overriding the usual one-line chat style."
+                           if isinstance(content, str) and docreader.MARKER in content else "")
+                        + gen_status(data, message.chat_id)
+                        + memory_notes(data, update.effective_user.id, speaker(update.effective_user))
+                        + " Save lasting facts about the person writing with the remember tool.")
+        if voice:
+            instructions += (" This person sent a voice message: your answer will be read aloud, so talk like "
+                             "in a live chat, no links, no emoji.")
+        answer, _ = await generate(context, live, None if scoped_reply else GroupTools(update, context, message),
+                                   model=model, instructions=instructions,
+                                   light=scoped_reply, input=[{"role": "user", "content": content}],
+                                   store=False, max_output_tokens=32000)
     except BaseException:
         await live.abort(None)
         raise
     text, files = extract_files(answer.strip())
-    if not files:
+    if not files and not scoped_reply:
         text = humanize(text)
     if not text and not files:
         await live.abort(None)
@@ -5145,7 +5169,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if message.text and await secretary_switch(update, context, message.text):
         return
-    if await music.handle_text(update, context):
+    if reply_context.target(message) is None and await music.handle_text(update, context):
         return
     if not models_for(context.bot_data, update.effective_user.id):
         await refresh_chat_models(context.bot_data)
