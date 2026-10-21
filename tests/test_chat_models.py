@@ -180,6 +180,25 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data['connections'].get_meta('confirmed_chat_models:reformboss'), ['reformboss:grok-4.7-fast'])
         self.assertEqual(data['connections'].get_meta('confirmed_chat_models:anymodel_chat'), ['anymodel:x-ai/grok-4.7-fast'])
 
+    async def test_observed_anymodel_catalog_recovers_with_reformboss_unauthorized(self):
+        ids = ['gcli/grok-4.7', 'xai/grok-4.6', 'xai/grok-imagine-image',
+               'xai/grok-4.7', 'xai/grok-4.20-0309-reasoning']
+        failed = gateway([])
+        response = httpx.Response(401, request=httpx.Request('GET', 'https://provider.test/models'))
+        failed.models.list.side_effect = AuthenticationError('invalid key', response=response, body={})
+        store = Store(default_pick='old', default_model='reformboss:grok-4.7-fast')
+        data = dict(anymodel_chat=gateway(ids), reformboss=failed, connections=store)
+        await bot.discover_models(NS(bot_data=data))
+        model = 'anymodel:xai/grok-4.7'
+        self.assertEqual(data['models'], [model])
+        self.assertEqual(data['fallbacks'], [model])
+        self.assertEqual(data['chat_default'], model)
+        self.assertEqual(store.get_meta('default_model'), model)
+        create = AsyncMock(return_value=NS(choices=[NS(message=NS(content='Привет'))]))
+        data['anymodel_chat'].chat = NS(completions=NS(create=create))
+        self.assertEqual(await bot.quick_answer_once(data, model, 'Be helpful', 'Привет', 2000), 'Привет')
+        self.assertEqual(create.call_args.kwargs['model'], 'xai/grok-4.7')
+
     async def test_anymodel_works_when_reformboss_client_is_absent(self):
         data = dict(anymodel_chat=gateway(['grok-4.7-fast']))
         self.assertTrue(await bot.refresh_chat_models(data))
