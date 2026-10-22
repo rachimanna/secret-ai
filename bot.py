@@ -55,6 +55,8 @@ import workbench
 import workbench_ui
 import inline_ai
 import reply_context
+import daily
+import daily_ui
 import chatserial
 import music
 import game
@@ -291,6 +293,7 @@ class Memory:
                         "PRIMARY KEY (code, user_id))")
         self.db.commit()
         self.workbench = workbench.Store(self.db)
+        self.daily = daily.Store(self.db)
 
     def history(self, user_id, limit=HISTORY_LIMIT):
         rows = self.db.execute("SELECT id, role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, limit)).fetchall()
@@ -385,6 +388,7 @@ class Memory:
             self.db.execute("DELETE FROM facts WHERE user_id=?", (user_id,))
             self.db.execute("DELETE FROM file_context WHERE user_id=?", (user_id,))
         self.workbench.reset(user_id)
+        self.daily.reset(user_id)
 
     def persona(self, user_id):
         row = self.db.execute("SELECT persona FROM settings WHERE user_id=?", (user_id,)).fetchone()
@@ -1968,6 +1972,7 @@ async def workbench_authorized(update, context):
 
 
 HELP_RU = (
+    "Мой день: /life — дела из сообщений, /tasks — задачи, /plan — план, /review — итоги, /routine — ежедневные сообщения.\n\n"
     "Ответь реплаем на нужное сообщение или выдели цитату и напиши «сократи», «переведи», «исправь» — изменю выбранный текст.\n\n"
     "Помощник в любых чатах: /inline — перевод, правки, сокращение и варианты ответа через @имя_бота текст.\n\n"
     "Владельцу: /apistatus — проверить ключи и каталог моделей без раскрытия секретов; /speed — реальный тест ответа.\n\n"
@@ -2198,7 +2203,7 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await authorized(update, context):
         async with user_lock(context, update.effective_user.id):
             context.bot_data["memory"].reset(update.effective_user.id)
-        await send(update.effective_message, ui(update, "🧹 Память очищена. Начнём новый диалог!", "🧹 Memory cleared. Let's start a new conversation!"))
+        await send(update.effective_message, ui(update, "🧹 Память, проекты, задачи и напоминания очищены. Начнём новый диалог!", "🧹 Memory, projects, tasks and reminders cleared. Let's start a new conversation!"))
 
 
 PROMO_TRIES = 8  # wrong codes a person may try per hour (no guessing codes by brute force)
@@ -2544,7 +2549,7 @@ async def wipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.bot_data["connections"].get_meta("owner") != update.effective_user.id:
         await send(update.effective_message, "Это может только владелец бота.")
         return
-    await send(update.effective_message, "⚠️ Стереть ВСЮ память бота: переписки всех людей, факты о людях и историю групп? "
+    await send(update.effective_message, "⚠️ Стереть ВСЮ память бота: переписки, факты, проекты, задачи, напоминания всех людей и историю групп? "
                "Это нельзя отменить.", InlineKeyboardMarkup([[InlineKeyboardButton("Да, стереть всё", callback_data="wipe:yes"),
                                                                InlineKeyboardButton("Отмена", callback_data="wipe:no")]]))
 
@@ -2556,6 +2561,8 @@ def wipe_all(data):
         memory.db.execute("DELETE FROM facts")
         memory.db.execute("DELETE FROM file_context")
     memory.workbench.reset()
+    if getattr(memory, "daily", None):
+        memory.daily.reset()
     with groups.db:
         groups.db.execute("DELETE FROM group_messages")
         groups.db.execute("DELETE FROM group_phrases")
@@ -2745,7 +2752,7 @@ def is_document_file(document):
     return bool(document and not (document.mime_type or "").startswith("image/"))
 
 
-async def document_question(update, context, document):
+async def document_question(update, context, document, save=True):
     message = update.effective_message
     status = await reply(message, ui(update, "Читаю файл…", "Reading the file…"))
     try:
@@ -2779,6 +2786,11 @@ async def document_question(update, context, document):
         await status.delete()
     except TelegramError:
         pass
+    if not save:
+        question = message.text or message.caption or ui(update,
+            "Сохрани содержимое файла и выдели связанные с ним дела и следующие шаги.",
+            "Save the file contents and identify related tasks and next steps.")
+        return question, docreader.prompt(result, question), f"[Attachment: {result['name']}] {question}"
     try:
         item = context.bot_data["memory"].save_document(update.effective_user.id, update.effective_chat.id, result)
     except workbench.WorkspaceError as exc:
@@ -2791,10 +2803,12 @@ async def document_question(update, context, document):
     return question, docreader.prompt(result, question), saved
 
 
-async def read_question(update, context):
+async def read_question(update, context, daily_input=False):
     """Return (question, model content, text to remember) or None if nothing to answer."""
     message = update.effective_message
     if is_document_file(message.document):
+        if daily_input:
+            return await document_question(update, context, message.document, save=False)
         return await document_question(update, context, message.document)
     parent = message.reply_to_message
     if message.text and not message.photo:
@@ -2802,14 +2816,16 @@ async def read_question(update, context):
         if focused:
             return focused
     if message.text and parent and is_document_file(parent.document):
+        if daily_input:
+            return await document_question(update, context, parent.document, save=False)
         return await document_question(update, context, parent.document)
     space = context.bot_data["memory"].workbench
-    if message.text and space.project(update.effective_user.id, update.effective_chat.id) and not is_greeting(message.text):
+    if not daily_input and message.text and space.project(update.effective_user.id, update.effective_chat.id) and not is_greeting(message.text):
         content = space.context(update.effective_user.id, update.effective_chat.id, message.text)
         if content:
             project = space.project(update.effective_user.id, update.effective_chat.id)
             return message.text, content, f"[Project #{project['id']} {project['name']}] {message.text}"
-    if message.text and not parent and docreader.REFERENCE.search(message.text):
+    if not daily_input and message.text and not parent and docreader.REFERENCE.search(message.text):
         result = context.bot_data["memory"].document(update.effective_user.id, update.effective_chat.id)
         if result:
             return message.text, docreader.prompt(result, message.text), f"[Attachment: {result['name']}] {message.text}"
@@ -2845,7 +2861,7 @@ async def read_question(update, context):
         content = [{"type": "input_text", "text": question}, {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}"}]
         return question, content, PHOTO_MARKER + question
     url = links.find(question)
-    if url:  # a TikTok link: watch it first, then answer about it
+    if url and not daily_input:  # a TikTok link: watch it first, then answer about it
         return await read_tiktok(update, context, question, url)
     return question, question, question
 
@@ -3745,7 +3761,7 @@ async def quick_answer_once(data, model, instructions, text, max_tokens=2000):
         async with gateway_slot(model):
             response = await chat_completion(data, model, data[CHAT_PROVIDERS[provider]],
                 model=model[len(provider):], max_tokens=max_tokens,
-                messages=[{"role": "system", "content": instructions + model_identity(model)}, {"role": "user", "content": text}])
+                messages=chat_messages(instructions + model_identity(model), [{"role": "user", "content": text}]))
         message = response.choices[0].message if response.choices else None
         content = getattr(message, "content", None)
         if isinstance(content, list):
@@ -5167,6 +5183,10 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if message.text and await promo_typed(update, context):
         return
+    daily_controls = context.bot_data.get("daily_controls")
+    if daily_controls and daily_controls.should_handle(update, context):
+        await daily_controls.guarded(daily_controls.route)(update, context)
+        return
     if message.text and await secretary_switch(update, context, message.text):
         return
     if reply_context.target(message) is None and await music.handle_text(update, context):
@@ -5551,9 +5571,9 @@ def error_text(error):
 
 
 COMMANDS = {
-    "ru": [("project", "Проекты и файлы"), ("files", "Мои документы"), ("find", "Поиск по документам"), ("compare", "Сравнить файлы"), ("report", "Отчёт в Word"), ("diagnose", "Разобрать ошибки"), ("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
+    "ru": [("life", "Мой день: дела из сообщений"), ("tasks", "Мои задачи"), ("plan", "План дня"), ("review", "Итоги дня"), ("inbox", "Собрать входящие"), ("project", "Проекты и файлы"), ("files", "Мои документы"), ("find", "Поиск по документам"), ("compare", "Сравнить файлы"), ("report", "Отчёт в Word"), ("diagnose", "Разобрать ошибки"), ("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
            ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
-    "en": [("project", "Projects and files"), ("files", "My documents"), ("find", "Search documents"), ("compare", "Compare files"), ("report", "Word report"), ("diagnose", "Diagnose errors"), ("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
+    "en": [("life", "My day assistant"), ("tasks", "My tasks"), ("plan", "Daily plan"), ("review", "Daily review"), ("inbox", "Collect inbox"), ("project", "Projects and files"), ("files", "My documents"), ("find", "Search documents"), ("compare", "Compare files"), ("report", "Word report"), ("diagnose", "Diagnose errors"), ("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
            ("export", "Download history"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
@@ -5615,6 +5635,8 @@ async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
+    if app.bot_data.get("daily_controls"):
+        app.bot_data["daily_task"] = asyncio.create_task(app.bot_data["daily_controls"].run(app))
     app.bot_data["welcome_task"] = asyncio.create_task(make_welcome(app))
     app.bot_data["digest_task"] = asyncio.create_task(day_digest(app.bot_data).run(app))  # 22:00 Moscow, every group
     if app.bot_data.get("snapshots"):
@@ -6439,6 +6461,11 @@ def main():
     workbench_ui.Controls(SimpleNamespace(
         authorized=workbench_authorized, user_lock=user_lock, counted=counted, send=send, reply=reply,
         ui=ui, error_text=error_text, user_model=user_model, quick_answer=quick_answer)).register(app)
+    daily_controls = daily_ui.Controls(SimpleNamespace(
+        authorized=authorized, user_lock=user_lock, counted=counted, send=send,
+        quick_answer=quick_answer, read_question=read_question, lookup=web_lookup, test_mode=test_mode))
+    app.bot_data["daily_controls"] = daily_controls
+    daily_controls.register(app)
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
