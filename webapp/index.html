@@ -799,6 +799,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
 
 .paid { background:var(--brand-soft);color:var(--accent); }
 </style>
+<link rel="stylesheet" href="/play.css?v=1">
 </head>
 <body data-tab="agent">
 <header class="app-header"><button class="app-brand" id="brand-home" aria-label="Secret AI — главная"><span class="brand-mark" id="brand-mark"></span><span>Secret AI<small>Твоё пространство</small></span></button><div class="header-actions"><button class="icon-button" id="appearance-button" aria-label="Тема оформления"></button><button class="account-button" id="account-button" aria-label="Профиль">S</button></div></header>
@@ -934,6 +935,8 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
 <script type="application/json" id="tpl-data">__TEMPLATES__</script>
 <script type="application/json" id="apps-data">__APPS__</script>
 
+<script src="/play-core.js?v=1"></script>
+<script src="/play-ui.js?v=1"></script>
 <script>
 let appearanceChoice = "system";
 try { appearanceChoice = localStorage.getItem("secret-appearance") || "system"; } catch {}
@@ -2554,6 +2557,7 @@ async function clearMemory() {
 /* ---------------- tabs ---------------- */
 const TABS = ["agent", "discover", "codex", "gen", "settings"];  // the apps page has no tab: it opens from the agent tab
 function switchTab(tab) {
+  window.SecretPlay?.leave();
   if (document.body.dataset.tab === tab) {
     if (tab === "codex") $("cx-thread")?.scrollTo({ top: 0, behavior: "smooth" });
     else window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2940,8 +2944,8 @@ function botDestination(parameter='day') {
 function renderHomeActions() {
   const actions=lang==='ru' ? [
     ['💬','Новый разговор','Начни с любой мысли','chat'],['🎨','Создать','Фото, видео и обработка','gen'],
-    ['✅','Мой день','Дела и следующие шаги','day'],['🎮','Вместе интереснее','Игры, мемы и истории','games'],
-  ] : [['💬','New conversation','Start with an idea','chat'],['🎨','Create something','Photos, videos and edits','gen'],['✅','My day','Tasks and next steps','day'],['🎮','Better together','Games, memes and stories','games']];
+    ['✅','Мой день','Дела и следующие шаги','day'],['🎮','Игры','Память, логика и испытание дня','games'],
+  ] : [['💬','New conversation','Start with an idea','chat'],['🎨','Create something','Photos, videos and edits','gen'],['✅','My day','Tasks and next steps','day'],['🎮','Games','Memory, logic and a daily challenge','games']];
   $('home-actions').innerHTML=actions.map(([icon,title,sub,action],i)=>`<button class="action-card press ${i===0?'primary':''}" data-home-action="${action}"><span class="action-icon">${lineIcon(icon)}</span><b>${title}</b><small>${sub}</small></button>`).join('');
   $('home-actions').querySelectorAll('[data-home-action]').forEach(b=>b.onclick=()=>b.dataset.homeAction==='chat'?newConversation():switchTab(b.dataset.homeAction));
   if(state?.user?.first_name)$('account-button').textContent=Array.from(state.user.first_name)[0].toLocaleUpperCase();
@@ -2963,11 +2967,14 @@ function renderRecentChats() {
 }
 function renderGames() {
   const copy=lang==='ru'?[
-    ['🎮','Викторина для всех','Соберите компанию, отвечайте на вопросы и поднимайтесь в рейтинге. Бот ведёт игру прямо в группе.','Начать с группой'],
+    ['🎮','Викторина для всех','Классика, быстрый блиц или игра на точность. Выбирайте тему, собирайте компанию и поднимайтесь в рейтинге.','Начать с группой'],
     ['🎬','Ваш собственный сериал','Ваша переписка становится сюжетом. Внутренние шутки, знакомые герои и новая история.','Выбрать группу'],
     ['💬','Мемы и цитаты','Демотиваторы, карточки с цитатами и мемы из видео — для своих, с вашим контекстом.','Открыть в группе'],
-  ]:[['🎮','A quiz for everyone','Gather your group, answer questions and climb the leaderboard. The bot hosts the game in Telegram.','Start with a group'],['🎬','Your own chat series','Familiar characters, inside jokes and a story inspired by your group.','Choose a group'],['💬','Memes and quotes','Quote cards, demotivators and video memes made for your group.','Open in a group']];
-  $('games-content').innerHTML=`<div class="game-grid">${copy.map(([icon,title,sub,label],i)=>`<article class="game-card ${i===0?'featured':''}"><div class="game-art">${lineIcon(icon)}</div><p class="eyebrow">${i===0?'SECRET AI PLAY':'SECRET AI'}</p><h2>${title}</h2><p>${sub}</p><button class="btn" data-group-activity="${i}">${label}</button></article>`).join('')}</div><div class="section"><div class="section-heading"><h2>${lang==='ru'?'Ваши группы':'Your groups'}</h2></div><div class="list">${(state?.groups||[]).length?state.groups.map((g,i)=>`<button class="row" data-manage-group="${i}"><div class="ic sym">${lineIcon('💬')}</div><div class="body"><div class="t">${esc(g.title)}</div><div class="d">${T.levels[g.level]||''}</div></div>${ICON.chev}</button>`).join(''):`<div class="empty">${lang==='ru'?'Добавь бота в группу, чтобы начать.':'Add the bot to your group to get started.'}</div>`}</div></div>`;
+  ]:[['🎮','A quiz for everyone','Classic, fast blitz or accuracy mode. Pick a topic, gather your group and climb the leaderboard.','Start with a group'],['🎬','Your own chat series','Familiar characters, inside jokes and a story inspired by your group.','Choose a group'],['💬','Memes and quotes','Quote cards, demotivators and video memes made for your group.','Open in a group']];
+  $('games-title').textContent=lang==='ru'?'Игры':'Games';
+  $('games-subtitle').textContent=lang==='ru'?'Для себя и для компании. Каждая партия — новая задача.':'Solo or together. A fresh challenge every game.';
+  $('games-content').innerHTML=`<div id="play-root"></div><h2 class="section-title">${lang==='ru'?'С компанией в Telegram':'Together in Telegram'}</h2><div class="game-grid">${copy.map(([icon,title,sub,label],i)=>`<article class="game-card ${i===0?'featured':''}"><div class="game-art">${lineIcon(icon)}</div><p class="eyebrow">${i===0?'SECRET AI PLAY':'SECRET AI'}</p><h2>${title}</h2><p>${sub}</p><button class="btn" data-group-activity="${i}">${label}</button></article>`).join('')}</div><div class="section"><div class="section-heading"><h2>${lang==='ru'?'Ваши группы':'Your groups'}</h2></div><div class="list">${(state?.groups||[]).length?state.groups.map((g,i)=>`<button class="row" data-manage-group="${i}"><div class="ic sym">${lineIcon('💬')}</div><div class="body"><div class="t">${esc(g.title)}</div><div class="d">${T.levels[g.level]||''}</div></div>${ICON.chev}</button>`).join(''):`<div class="empty">${lang==='ru'?'Добавь бота в группу, чтобы начать.':'Add the bot to your group to get started.'}</div>`}</div></div>`;
+  window.SecretPlay?.mount($('play-root'),{lang,userId:state?.user?.id});
   $('games-content').querySelectorAll('[data-group-activity]').forEach(b=>b.onclick=()=>{
     const n=+b.dataset.groupActivity;
     openSheet(`<div class="head"><h3>${copy[n][1]}</h3><p class="lead">${copy[n][2]}</p></div><p class="small">${lang==='ru'?'Добавь бота в группу. В группе открой меню команд и выбери викторину, /serial или /meme. Доступность роликов зависит от подключённых сервисов.':'Add the bot to a group, then open its command menu and choose the quiz, /serial or /meme. Video availability depends on connected services.'}</p><button class="btn" id="activity-add">${lang==='ru'?'Добавить в группу':'Add to a group'}</button>`);
