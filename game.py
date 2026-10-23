@@ -8,6 +8,7 @@ import json
 import logging
 import random
 import re
+import secrets
 import time
 
 from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard, InputFile, InputMediaAnimation
@@ -44,6 +45,17 @@ QUESTIONS = 8
 ANSWER_SECONDS = 20
 REVEAL_PAUSE = 6
 LOBBY_SECONDS = 180
+MAX_PLAYERS = 20
+MODES = {
+    "classic": ("Классика", 8, 20, "8 вопросов · скорость и серии"),
+    "blitz": ("Блиц", 6, 10, "6 вопросов · 10 секунд на ответ"),
+    "calm": ("На точность", 8, 35, "8 вопросов · без бонуса за скорость"),
+}
+
+def points_for(mode, seconds, took, streak):
+    if mode == "calm":
+        return 1000
+    return 500 + int(500 * max(0.0, 1 - took / seconds)) // 10 * 10 + (200 if streak % 3 == 0 else 0)
 LETTERS = quizart.LETTERS
 FALLBACK = [
     ("Что из этого с точки зрения ботаники — ягода?", ["Банан", "Клубника", "Малина", "Вишня"], 0, "А клубника — «ложная ягода»: её настоящие плоды — это семечки снаружи."),
@@ -98,6 +110,8 @@ class Game:
         self.chat_id, self.host_id = chat_id, host_id
         self.players = {host_id: host_name}
         self.topic = "mix"
+        self.mode = "classic"
+        self.session = secrets.token_hex(4)
         self.state = "lobby"
         self.lobby_message = None
         self.questions = []
@@ -125,19 +139,25 @@ class Quiz:
                             "question TEXT NOT NULL)")
             self.db.execute("CREATE INDEX IF NOT EXISTS game_asked_chat ON game_asked(chat_id, id)")
 
+    async def _edit_lobby(self, game, text, **kwargs):
+        edit = game.lobby_message.edit_text if getattr(game.lobby_message, "text", None) else game.lobby_message.edit_caption
+        await edit(text, **kwargs)
+
     # ---------- lobby ----------
 
     def lobby_text(self, game):
         emoji, title = TOPICS[game.topic]
-        people = ", ".join(esc(name) for name in game.players.values())
-        return f"<b>🧠 Викторина</b> · {emoji} {esc(title)}\n👥 {people}\nОстановить — /{STOP}"
+        people = ", ".join(esc(name[:20]) for name in game.players.values())
+        return f"<b>Secret AI · Викторина</b> · {emoji} {esc(title)}\n{MODES[game.mode][0]} · {MODES[game.mode][3]}\n👥 {len(game.players)}/{MAX_PLAYERS}: {people}\nВедущий выбирает тему и режим. Остановить — /{STOP}"
 
     def lobby_keyboard(self, game):
-        topics = [Button(f"{'✅ ' if key == game.topic else ''}{emoji} {title}", callback_data=f"g:t:{key}")
+        topics = [Button(f"{'✅ ' if key == game.topic else ''}{emoji} {title}", callback_data=f"g:t:{key}:{game.session}")
                   for key, (emoji, title) in TOPICS.items()]
-        rows = [[Button("✋ Я играю", callback_data="g:j")]]
+        rows = [[Button("✋ Я играю", callback_data=f"g:j:{game.session}")]]
         rows += [topics[i:i + 2] for i in range(0, len(topics), 2)]
-        rows.append([Button("▶️ Начать", callback_data="g:s")])
+        rows.append([Button(("✓ " if mode == game.mode else "") + values[0], callback_data=f"g:m:{mode}:{game.session}")
+                     for mode, values in MODES.items()])
+        rows.append([Button("▶️ Начать", callback_data=f"g:s:{game.session}")])
         return Keyboard(rows)
 
     async def open_lobby(self, bot, message, user, name):
@@ -146,6 +166,11 @@ class Quiz:
         if current and current.state != "done" and time.monotonic() - current.created < 1800:
             await message.reply_text("Игра уже идёт — присоединяйтесь к ней 👆")
             return
+        if current:
+            current.state = "done"
+            for task in (current.task, current.render):
+                if task:
+                    task.cancel()
         game = self.games[chat_id] = Game(chat_id, user.id, name)
         caption, keyboard = self.lobby_text(game), self.lobby_keyboard(game)
         try:
@@ -155,8 +180,11 @@ class Quiz:
                                                           thumbnail=jpg(preview))
         except Exception as exc:
             LOG.warning("Quiz banner animation failed: %s", type(exc).__name__)
-            game.lobby_message = await bot.send_photo(chat_id, quizart.banner(), caption=caption, parse_mode="HTML",
-                                                      reply_markup=keyboard)
+            try:
+                banner = await asyncio.to_thread(quizart.banner)
+                game.lobby_message = await bot.send_photo(chat_id, banner, caption=caption, parse_mode="HTML", reply_markup=keyboard)
+            except Exception:
+                game.lobby_message = await bot.send_message(chat_id, caption, parse_mode="HTML", reply_markup=keyboard)
         game.task = asyncio.create_task(self._expire(game))
 
     async def _expire(self, game):
@@ -164,7 +192,7 @@ class Quiz:
         if game.state == "lobby" and self.games.get(game.chat_id) is game:
             game.state = "done"
             try:
-                await game.lobby_message.edit_caption("⌛ Викторина не началась — ведущий не нажал «Начать».")
+                await self._edit_lobby(game, "⌛ Викторина не началась — ведущий не нажал «Начать».")
             except Exception:
                 pass
 
@@ -183,7 +211,7 @@ class Quiz:
             game.render.cancel()
         if not started:
             try:
-                await game.lobby_message.edit_caption("Викторина отменена.")
+                await self._edit_lobby(game, "Викторина отменена.")
             except Exception:
                 pass
         return "⏹ Викторина остановлена" + (" — очки этой игры не считаются." if started else ".")
@@ -196,6 +224,10 @@ class Quiz:
         if not game or game.state == "done":
             await query.answer(f"Эта игра уже закончилась. Новая: /{START}")
             return
+        if len(parts) < 3 or parts[-1] != game.session:
+            await query.answer("Это кнопка старой партии. Используй новое сообщение с игрой.")
+            return
+        parts = parts[:-1]
         action = parts[1] if len(parts) > 1 else ""
         if action == "a":
             await self._answer(query, game, user, parts)
@@ -204,9 +236,15 @@ class Quiz:
             await query.answer("Игра уже началась — жди следующую 🙂" if action == "j" else None)
             return
         async with game.lock:
+            if game.state != "lobby":
+                await query.answer("Игра уже началась")
+                return
             if action == "j":
                 if user.id in game.players:
                     await query.answer("Ты уже в игре 👍")
+                    return
+                if len(game.players) >= MAX_PLAYERS:
+                    await query.answer("В этой партии уже 20 игроков. Присоединяйся к следующей.")
                     return
                 game.players[user.id] = name
                 await query.answer("Ты в игре! ✋")
@@ -216,6 +254,12 @@ class Quiz:
                     return
                 game.topic = parts[2]
                 await query.answer(TOPICS[game.topic][1])
+            elif action == "m" and len(parts) > 2 and parts[2] in MODES:
+                if user.id != game.host_id:
+                    await query.answer("Режим выбирает ведущий")
+                    return
+                game.mode = parts[2]
+                await query.answer(MODES[game.mode][3])
             elif action == "s":
                 if user.id != game.host_id:
                     await query.answer("Запускает ведущий")
@@ -230,7 +274,7 @@ class Quiz:
                 await query.answer()
                 return
             try:
-                await game.lobby_message.edit_caption(self.lobby_text(game), parse_mode="HTML",
+                await self._edit_lobby(game, self.lobby_text(game), parse_mode="HTML",
                                                       reply_markup=self.lobby_keyboard(game))
             except Exception as exc:  # "message is not modified" and the like
                 LOG.debug("Lobby update skipped: %s", exc)
@@ -241,10 +285,13 @@ class Quiz:
         except (IndexError, ValueError):
             await query.answer()
             return
+        if not 0 <= choice < 4 or not 0 <= number < len(game.questions):
+            await query.answer("Некорректный ответ")
+            return
         if user.id not in game.players:
             await query.answer("Ты не в этой игре 🙅 Нажми «Я играю», когда начнётся следующая.", show_alert=True)
             return
-        if game.state != "question" or number != game.index or not game.asked_at:
+        if game.state != "question" or number != game.index or not game.asked_at or time.monotonic() - game.asked_at >= MODES[game.mode][2]:
             await query.answer("Время на этот вопрос вышло ⏱")
             return
         if user.id in game.answers:
@@ -260,7 +307,7 @@ class Quiz:
     async def _play(self, bot, game):
         try:
             emoji, title = TOPICS[game.topic]
-            await game.lobby_message.edit_caption(
+            await self._edit_lobby(game,
                 f"<b>🧠 Викторина</b> · {emoji} {esc(title)}\n⏳ Готовлю вопросы…",
                 parse_mode="HTML")
             game.questions = await self._questions(game)
@@ -289,10 +336,10 @@ class Quiz:
     async def _render(self, game):
         """Draw the clips ahead of the game: (question clip, its preview, reveal clip, its preview), or None where
         drawing failed."""
-        title = TOPICS[game.topic][1]
+        title = TOPICS[game.topic][1] + " · " + MODES[game.mode][0]
         for number, (question, options, correct, _) in enumerate(game.questions):
             try:
-                art = quizart.QuestionArt(number + 1, len(game.questions), title, question, options, ANSWER_SECONDS)
+                art = quizart.QuestionArt(number + 1, len(game.questions), title, question, options, MODES[game.mode][2])
                 clips = await asyncio.to_thread(lambda: (art.question_clip(), art.question_thumb(),
                                                          art.reveal_clip(correct), art.reveal_thumb(correct)))
             except asyncio.CancelledError:
@@ -306,6 +353,7 @@ class Quiz:
     async def _ask(self, bot, game):
         question, options, correct, fact = game.questions[game.index]
         number, total = game.index + 1, len(game.questions)
+        seconds = MODES[game.mode][2]
         game.answers, game.answered, game.asked_at = {}, asyncio.Event(), 0.0
         self.mark_asked(game.chat_id, question)
         head = f"<b>Вопрос {number}/{total}</b> · {TOPICS[game.topic][0]} {esc(TOPICS[game.topic][1])}\n\n<b>{esc(question)}</b>\n\n"
@@ -314,13 +362,13 @@ class Quiz:
             count = f"ответили {len(game.answers)}/{len(game.players)}"
             if seconds_left is None:  # the animation has the timer; the question stays here too, readable without playing
                 return f"<b>{number}/{total}. {esc(question)}</b>\n{count}"
-            filled = round(10 * seconds_left / ANSWER_SECONDS)
+            filled = round(10 * seconds_left / seconds)
             return head + f"⏱ {'▰' * filled}{'▱' * (10 - filled)} {seconds_left} с · {count}"
 
-        keyboard = Keyboard([[Button(f"{LETTERS[i]}. {opt}"[:60], callback_data=f"g:a:{game.index}:{i}")]
+        keyboard = Keyboard([[Button(f"{LETTERS[i]}. {opt}"[:60], callback_data=f"g:a:{game.index}:{i}:{game.session}")]
                              for i, opt in enumerate(options)])
         try:
-            clips = await asyncio.wait_for(asyncio.shield(game.clips[game.index]), 40)
+            clips = await asyncio.wait_for(asyncio.shield(game.clips[game.index]), 4)
         except asyncio.TimeoutError:
             clips = None
         message = None
@@ -333,9 +381,10 @@ class Quiz:
                 LOG.warning("Quiz animation failed: %s", type(exc).__name__)
                 clips = None
         if not message:
-            message = await bot.send_message(game.chat_id, waiting(ANSWER_SECONDS), parse_mode="HTML", reply_markup=keyboard)
+            message = await bot.send_message(game.chat_id, waiting(seconds), parse_mode="HTML", reply_markup=keyboard)
         game.asked_at = time.monotonic()
-        deadline = game.asked_at + ANSWER_SECONDS
+        game.state = "question"
+        deadline = game.asked_at + seconds
         shown, step = 0, 3 if clips else 5
         while time.monotonic() < deadline and not game.answered.is_set():
             try:
@@ -357,19 +406,19 @@ class Quiz:
         for user_id, (choice, took) in sorted(game.answers.items(), key=lambda item: item[1][1]):
             if choice == correct:
                 game.streak[user_id] = game.streak.get(user_id, 0) + 1
-                points = 500 + int(500 * max(0.0, 1 - took / ANSWER_SECONDS)) // 10 * 10
-                if game.streak[user_id] % 3 == 0:
-                    points += 200
+                points = points_for(game.mode, seconds, took, game.streak[user_id])
                 game.scores[user_id] = game.scores.get(user_id, 0) + points
                 game.right[user_id] = game.right.get(user_id, 0) + 1
-                gained.append(f"{esc(game.players[user_id])} +{points}" + (" 🔥" if game.streak[user_id] % 3 == 0 else ""))
+                gained.append(f"{esc(game.players[user_id][:20])} +{points}" + (" 🔥" if game.streak[user_id] % 3 == 0 else ""))
             else:
                 game.streak[user_id] = 0
-                missed.append(esc(game.players[user_id]))
-        result = f"<b>{number}/{total}. {esc(question)}</b>\n✅ <b>{esc(options[correct])}</b>" + (f"\n💡 {esc(fact)}" if fact else "")
-        result += ("\n🏅 " + ", ".join(gained)) if gained else "\n😶 Никто не угадал"
+                missed.append(esc(game.players[user_id][:20]))
+        for user_id in game.players.keys() - game.answers.keys():
+            game.streak[user_id] = 0
+        result = f"<b>{number}/{total}. {esc(question)}</b>\n✅ <b>{esc(options[correct])}</b>" + (f"\n💡 {esc(fact[:180])}" if fact else "")
+        result += ("\n🏅 " + ", ".join(gained[:6]) + (f" · ещё {len(gained)-6}" if len(gained)>6 else "")) if gained else "\n😶 Никто не угадал"
         if missed:
-            result += "\n❌ " + ", ".join(missed)
+            result += "\n❌ " + ", ".join(missed[:6]) + (f" · ещё {len(missed)-6}" if len(missed)>6 else "")
         try:
             if clips:
                 await message.edit_media(InputMediaAnimation(mp4(clips[2], "answer"), caption=result, parse_mode="HTML",
@@ -382,8 +431,7 @@ class Quiz:
                 await bot.send_message(game.chat_id, result, parse_mode="HTML")
             except Exception:
                 pass
-        game.state = "question"
-        await asyncio.sleep(REVEAL_PAUSE)
+        await asyncio.sleep(3 if game.mode == "blitz" else REVEAL_PAUSE)
 
     async def _finish(self, bot, game):
         game.state = "done"
@@ -395,9 +443,10 @@ class Quiz:
                                 "ON CONFLICT(chat_id, user_id) DO UPDATE SET name=excluded.name, points=points+excluded.points, "
                                 "wins=wins+excluded.wins, games=games+1",
                                 (game.chat_id, uid, game.players[uid], game.scores.get(uid, 0),
-                                 1 if place == 0 and game.scores.get(uid, 0) > 0 else 0))
+                                 1 if game.scores.get(uid, 0) > 0 and game.scores.get(uid, 0) == game.scores.get(ranking[0], 0) else 0))
         winner = rows[0] if rows and rows[0][1] > 0 else None
-        caption = (f"🏆 Победа: <b>{esc(winner[0])}</b> — {winner[1]} очков!" if winner else "Ничья по нулям 😅") + \
+        tied = winner and sum(row[1] == winner[1] for row in rows) > 1
+        caption = (f"🏆 Ничья на первом месте: {winner[1]} очков!" if tied else f"🏆 Победа: <b>{esc(winner[0])}</b> — {winner[1]} очков!" if winner else "Ничья по нулям 😅") + \
                   f"\n\nЕщё раз — /{START} · рейтинг группы — /{RATING}"
         topic = TOPICS[game.topic][1]
         try:
@@ -407,8 +456,12 @@ class Quiz:
                                      height=900, thumbnail=jpg(preview))
         except Exception as exc:
             LOG.warning("Quiz podium animation failed: %s", type(exc).__name__)
-            await bot.send_photo(game.chat_id, quizart.podium(rows, len(game.questions), topic), caption=caption,
-                                 parse_mode="HTML")
+            try:
+                image = await asyncio.to_thread(quizart.podium, rows, len(game.questions), topic)
+                await bot.send_photo(game.chat_id, image, caption=caption, parse_mode="HTML")
+            except Exception:
+                text = caption + "\n\n" + "\n".join(f"{i+1}. {esc(name[:24])}: {points}" for i, (name, points, _) in enumerate(rows))
+                await bot.send_message(game.chat_id, text, parse_mode="HTML")
 
     async def top(self, bot, chat_id, title):
         rows = self.db.execute("SELECT name, points, wins, games FROM game_scores WHERE chat_id=? ORDER BY points DESC "
@@ -435,18 +488,19 @@ class Quiz:
     async def _questions(self, game):
         seen = {key(q) for q in self.asked(game.chat_id)}
         try:
-            questions = await self._generate(game, seen)
+            questions = await asyncio.wait_for(self._generate(game, seen), 20)
         except Exception as exc:
             LOG.warning("Quiz questions failed: %s %s", type(exc).__name__, str(exc)[:200])
             questions = []
-        questions = questions[:QUESTIONS]
-        if len(questions) < QUESTIONS:
+        count = MODES[game.mode][1]
+        questions = questions[:count]
+        if len(questions) < count:
             have = {key(q[0]) for q in questions}
             fresh = [q for q in FALLBACK if key(q[0]) not in seen | have]
             heard = [q for q in FALLBACK if key(q[0]) in seen - have]  # repeats only when the chat heard them all
             random.shuffle(fresh)
             random.shuffle(heard)
-            questions += (fresh + heard)[:QUESTIONS - len(questions)]
+            questions += (fresh + heard)[:count - len(questions)]
         shuffled = []
         for question, options, correct, fact in questions:  # the right answer must not always be A
             order = list(range(len(options)))
@@ -455,7 +509,7 @@ class Quiz:
         return shuffled
 
     async def _generate(self, game, seen):
-        wanted = QUESTIONS + 4  # some get filtered out
+        wanted = MODES[game.mode][1] + 4  # some get filtered out
         if game.topic == "chat":
             lines = self.history(game.chat_id)
             if len(lines) < 30:
@@ -501,7 +555,7 @@ where answer is the index of the correct option."""
             question = str(item.get("q", "")).strip()[:300]
             options = [str(o).strip()[:60] for o in item.get("options", []) if str(o).strip()]
             answer = item.get("answer")
-            if not question or len(options) != 4 or not isinstance(answer, int) or not 0 <= answer < 4:
+            if not question or len(options) != 4 or type(answer) is not int or not 0 <= answer < 4:
                 continue
             if len({o.lower() for o in options}) < 4 or key(question) in keys:
                 continue
