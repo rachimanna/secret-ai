@@ -284,7 +284,25 @@ def make_handler(config):
         def _route(self, path, user, data):
             store, uid, bridge = config["store"], user["id"], config["bridge"]
             language = "ru" if (user.get("language_code") or "ru").startswith("ru") else "en"
-            if path == "/api/state":
+            if path in ("/api/day/state", "/api/day/task", "/api/day/status"):
+                try:
+                    if path == "/api/day/state":
+                        result = bridge.day_state(uid)
+                    else:
+                        if type(data.get("id")) is not int or not 0 < data["id"] < 10**12:
+                            raise ValueError("id")
+                        if path == "/api/day/task":
+                            result = bridge.day_task(uid, data["id"])
+                        else:
+                            status = data.get("status")
+                            if status not in ("open", "paused", "done"):
+                                raise ValueError("status")
+                            result = bridge.day_status(uid, data["id"], status)
+                except ValueError:
+                    self._send(400, {"error": "bad request"})
+                    return
+                self._send(200, result)
+            elif path == "/api/state":
                 self._send(200, self._state(user, fresh=bool(data.get("fresh"))))
             elif path == "/api/catalog":
                 query, after = str(data.get("q") or "").strip().lower(), str(data.get("after") or "")
