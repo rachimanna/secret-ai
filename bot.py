@@ -2025,6 +2025,18 @@ HELP_EN = (
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await authorized(update, context):
         return
+    if context.args and (context.args[0] == "day" or re.fullmatch(r"day_[0-9]{1,12}", context.args[0])):
+        controls = context.bot_data.get("daily_controls")
+        if controls:
+            selected = context.args[0]
+            context.args = []
+            if selected == "day":
+                await controls.guarded(controls.life)(update, context)
+            else:
+                async def show(update, context):
+                    await controls.show_task(update, context, int(selected[4:]))
+                await controls.guarded(show)(update, context)
+            return
     if context.args and context.args[0] == "inline":
         await inline_help(update, context)
         return
@@ -5970,6 +5982,39 @@ class Bridge:
 
     def ask(self, tg_user, text):
         self._run(run_prompt(self.app, tg_user, text), wait=False)
+
+    def _day_snapshot(self, user_id):
+        """Called only on the bot loop; HTTP callers cannot supply another user's scope."""
+        store = self.app.bot_data["memory"].daily
+        profile = store.profile(user_id) or {"tz": "UTC", "mode": "off"}
+        tasks = store.tasks(user_id)
+        return {"timezone": profile["tz"], "mode": profile["mode"], "tasks": tasks,
+                "inbox_count": store.db.execute("SELECT COUNT(*) FROM dy_sources WHERE user_id=? AND processed=0", (user_id,)).fetchone()[0],
+                "plan": store.plan(user_id), "review": store.plan(user_id, "review")}
+
+    def day_state(self, user_id):
+        async def read():
+            return self._day_snapshot(user_id)
+        return self._run(read())
+
+    def day_task(self, user_id, task_id):
+        async def read():
+            store = self.app.bot_data["memory"].daily
+            if not store.task(user_id, task_id):
+                raise ValueError("task")
+            notes = store.notes(user_id, task_id)
+            return {"result": notes[-1]["answer"] if notes else ""}
+        return self._run(read())
+
+    def day_status(self, user_id, task_id, status):
+        async def write():
+            lock = user_lock(SimpleNamespace(bot_data=self.app.bot_data), user_id)
+            if lock.locked():
+                raise RuntimeError("busy")
+            async with lock:
+                self.app.bot_data["memory"].daily.status(user_id, task_id, status)
+                return self._day_snapshot(user_id)
+        return self._run(write())
 
     def settings(self, user_id):
         async def read():
