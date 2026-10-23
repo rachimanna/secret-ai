@@ -144,7 +144,7 @@ def make_handler(config):
 
         def do_HEAD(self):
             path = urlparse(self.path).path
-            self._send(200 if path in ("/", "/index.html", "/health", "/app", "/app/", "/app/index.html", "/logo.svg", "/mascot.png") else 404, b"", "text/plain", head=True)
+            self._send(200 if path in ("/", "/index.html", "/health", "/app", "/app/", "/app/index.html", "/logo.svg", "/mascot.png", "/play-core.js", "/play-ui.js", "/play.css") else 404, b"", "text/plain", head=True)
 
         def do_GET(self):
             url = urlparse(self.path)
@@ -167,6 +167,9 @@ def make_handler(config):
                     self._send(200, image, "image/jpeg", cache="public, max-age=86400")
                 else:
                     self._send(404, b"", "text/plain")
+            elif url.path in ("/play-core.js", "/play-ui.js", "/play.css"):
+                content_type = "text/css" if url.path.endswith(".css") else "application/javascript"
+                self._send(200, (WEBAPP / url.path[1:]).read_bytes(), content_type + "; charset=utf-8", cache="no-cache")
             elif url.path == "/logo.svg":
                 self._send(200, LOGO.read_bytes(), "image/svg+xml", cache="public, max-age=86400")
             elif url.path == "/connected":
