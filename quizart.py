@@ -20,8 +20,8 @@ from fun import ASSETS
 
 FPS = 25
 LETTERS = ["A", "B", "C", "D"]
-TILE_COLORS = [(99, 102, 241), (236, 72, 153), (20, 184, 166), (245, 158, 11)]
-GREEN, DIM = (34, 197, 94), (58, 56, 84)
+TILE_COLORS = [(139, 184, 255), (104, 150, 212), (96, 178, 182), (155, 170, 204)]
+GREEN, DIM = (93, 196, 160), (45, 53, 66)
 MEDALS = [(255, 204, 77), (205, 214, 230), (230, 150, 90)]
 NO_EMOJI = re.compile("[\U00010000-\U0010FFFF☀-➿️‍]")
 
@@ -57,13 +57,13 @@ def mix(a, b, k):
 @functools.lru_cache(maxsize=8)
 def _backdrop(width, height):
     top = Image.new("RGB", (1, 2))
-    top.putpixel((0, 0), (40, 30, 120))
-    top.putpixel((0, 1), (8, 8, 20))
+    top.putpixel((0, 0), (27, 33, 43))
+    top.putpixel((0, 1), (16, 19, 24))
     card = top.resize((width, height), Image.BICUBIC).convert("RGBA")
     glow = Image.new("RGBA", (width, height), (0, 0, 0, 0))
     draw = ImageDraw.Draw(glow)
-    draw.ellipse((-width * 0.2, -height * 0.45, width * 0.75, height * 0.55), fill=(90, 80, 255, 120))
-    draw.ellipse((width * 0.45, height * 0.35, width * 1.25, height * 1.45), fill=(217, 70, 239, 90))
+    draw.ellipse((-width * 0.2, -height * 0.45, width * 0.75, height * 0.55), fill=(139, 184, 255, 22))
+    draw.ellipse((width * 0.45, height * 0.35, width * 1.25, height * 1.45), fill=(89, 124, 170, 14))
     card.alpha_composite(glow.filter(ImageFilter.GaussianBlur(max(width, height) // 9)))
     return card
 
@@ -222,7 +222,7 @@ class QuestionArt:
         image = Image.new("RGBA", (width + 20 + int(topic.getlength(self.topic)) + 10, 40), (0, 0, 0, 0))
         draw = ImageDraw.Draw(image)
         draw.rounded_rectangle((0, 0, width, 39), 20, fill=(255, 255, 255, 235))
-        draw.text((width / 2, 20), label, font=font(19), fill=(40, 30, 120), anchor="mm")
+        draw.text((width / 2, 20), label, font=font(19), fill=(27, 33, 43), anchor="mm")
         draw.text((width + 16, 20), self.topic, font=topic, fill=(205, 205, 255), anchor="lm")
         return image
 
@@ -335,11 +335,11 @@ class QuestionArt:
 
 def banner_frames():
     width, height = 800, 400
-    title = [text_image(letter, 74) for letter in "ВИКТОРИНА"]
-    sub = text_image("Secret AI · игра для группы", 27, (200, 200, 255), bold=False)
-    mascot = Image.open(ASSETS / "mascot.png").convert("RGBA").resize((230, 230), Image.LANCZOS).rotate(-8, resample=Image.BICUBIC)
+    title = [text_image(letter, 58) for letter in "ВИКТОРИНА"]
+    sub = text_image("Secret AI · игра для группы", 27, (177, 194, 216), bold=False)
+    mascot = Image.open(ASSETS / "mascot.png").convert("RGBA").resize((180, 180), Image.LANCZOS).rotate(-8, resample=Image.BICUBIC)
     chips = []
-    for label, color in (("8 вопросов", (90, 80, 255)), ("20 секунд", (217, 70, 239)), ("очки за скорость", (20, 184, 166))):
+    for label, color in (("3 режима", (66, 100, 150)), ("разные темы", (58, 86, 122)), ("играйте вместе", (50, 100, 108))):
         w = int(font(22).getlength(label)) + 36
         chip = Image.new("RGBA", (w, 46), (0, 0, 0, 0))
         d = ImageDraw.Draw(chip)
@@ -349,12 +349,12 @@ def banner_frames():
 
     def frame(t):
         card = backdrop(width, height)
-        put(card, mascot, 540 + 120 * (1 - ease_back((t - 0.15) / 0.6)), 92, alpha=ease_out((t - 0.15) / 0.4))
+        put(card, mascot, 590 + 120 * (1 - ease_back((t - 0.15) / 0.6)), 75, alpha=ease_out((t - 0.15) / 0.4))
         x = 58
         for i, letter in enumerate(title):
             k = (t - i * 0.06) / 0.45
             put(card, letter, x, 92 - 70 * (1 - ease_back(k)), alpha=ease_out(k * 2))
-            x += font(74).getlength("ВИКТОРИНА"[i])
+            x += font(58).getlength("ВИКТОРИНА"[i])
         put(card, sub, 60, 190 + 10 * (1 - ease_out((t - 0.6) / 0.4)), alpha=ease_out((t - 0.6) / 0.4))
         x = 60
         for i, chip in enumerate(chips):
@@ -392,7 +392,7 @@ def podium_frame(rows, questions, topic, t):
     k = ease_out(t / 0.4)
     put(card, text_image("ИТОГИ", int(96 * s)), width / 2 - font(int(96 * s)).getlength("ИТОГИ") / 2, (60 - 30 * (1 - k)) * s, alpha=k)
     sub = clean(f"Викторина · {topic}")
-    put(card, text_image(sub, int(38 * s), (200, 200, 255), bold=False, shadow=False),
+    put(card, text_image(sub, int(38 * s), (177, 194, 216), bold=False, shadow=False),
         width / 2 - font(int(38 * s), False).getlength(sub) / 2, 170 * s, alpha=k)
     spots = [(540, 460, 350), (220, 540, 270), (860, 600, 210)]  # 1st, 2nd, 3rd in the 1080-wide layout
     order = {2: 0.25, 1: 0.5, 0: 0.8}  # third rises first, the winner last
@@ -431,7 +431,7 @@ def podium_frame(rows, questions, topic, t):
         if k > 0:
             dx = -60 * (1 - k)
             panel(card, ((90 + dx) * s, y * s, (990 + dx) * s, (y + 70) * s), int(22 * s), (255, 255, 255), 0.12 * k)
-            label(card, str(i + 4), int(34 * s), (200, 200, 255), (130 + dx) * s, (y + 35) * s, "lm", k)
+            label(card, str(i + 4), int(34 * s), (177, 194, 216), (130 + dx) * s, (y + 35) * s, "lm", k)
             label(card, clean(name)[:22] or "?", int(34 * s), (255, 255, 255), (200 + dx) * s, (y + 35) * s, "lm", k, bold=False)
             label(card, str(points), int(34 * s), (255, 255, 255), (950 + dx) * s, (y + 35) * s, "rm", k)
         y += 82
@@ -463,11 +463,11 @@ def leaderboard(rows, title):
     sub = clean(title)
     while font(36, False).getlength(sub) > 900 and len(sub) > 2:
         sub = sub.rstrip("…")[:-1] + "…"
-    draw.text((width / 2, 175), sub, font=font(36, False), fill=(200, 200, 255), anchor="mm")
+    draw.text((width / 2, 175), sub, font=font(36, False), fill=(177, 194, 216), anchor="mm")
     y = 240
     for place, (name, points, wins, games) in enumerate(rows, start=1):
         panel(card, (70, y, width - 70, y + 80), 24, (255, 255, 255), 0.13 if place > 3 else 0.22)
-        color = MEDALS[place - 1] if place <= 3 else (200, 200, 255)
+        color = MEDALS[place - 1] if place <= 3 else (177, 194, 216)
         draw.ellipse((95, y + 14, 147, y + 66), fill=(*color, 255))
         draw.text((121, y + 40), str(place), font=font(30), fill=(30, 26, 60), anchor="mm")
         name = clean(name) or "?"
