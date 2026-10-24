@@ -1,7 +1,8 @@
 """Bootstrap for bot hosting panels without git settings (h1cloud: only "file to run" and "pip packages").
 
 The panel's start file holds one line that fetches and runs this script:
-    import urllib.request;exec(urllib.request.urlopen("https://raw.githubusercontent.com/rachimanna/secret-ai/main/deploy/start.py").read())
+    import urllib.request
+import urllib.parse;exec(urllib.request.urlopen("https://raw.githubusercontent.com/rachimanna/secret-ai/main/deploy/start.py").read())
 It brings the bot's code from GitHub (git when available, else a zip), installs requirements, makes a .env template
 on the first run and starts bot.py — which then keeps itself updated (hosting.py).
 """
@@ -46,11 +47,14 @@ def fetch_code():
             git("init", "-q")
             git("remote", "add", "origin", REPO + ".git")
         if git("fetch", "-q", "--depth", "50", "origin", wanted).returncode == 0:
-            git("checkout", "-q", "-f", "-B", wanted, f"origin/{wanted}")
+            checked = git("checkout", "-q", "-f", "-B", wanted, f"origin/{wanted}")
+            if checked.returncode:
+                raise RuntimeError("Cannot check out requested version: " + checked.stderr[-300:])
             say("Code updated from GitHub (git).")
             return
         say("git fetch failed, downloading a zip instead")
-    data = urllib.request.urlopen(REPO + "/archive/refs/heads/main.zip", timeout=120).read()
+    wanted = branch()
+    data = urllib.request.urlopen(REPO + "/archive/refs/heads/" + urllib.parse.quote(wanted, safe="") + ".zip", timeout=120).read()
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         prefix = archive.namelist()[0].split("/")[0] + "/"
         for name in archive.namelist():
@@ -90,7 +94,7 @@ def install():
     result = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--disable-pip-version-check", "--no-cache-dir",
                              "--prefix", LOCAL, "-r", os.path.join(HOME, "requirements.txt")])
     if result.returncode:
-        say("Library install failed — see the lines above.")
+        raise RuntimeError("Library install failed — see the lines above.")
 
 
 def main():
@@ -102,6 +106,8 @@ def main():
         return
     install()
     say("Starting the bot…")
+    paths = [os.path.join(LOCAL, "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages")]
+    os.environ["PYTHONPATH"] = os.pathsep.join(paths + ([os.environ["PYTHONPATH"]] if os.environ.get("PYTHONPATH") else []))
     os.execv(sys.executable, [sys.executable, os.path.join(HOME, "bot.py")])
 
 

@@ -55,6 +55,7 @@ import workbench
 import workbench_ui
 import inline_ai
 import reply_context
+import release_features
 import daily
 import daily_ui
 import chatserial
@@ -1299,8 +1300,12 @@ async def chat_completion(data, model_id, client, **options):
     waits = list(RATE_RETRIES)
     while True:
         try:
-            return await client.chat.completions.create(**options)
+            started = __import__("time").monotonic()
+            response = await client.chat.completions.create(**options)
+            __import__("release_features").record(data,model_id,started)
+            return response
         except RateLimitError as exc:
+            __import__("release_features").record(data,model_id,started,type(exc).__name__)
             if not waits or OUT_OF_CREDITS.search(str(exc)):
                 raise
             header = (getattr(getattr(exc, "response", None), "headers", None) or {}).get("retry-after")
@@ -1312,6 +1317,7 @@ async def chat_completion(data, model_id, client, **options):
             LOG.warning("%s is overloaded (429); retrying in %.0f s", model_id, delay)
             await asyncio.sleep(delay)
         except BadRequestError as exc:
+            __import__("release_features").record(data,model_id,started,type(exc).__name__)
             if "reasoning_effort" not in options or not re.search(r"reason|effort|thinking", str(exc), re.I):
                 raise
             if options["reasoning_effort"] == "minimal":
@@ -1321,6 +1327,9 @@ async def chat_completion(data, model_id, client, **options):
                 data.setdefault("no_effort", set()).add(model_id)
                 options.pop("reasoning_effort")
             LOG.info("Adjusted effort compatibility for %s", model_id)
+        except Exception as exc:
+            __import__("release_features").record(data,model_id,started,type(exc).__name__)
+            raise
 
 
 async def chat_stream(data, model_id, client, *, retries=0, on_retry=None, **options):
@@ -5962,7 +5971,13 @@ class Bridge:
             coro.close()
             raise RuntimeError("bot is not running yet")
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        return future.result(timeout=15) if wait else None
+        if not wait:
+            return None
+        try:
+            return future.result(timeout=15)
+        except TimeoutError:
+            future.cancel()
+            raise
 
     def notify(self, user_id, text):
         self._run(self.app.bot.send_message(user_id, text), wait=False)
@@ -5972,7 +5987,21 @@ class Bridge:
         if not loop:
             coro.close()
             raise RuntimeError("bot is not running yet")
-        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=seconds)
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            return future.result(timeout=seconds)
+        except TimeoutError:
+            future.cancel()
+            raise
+
+    def features(self, user_id, action, payload):
+        async def perform():
+            lock = self.app.bot_data["locks"][user_id]
+            if lock.locked():
+                raise RuntimeError("busy")
+            async with lock:
+                return await release_features.dispatch(self.app,user_id,action,payload,quick_answer)
+        return self._run_long(perform(),180)
 
     def live_turn(self, tg_user, audio, image=None, mode=None):
         return self._run_long(live_turn(self.app, tg_user, audio, image, mode), 150)
@@ -6235,6 +6264,10 @@ async def run_codex(app, task_id, language, charged=0):
         context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
         live = codex.TaskLive(store, task_id, language)
         earlier = [t for t in store.thread(task["thread"], user_id) if t["id"] != task_id and t["created"] <= task["created"]]
+        continuation = ([{"role":"assistant","content":task["summary"][:6000]},
+                         {"role":"user","content":"Continue the interrupted task. Existing project files are preserved; inspect them before editing. "
+                          "For a repository inspect the current branch and prepare a complete proposal again."}]
+                        if task.get("summary") else [])
         can_run = await asyncio.to_thread(codex_can_run, data, user_id)
         if task["mode"] == "repo":
             await data["github_apps"].fresh_token(data["http"], user_id)
@@ -6247,7 +6280,7 @@ async def run_codex(app, task_id, language, charged=0):
             api_timeout=180, stream_retries=1,
             instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language),
             input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
-                                                                          else "") + task["prompt"]}])
+                                                                          else "") + task["prompt"]}] + continuation)
     except asyncio.CancelledError:  # stopped by the user: nothing was delivered, so the credits come back
         if charged:
             data["memory"].gen_refund(user_id, "credits", charged)
@@ -6323,15 +6356,28 @@ def codex_start(app, tg_user, mode, prompt, repo, thread=None):
 
 
 async def codex_apply(app, user_id, task_id):
-    """Commit a repository task's change on its branch and open the pull request."""
+    """Serialize application and retain committed results if opening a PR fails."""
     data, store = app.bot_data, app.bot_data["codex"]
-    task = store.get(task_id, user_id)
-    if not task or not task.get("change") or task["status"] != codex.STATUS_DONE:
-        raise GitHubError("nothing to apply")
-    await data["github_apps"].fresh_token(data["http"], user_id)
-    commit, pull = await apply_change(data["http"], data["connections"], task["change"])
-    store.update(task_id, status=codex.STATUS_APPLIED, result={"commit": commit, "pull": pull})
-    return store.get(task_id)
+    lock = data.setdefault("codex_apply_locks", {}).setdefault(task_id, asyncio.Lock())
+    async with lock:
+        task = store.get(task_id, user_id)
+        if task and task["status"] == codex.STATUS_APPLIED:
+            return task
+        if not task or not task.get("change") or task["status"] not in (codex.STATUS_DONE, "applying"):
+            raise GitHubError("nothing to apply")
+        store.update(task_id, status="applying", error="")
+        change = task["change"]
+        def checkpoint(updated):
+            store.update(task_id, change=updated)
+        try:
+            await data["github_apps"].fresh_token(data["http"], user_id)
+            commit, pull = await apply_change(data["http"], data["connections"], change, checkpoint=checkpoint)
+        except Exception:
+            store.update(task_id, status=codex.STATUS_DONE,
+                         error="Не удалось завершить применение. Проверь результат и повтори; сохранённый коммит не дублируется.")
+            raise
+        store.update(task_id, status=codex.STATUS_APPLIED, result={"commit": commit, "pull": pull}, error="")
+        return store.get(task_id)
 
 
 async def codex_repos(app, user_id):
@@ -6392,7 +6438,7 @@ def main():
         try:
             snapshots.restore()
         except Exception as exc:  # better to start with an empty memory than not at all
-            LOG.error("Could not restore the database from Postgres: %s %s", type(exc).__name__, str(exc)[:200])
+            raise SystemExit("Database restore failed; refusing to overwrite the saved database. Retry startup.") from exc
     hosting.start_test_bot(port)  # TEST_TELEGRAM_TOKEN in .env: a test bot on the newest code runs next to this one
     tunnel = hosting.start_tunnel(port)
     if tunnel:  # the tunnel's address changes on every start: a Cloudflare Worker gives a permanent one in front of it

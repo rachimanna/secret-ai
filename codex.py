@@ -26,6 +26,7 @@ RUN_TIMEOUT = 90
 RUN_OUTPUT = 6000
 
 STATUS_RUNNING, STATUS_DONE, STATUS_FAILED, STATUS_APPLIED, STATUS_STOPPED = "running", "done", "failed", "applied", "stopped"
+STATUS_PAUSED = "paused"
 
 
 class CodexStore:
@@ -37,8 +38,11 @@ class CodexStore:
             # Tasks that were running when the bot restarted can't continue.
             for tid, raw in self.db.execute("SELECT id, data FROM codex_tasks").fetchall():
                 task = json.loads(raw)
+                if task.get("status") == "applying":
+                    task.update(status=STATUS_DONE, error="Application interrupted; review and retry.")
+                    self.db.execute("UPDATE codex_tasks SET data=? WHERE id=?", (json.dumps(task), tid))
                 if task.get("status") == STATUS_RUNNING:
-                    task.update(status=STATUS_FAILED, error="restart")
+                    task.update(status=STATUS_PAUSED, error="restart")
                     self.db.execute("UPDATE codex_tasks SET data=? WHERE id=?", (json.dumps(task), tid))
 
     def create(self, user_id, mode, prompt, repo="", model="", thread=None, files=None, branch=""):
@@ -104,7 +108,7 @@ class CodexStore:
 def public(task, full=False):
     """What the Mini App sees: the list gets a light version, the details everything."""
     keys = ("id", "thread", "mode", "prompt", "repo", "model", "branch", "status", "step", "summary", "result", "error", "created",
-            "updated")
+            "updated", "checks")
     out = {k: task.get(k) for k in keys}
     out["files_count"] = len(task.get("files") or {}) or len((task.get("change") or {}).get("files") or [])
     if full:
@@ -227,7 +231,13 @@ class Workspace:
                 self.store.save(task)
                 return f"Deleted {path}."
             if name == "run" and self.can_run:
-                return await asyncio.to_thread(run_command, files, str(args.get("command") or ""))
+                command = str(args.get("command") or "")
+                result = await asyncio.to_thread(run_command, files, command)
+                latest = self.store.get(self.task_id)
+                if latest:
+                    latest.setdefault("checks", []).append({"command": command[:500], "result": result[:6000]})
+                    self.store.save(latest)
+                return result
         except ValueError as exc:
             return f"Error: {exc}"
         return f"Unknown tool {name}."

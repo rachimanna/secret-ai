@@ -103,6 +103,9 @@ class Store:
           lease_until INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '');
         CREATE INDEX IF NOT EXISTS dy_due ON dy_jobs(status,run_at);
         ''')
+        if "recurrence" not in {r[1] for r in db.execute("PRAGMA table_info(dy_jobs)")}:
+            db.execute("ALTER TABLE dy_jobs ADD COLUMN recurrence TEXT NOT NULL DEFAULT ''")
+            db.commit()
 
     def _one(self, sql, args=()):
         cur = self.db.execute(sql, args)
@@ -140,7 +143,7 @@ class Store:
             for key, value in changes.items():
                 self.db.execute(f'UPDATE dy_profiles SET {key}=?,chat_id=? WHERE user_id=?', (value, chat, user))
             if any(k in changes for k in ('morning', 'evening', 'tz')):
-                self.db.execute("UPDATE dy_jobs SET status='cancelled' WHERE user_id=? AND kind!='reminder' AND status='pending'", (user,))
+                self.db.execute("DELETE FROM dy_jobs WHERE user_id=? AND kind!='reminder' AND status='pending'", (user,))
         return self.profile(user)
 
     def source(self, user, source_id):
@@ -352,11 +355,14 @@ class Store:
         if not task or task['status'] != 'open':
             raise DailyError('task')
         profile = self.profile(user,chat)
-        at = stamp(when,profile['tz'])
+        import recurring
+        rule = recurring.parse(when,profile['tz'])
+        at = recurring.next_at(rule,time.time()) if rule else stamp(when,profile['tz'])
         if self.db.execute("SELECT COUNT(*) FROM dy_jobs WHERE user_id=? AND kind='reminder' AND status IN ('pending','leased')", (user,)).fetchone()[0] >= 20:
             raise DailyError('reminders_limit')
         with self.db:
-            cur = self.db.execute("INSERT INTO dy_jobs(user_id,chat_id,task_id,kind,run_at) VALUES (?,?,?,'reminder',?)", (user,chat,task_id,at))
+            cur = self.db.execute("INSERT INTO dy_jobs(user_id,chat_id,task_id,kind,run_at,recurrence) VALUES (?,?,?,'reminder',?,?)",
+                                  (user,chat,task_id,at,json.dumps(rule) if rule else ''))
         return cur.lastrowid,at
 
     def reminders(self,user):
@@ -401,9 +407,25 @@ class Store:
     def finish_job(self, job, error=None, permanent=False):
         now = int(time.time())
         state = 'sent' if error is None else 'failed' if permanent or job['tries']>=4 else 'pending'
+        run_at = now + 60 * job['tries']
+        tries = job['tries']
+        if error is None and job.get('recurrence'):
+            import recurring
+            state, run_at, tries = 'pending', recurring.next_at(job['recurrence'], now), 0
         with self.db:
-            self.db.execute("UPDATE dy_jobs SET status=?,run_at=?,error=? WHERE id=? AND user_id=? AND status='leased'",
-                            (state,now+60*job['tries'],text(error,80),job['id'],job['user_id']))
+            self.db.execute("UPDATE dy_jobs SET status=?,run_at=?,tries=?,error=? WHERE id=? AND user_id=? AND status='leased'",
+                            (state,run_at,tries,text(error,80),job['id'],job['user_id']))
+
+    def snooze(self, user, job_id, seconds=900):
+        row = self._one("SELECT * FROM dy_jobs WHERE user_id=? AND id=? AND kind='reminder'", (user,job_id))
+        if not row or row['status'] not in ('sent','pending') or not self.task(user,row['task_id']) or self.task(user,row['task_id'])['status'] != 'open':
+            raise DailyError('task')
+        if seconds not in (900,3600,86400):
+            raise DailyError('time')
+        with self.db:
+            self.db.execute("UPDATE dy_jobs SET status='pending',tries=0,run_at=? WHERE id=? AND user_id=?",
+                            (int(time.time())+seconds,job_id,user))
+        return True
 
     def plan(self,user,kind='plan',now=None):
         now = time.time() if now is None else now

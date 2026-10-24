@@ -21,7 +21,7 @@ const server=http.createServer((req,res)=>{
  else if(url.pathname==='/api/day/status'){tasks=tasks.map(t=>t.id===data.id?{...t,status:data.status}:t);response=day();}
  else if(url.pathname==='/api/day/task')response={result:'Guten Tag! Ist der Computer noch verfügbar?'};
  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(response));});return;}
- if(['/play-core.js','/play-ui.js','/play.css'].includes(url.pathname)){res.writeHead(200,{'Content-Type':url.pathname.endsWith('.css')?'text/css':'application/javascript'});res.end(fs.readFileSync(path.join(root,'webapp',url.pathname.slice(1))));return;}
+ if(['/play-core.js','/play-ui.js','/play.css','/updates.js'].includes(url.pathname)){res.writeHead(200,{'Content-Type':url.pathname.endsWith('.css')?'text/css':'application/javascript'});res.end(fs.readFileSync(path.join(root,'webapp',url.pathname.slice(1))));return;}
  res.writeHead(200,{'Content-Type':url.pathname==='/'?'text/html':url.pathname==='/logo.svg'?'image/svg+xml':'text/html'});
  res.end(url.pathname==='/logo.svg'?fs.readFileSync(path.join(root,'webapp/logo.svg')):html);
 });
