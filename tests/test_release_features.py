@@ -340,3 +340,32 @@ class PostgresSnapshotIntegrationTest(unittest.TestCase):
                 persist.Snapshots(snapshots.url,path,name).restore()
             with snapshots._connect() as conn:
                 conn.execute("DELETE FROM bot_snapshot_restore WHERE name=%s",(name,))
+
+
+class CodexRestartAccountingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_shutdown_pauses_without_refund_and_explicit_stop_refunds(self):
+        for explicit in (False,True):
+            with self.subTest(explicit=explicit),tempfile.TemporaryDirectory() as folder:
+                conn=integrations.Connections(Path(folder)/"db","key")
+                try:
+                    store=codex.CodexStore(conn)
+                    task=store.create(1,"project","Build",files={"main.py":"print(1)"})
+                    store.update(task["id"],charged=3,stop_requested=explicit)
+                    memory=NS(gen_refund=Mock())
+                    app=NS(bot_data={"codex":store,"codex_jobs":{},"memory":memory,"chat_default":"test","models":["test"]})
+                    started=asyncio.Event()
+                    async def wait(*args,**kwargs):
+                        started.set()
+                        await asyncio.Event().wait()
+                    with patch("bot.generate",side_effect=wait),patch("bot.codex_can_run",return_value=False):
+                        job=asyncio.create_task(bot.run_codex(app,task["id"],"en"))
+                        await started.wait()
+                        job.cancel()
+                        with self.assertRaises(asyncio.CancelledError):
+                            await job
+                    saved=store.get(task["id"])
+                    self.assertEqual(saved["status"],codex.STATUS_STOPPED if explicit else codex.STATUS_PAUSED)
+                    self.assertEqual(saved["charged"],0 if explicit else 3)
+                    self.assertEqual(memory.gen_refund.call_count,int(explicit))
+                finally:
+                    conn.close()

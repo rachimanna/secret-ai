@@ -2950,8 +2950,12 @@ function renderHomeActions() {
     ['💬','Новый разговор','Начни с любой мысли','chat'],['🎨','Создать','Фото, видео и обработка','gen'],
     ['✅','Мой день','Дела и следующие шаги','day'],['🎮','Игры','Память, логика и испытание дня','games'],
   ] : [['💬','New conversation','Start with an idea','chat'],['🎨','Create something','Photos, videos and edits','gen'],['✅','My day','Tasks and next steps','day'],['🎮','Games','Memory, logic and a daily challenge','games']];
-  $('home-actions').innerHTML=actions.map(([icon,title,sub,action],i)=>`<button class="action-card press ${i===0?'primary':''}" data-home-action="${action}"><span class="action-icon">${lineIcon(icon)}</span><b>${title}</b><small>${sub}</small></button>`).join('');
-  $('home-actions').querySelectorAll('[data-home-action]').forEach(b=>b.onclick=()=>b.dataset.homeAction==='chat'?newConversation():switchTab(b.dataset.homeAction));
+  const homeActions=$('home-actions');
+  if(homeActions.dataset.language!==lang){homeActions.dataset.language=lang;
+  homeActions.innerHTML=actions.map(([icon,title,sub,action],i)=>`<button class="action-card press ${i===0?'primary':''}" data-home-action="${action}"><span class="action-icon">${lineIcon(icon)}</span><b>${title}</b><small>${sub}</small></button>`).join('');
+  }
+  homeActions.onclick=event=>{const b=event.target.closest('[data-home-action]');if(!b)return;
+    b.dataset.homeAction==='chat'?newConversation():switchTab(b.dataset.homeAction);};
   if(state?.user?.first_name)$('account-button').textContent=Array.from(state.user.first_name)[0].toLocaleUpperCase();
 }
 let recentLoading=null,recentUpdated=0,recentChats=[];

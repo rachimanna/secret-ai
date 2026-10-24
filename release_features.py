@@ -71,7 +71,7 @@ async def dispatch(app, uid, action, payload, answer):
         metrics=list(data.get("service_metrics",{}).values())
         return {"version":__import__("hosting").version()[0],
                 "free_bytes":shutil.disk_usage(Path(__file__).parent).free,
-                "active_tasks":sum(t.get("status")=="running" for t in data["codex"].list(uid)),
+                "active_tasks":sum(not j.done() for jobs in (data.get("codex_jobs",{}),data.get("codex_apply_jobs",{})) for j in jobs.values()),
                 "models":list(data.get("models",[])),"providers":metrics,
                 "backup":{"enabled":bool(snapshots),"ready":bool(snapshots and snapshots.ready),
                           "last_success":snapshots.last_success if snapshots else None,
@@ -119,7 +119,7 @@ async def dispatch(app, uid, action, payload, answer):
             raise ValueError("Нет приостановленной задачи.")
         if any(t["status"]==codex.STATUS_RUNNING for t in store.list(uid)):
             raise ValueError("Сначала дождись текущей задачи.")
-        store.update(task["id"],status=codex.STATUS_RUNNING,error="",resumed=True)
+        store.update(task["id"],status=codex.STATUS_RUNNING,error="",resumed=True,stop_requested=False)
         # The original task and its files are reused; no extra charge for a restart.
         import bot
         language="ru" if str(payload.get("language") or "ru").startswith("ru") else "en"

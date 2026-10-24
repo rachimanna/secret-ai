@@ -69,7 +69,7 @@
       $("fx-file-report").onclick=()=>busy("fx-file-report",async()=>{
         const r=await call("report");openSheet(head(label("Отчёт","Report"))+'<div class="day-detail">'+esc(r.text)+'</div>'+button("fx-download","Word"));$("fx-download").onclick=()=>download(r);
       });
-      $("fx-delete").onclick=()=>{if(confirm(label("Удалить эту версию файла?","Delete this file version?")))busy("fx-delete",async()=>{documents=await call("file-delete",{id,confirm:true});renderDocuments();});};
+      $("fx-delete").onclick=()=>{if(window.confirm(label("Удалить эту версию файла?","Delete this file version?")))busy("fx-delete",async()=>{documents=await call("file-delete",{id,confirm:true});renderDocuments();});};
       $("fx-back").onclick=renderDocuments;
     } catch(e){fail(e);}
   }
@@ -118,7 +118,7 @@
       const d=await call("status"),b=d.backup;
       openSheet(head(label("Состояние бота","Bot status"))+'<div class="day-detail">'+
         esc(label("Версия: ","Version: ")+d.version+"\n"+label("Свободно: ","Free space: ")+Math.round(d.free_bytes/1048576)+" MB\n"+
-          label("Активные задачи владельца: ","Owner's active tasks: ")+d.active_tasks+"\n"+
+          label("Активные задачи: ","Active tasks: ")+d.active_tasks+"\n"+
           label("Модели: ","Models: ")+d.models.join(", ")+"\n"+
           label("Последняя успешная копия в этом процессе: ","Last successful backup in this process: ")+(b.last_success?new Date(b.last_success*1000).toLocaleString():"—")+"\n"+
           label("Ошибка копирования: ","Backup error: ")+(b.last_error||"—"))+'</div>'+
@@ -138,7 +138,7 @@
         '<div class="list">'+d.versions.map(v=>'<div class="row"><div class="body">'+esc(new Date(v.created).toLocaleString())+' · '+Math.round(v.bytes/1024)+' KB</div><button class="text-button" data-fx-restore="'+v.id+'">'+label("Восстановить","Restore")+'</button></div>').join("")+'</div>');
       $("fx-backup-now").onclick=()=>busy("fx-backup-now",async()=>{await call("backup");backups();});
       document.querySelectorAll("[data-fx-restore]").forEach(b=>b.onclick=async()=>{
-        if(!confirm(label("Восстановить всю базу из этой версии при следующем запуске? Изменения после выбранной копии будут отменены.",
+        if(!window.confirm(label("Восстановить всю базу из этой версии при следующем запуске? Изменения после выбранной копии будут отменены.",
                          "Restore the entire database from this version at next startup? Later changes will be rolled back.")))return;
         try{b.disabled=true;await call("restore",{id:Number(b.dataset.fxRestore),confirm:true});toast(label("Подготовлено. Перезапусти бота через панель хостинга.","Staged. Restart the bot from the hosting panel."));}catch(e){b.disabled=false;fail(e);}
       });

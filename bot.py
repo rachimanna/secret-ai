@@ -6189,6 +6189,7 @@ class Bridge:
             task = self.app.bot_data["codex"].get(task_id, user_id)
             job = self.app.bot_data["codex_jobs"].get(task_id)
             if task and job:
+                self.app.bot_data["codex"].update(task_id,stop_requested=True)
                 job.cancel()
             return bool(task and job)
         return self._run(stop())
@@ -6258,6 +6259,7 @@ async def run_codex(app, task_id, language, charged=0):
     data, store = app.bot_data, app.bot_data["codex"]
     task = store.get(task_id)
     user_id = task["user_id"]
+    charged = charged or task.get("charged", 0)
     ru = language == "ru"
     branch = task.get("branch") or f"codex/{codex.slug(task['prompt'])}-{task_id[:4]}"
     try:  # everything, the GitHub setup included: a failure always ends the task and gives the credits back
@@ -6281,10 +6283,13 @@ async def run_codex(app, task_id, language, charged=0):
             instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language),
             input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
                                                                           else "") + task["prompt"]}] + continuation)
-    except asyncio.CancelledError:  # stopped by the user: nothing was delivered, so the credits come back
-        if charged:
+    except asyncio.CancelledError:
+        latest = store.get(task_id)
+        explicit = bool(latest and latest.get("stop_requested"))
+        if explicit and charged:
             data["memory"].gen_refund(user_id, "credits", charged)
-        store.update(task_id, status=codex.STATUS_STOPPED, step="")
+        store.update(task_id, status=codex.STATUS_STOPPED if explicit else codex.STATUS_PAUSED,
+                     charged=0 if explicit else charged, step="")
         raise
     except Exception as exc:
         LOG.warning("Codex task failed: %s %s", type(exc).__name__, str(exc)[:200])
@@ -6295,7 +6300,7 @@ async def run_codex(app, task_id, language, charged=0):
                      "The model did not respond in time. Retry the request or choose another model.")
         else:
             error = f"{type(exc).__name__}: {str(exc)[:300]}"
-        store.update(task_id, status=codex.STATUS_FAILED, step="", error=error)
+        store.update(task_id, status=codex.STATUS_FAILED, step="", error=error, charged=0)
         return
     finally:
         data["codex_jobs"].pop(task_id, None)
@@ -6304,7 +6309,7 @@ async def run_codex(app, task_id, language, charged=0):
         change = data["pending"].pop(tools.proposals[-1], None)
         if change and change["branch"] == change["default"]:  # Codex never writes to the main branch: a branch and a PR
             change.update(branch=branch, branch_exists=False, pull_request=True)
-    store.update(task_id, status=codex.STATUS_DONE, step="", summary=(answer or "").strip()[:8000], change=change)
+    store.update(task_id, status=codex.STATUS_DONE, step="", summary=(answer or "").strip()[:8000], change=change, charged=0)
     try:
         title = task["prompt"][:60] + ("…" if len(task["prompt"]) > 60 else "")
         await app.bot.send_message(user_id, (f"✅ Codex: «{title}» готово. Открой Secret AI → Codex." if ru else
@@ -6348,6 +6353,7 @@ def codex_start(app, tg_user, mode, prompt, repo, thread=None):
         if not data["memory"].gen_charge(user_id, "chat", charged):
             return None, "credits"
     task = store.create(user_id, mode, prompt, repo if mode == "repo" else "", model, thread=thread, files=files, branch=branch)
+    store.update(task["id"], charged=charged)
     if mode == "repo" and not branch:
         store.update(task["id"], branch=f"codex/{codex.slug(prompt)}-{task['id'][:4]}")
     job = asyncio.create_task(run_codex(app, task["id"], language, charged))

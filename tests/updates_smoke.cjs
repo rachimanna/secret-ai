@@ -3,7 +3,7 @@ const fs=require("fs"),path=require("path"),http=require("http"),assert=require(
 const root=path.resolve(__dirname,"..");
 const model="anymodel:xai/grok-4.7";
 const fixture={user:{id:1,first_name:"Тест"},bot:"test_bot",github:{connected:false,ready:false,owner:true},mcp:[],apps:{enabled:false,connected:[]},secretary:{enabled:false,connected:false},groups:[],
- settings:{model,models:[model],persona:"assistant",premium:{},messages:2,personas:[]},gen:{ready:true,owner:true,unlimited:true,credits:100,free_left:3,free_per_day:5}};
+ settings:{model,models:[model],persona:"assistant",premium:{},messages:2,personas:[{id:"assistant",emoji:"",ru:"Ассистент",en:"Assistant"}]},gen:{ready:true,owner:true,unlimited:true,credits:100,free_left:3,free_per_day:5,video_free:true,video_ready:true,video_on:true}};
 let docs={projects:[],project:0,selected:null,files:[]},calls=[];
 const html=fs.readFileSync(path.join(root,"webapp/index.html"),"utf8").replace("__LOGO__",fs.readFileSync(path.join(root,"webapp/logo.svg"),"utf8")).replace("__TEMPLATES__",JSON.stringify({ru:[],en:[]})).replace("__APPS__",JSON.stringify({ru:[],en:[]}));
 const server=http.createServer((req,res)=>{
@@ -37,9 +37,9 @@ const server=http.createServer((req,res)=>{
   const context=await browser.newContext({viewport:{width:390,height:844},reducedMotion:"reduce"});
   await context.route("https://telegram.org/**",r=>r.fulfill({body:""}));
   await context.addInitScript(()=>{window.Telegram={WebApp:{initData:"fixture",initDataUnsafe:{user:{id:1,language_code:"ru"}},ready(){},expand(){},onEvent(){},isVersionAtLeast(){return true;},setHeaderColor(){},setBackgroundColor(){},setBottomBarColor(){},disableVerticalSwipes(){},BackButton:{show(){},hide(){},onClick(){}}}};});
-  const page=await context.newPage(),errors=[];page.on("pageerror",e=>errors.push(e.message));
+  const page=await context.newPage(),errors=[];page.on("pageerror",e=>{errors.push(e.message);console.error("UPDATES BROWSER",e.message);});
   await page.goto("http://127.0.0.1:"+server.address().port);
-  await page.waitForFunction(()=>typeof bootReady!=="undefined"&&bootReady);
+  await page.waitForFunction(()=>typeof bootReady!=="undefined"&&bootReady,{},{timeout:10000}).catch(async e=>{console.error("BOOT DEBUG",await page.locator("#boot-error").textContent().catch(()=>""),errors);throw e;});
   await page.waitForSelector("#splash",{state:"detached"});
   await page.locator("#fx-documents").click();
   await page.locator("#fx-upload").setInputFiles({name:"notes.txt",mimeType:"text/plain",buffer:Buffer.from("hello")});
