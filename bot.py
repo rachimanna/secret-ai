@@ -1209,6 +1209,7 @@ def is_abacus(model):
 # More gateways for free models (the key is <NAME>_API_KEY): name -> (base URL, [(how to find a model, id to try if the
 # list is closed)], what an id must contain). Each found model goes into the menu as a free one.
 EXTRA_PROVIDERS = {
+    "oxionai": ("https://www.oxionai.com/v1", [], ""),  # OXIONAI_API_KEY; test routing is exclusive when configured
     "reformboss": ("https://api.reformboss.com/v1", [], ""),  # REFORMBOSS_API_KEY; models added explicitly later
     "nvidia": ("https://integrate.api.nvidia.com/v1",       # build.nvidia.com: DeepSeek, Kimi, Qwen for free
                [(r"deepseek-(v\d|chat)", None), (r"qwen-?3", None)], ""),
@@ -1462,7 +1463,7 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
     provider = chat_provider(model)
     client = context.bot_data.get(CHAT_PROVIDERS[provider])
     if not client:
-        env = "ABACUS_API_KEY" if provider == ABACUS_PREFIX else "ANYMODEL_API_KEY"
+        env = "ANYMODEL_API_KEY" if provider == ANYMODEL_PREFIX else provider.rstrip(":").upper() + "_API_KEY"
         raise AuthenticationError(f"{env} is not set", body=None,
                                   response=httpx.Response(401, request=httpx.Request("POST", ABACUS_URL)))
     messages = chat_messages(request.get("instructions"), request["input"])
@@ -1560,18 +1561,34 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 
 
 CHAT_SOURCES = ((ANYMODEL_PREFIX, "anymodel_chat"), ("reformboss:", "reformboss"))
+OXIONAI_MODELS = ("claude-sonnet-5",)
+
+
+def chat_sources(data):
+    # Enabling the test never silently falls back to another paid gateway.
+    return (("oxionai:", "oxionai"),) if data.get("oxionai") else CHAT_SOURCES
+
+
+def chat_model_catalog(data):
+    if not data.get("oxionai"):
+        return MODEL_CATALOG
+    ids = data.get("oxionai_models") or OXIONAI_MODELS
+    return [(model_title(i), r"(?:^|:)" + re.escape(i) + r"$", "oxionai:") for i in ids]
+
 
 
 async def discover_models(app):
     """Only the owner's catalog, using IDs confirmed by a configured gateway."""
     data = app.bot_data
-    sources = CHAT_SOURCES if MODEL_CATALOG else ()
+    requested = chat_model_catalog(data)
+    sources = chat_sources(data) if requested else ()
+    default_pick = requested[0][1] if requested else ""
 
     store = data.get("connections")
 
     def approved(model, prefix):
         return (isinstance(model, str) and model.startswith(prefix)
-                and any(re.search(pattern, model, re.I) for _, pattern, *rest in MODEL_CATALOG))
+                and any(re.search(pattern, model, re.I) for _, pattern, *rest in requested))
 
     async def catalog(prefix, name):
         if not data.get(name):
@@ -1609,7 +1626,7 @@ async def discover_models(app):
 
     catalogs = await asyncio.gather(*(catalog(*source) for source in sources))
     models, backups = [], []
-    for label, pattern, *first in MODEL_CATALOG:
+    for label, pattern, *first in requested:
         routes = []
         for prefix, ids in catalogs:
             found = pick_catalog(ids, pattern, cc_first=False)
@@ -1623,16 +1640,16 @@ async def discover_models(app):
             LOG.info("Chat model %s: %s", label, routes[0])
         else:
             LOG.warning("%s is unavailable in the configured catalogs; not offered", label)
-    default = next((m for m in models if re.search(DEFAULT_PICK, m, re.I)), None)
+    default = next((m for m in models if re.search(default_pick, m, re.I)), None)
     if not default and models:
         default = models[0]
-        LOG.warning("%s unavailable; temporarily using %s", MODEL_CATALOG[0][0], default)
+        LOG.warning("%s unavailable; temporarily using %s", requested[0][0], default)
     # Migrate the previous global default once. Explicit per-user choices remain valid
     # only if they belong to this catalog. Old env flags cannot activate other models.
-    if store and default and store.get_meta("default_pick") != DEFAULT_PICK:
+    if store and default and store.get_meta("default_pick") != default_pick:
         store.set_meta("default_model", default)
-        if re.search(DEFAULT_PICK, default, re.I):
-            store.set_meta("default_pick", DEFAULT_PICK)
+        if re.search(default_pick, default, re.I):
+            store.set_meta("default_pick", default_pick)
     saved = store.get_meta("default_model") if store else None
     if saved in models:
         default = saved
@@ -1650,7 +1667,7 @@ MODEL_RETRY_SECONDS = 30
 
 async def refresh_chat_models(data, force=False):
     """One bounded discovery at a time; concurrent messages share the same retry."""
-    if not MODEL_CATALOG or not any(data.get(name) for _, name in CHAT_SOURCES):
+    if not chat_model_catalog(data) or not any(data.get(name) for _, name in chat_sources(data)):
         return bool(data.get("models"))
     async with data.setdefault("model_refresh_lock", asyncio.Lock()):
         now = time.monotonic()
@@ -2961,8 +2978,8 @@ def drop_model(data, model, exc):
     if (not isinstance(exc, (PermissionDeniedError, AuthenticationError, NotFoundError)) and not out_of_credits) \
             or model not in data.get("models", []):
         return
-    if model.startswith(("reformboss:", ANYMODEL_PREFIX)) and any(
-            re.search(pattern, model, re.I) for _, pattern, *rest in MODEL_CATALOG):
+    if model.startswith(tuple(prefix for prefix, _ in chat_sources(data))) and any(
+            re.search(pattern, model, re.I) for _, pattern, *rest in chat_model_catalog(data)):
         # The only approved model must not disappear permanently after a refused request.
         # Its actual error is shown to the user; background discovery rechecks availability.
         LOG.warning("%s request refused (%s); keeping the configured route for recovery", model, type(exc).__name__)
@@ -4551,30 +4568,30 @@ async def api_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data["connections"].get_meta("owner") != update.effective_user.id:
         await send(update.effective_message, "Диагностика API доступна только владельцу бота.")
         return
-    status = await reply(update.effective_message, "Проверяю подключения AnyModel и Reformboss…")
+    status = await reply(update.effective_message, "Проверяю активное подключение моделей…")
+    sources, requested = chat_sources(data), chat_model_catalog(data)
 
     async def check(prefix, name):
-        title = "AnyModel" if name == "anymodel_chat" else "Reformboss"
+        title = {"anymodel_chat": "AnyModel", "reformboss": "Reformboss", "oxionai": "Oxion AI"}.get(name, name)
         client = data.get(name)
         if not client:
-            variable = "ANYMODEL_API_KEY" if name == "anymodel_chat" else "REFORMBOSS_API_KEY"
+            variable = "ANYMODEL_API_KEY" if name == "anymodel_chat" else name.upper() + "_API_KEY"
             return f"{title}: ключ не настроен ({variable})."
         try:
             result = await asyncio.wait_for(client.models.list(), 10)
             ids = [m.id for m in result.data]
-            matching = [i for i in ids if any(re.search(pattern, i, re.I) for _, pattern, *rest in MODEL_CATALOG)]
-            grok = [i for i in ids if "grok" in i.lower()][:12]
-            return (f"{title}: каталог доступен, моделей {len(ids)}.\nGrok 4.7: "
-                    + (", ".join(matching[:6]) if matching else "точного совпадения нет")
-                    + "\nМодели Grok в каталоге: " + (", ".join(grok) if grok else "нет"))
+            matching = [i for i in ids if any(re.search(pattern, i, re.I) for _, pattern, *rest in requested)]
+            return (f"{title}: каталог доступен, моделей {len(ids)}.\nВыбранные модели: "
+                    + (", ".join(matching[:8]) if matching else "точного совпадения нет")
+                    + "\nПримеры из каталога: " + (", ".join(ids[:12]) if ids else "нет"))
         except Exception as exc:
             return f"{title}: " + safe_api_error(client, exc)
 
     try:
-        results = await asyncio.gather(*(check(*source) for source in CHAT_SOURCES))
+        results = await asyncio.gather(*(check(*source) for source in sources))
         selected = data.get("chat_default") or "нет"
         report = "Текущая модель: " + selected + "\n\n" + "\n\n".join(results)
-        for _, name in CHAT_SOURCES:
+        for _, name in sources:
             key = getattr(data.get(name), "api_key", "")
             if isinstance(key, str) and len(key) >= 8:
                 report = report.replace(key, "[REDACTED]")
@@ -5218,7 +5235,7 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not models_for(context.bot_data, update.effective_user.id):
         shown = (ui(update, "Сервис ИИ сейчас недоступен. Попробуй немного позже — подключение проверяется автоматически.",
                             "The AI service is unavailable. Please try shortly; the connection is checked automatically.")
-                 if any(context.bot_data.get(name) for _, name in CHAT_SOURCES) else ui(update,
+                 if any(context.bot_data.get(name) for _, name in chat_sources(context.bot_data)) else ui(update,
                      "Сервис ИИ сейчас недоступен. Администратору нужно проверить подключение.",
                      "The AI service is unavailable. The administrator needs to check its connection."))
         await send(message, shown)
@@ -5742,6 +5759,8 @@ async def shutdown(app):
         except Exception as exc:
             LOG.warning("Final database save failed: %s", type(exc).__name__)
     await app.bot_data["client"].close()
+    if app.bot_data.get("oxionai"):
+        await app.bot_data["oxionai"].close()
     if hasattr(app.bot_data.get("stt"), "close"):
         await app.bot_data["stt"].close()
     await app.bot_data["http"].aclose()
@@ -6475,6 +6494,7 @@ def main():
         stt=AsyncOpenAI(api_key=key, timeout=120, max_retries=2) if use_openai else speech.GoogleSpeech(),
         memory=Memory(database), allowed=allowed, snapshots=snapshots, codex=codex.CodexStore(connections), codex_jobs={},
         model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
+        oxionai_models=list(dict.fromkeys(i.strip() for i in os.environ.get("OXIONAI_MODELS", "").split(",") if i.strip())) or list(OXIONAI_MODELS),
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
         clear_drafts=os.environ.get("CLEAR_DRAFTS", "1").strip() != "0",
