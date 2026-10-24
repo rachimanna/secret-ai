@@ -37,6 +37,8 @@ const server=http.createServer((req,res)=>{
  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);assert.equal(overflow,false,name+' '+label+' horizontal overflow');
  assert.equal(await page.locator('.action-card').count(),4);
  await page.screenshot({path:path.join(output,`${name}-${label}-home.png`),fullPage:true});
+ page.on('console',m=>{if(m.text().startsWith('NAV DEBUG'))console.log(m.text());});
+ await page.evaluate(()=>{const previous=switchTab;switchTab=tab=>{console.log('NAV DEBUG SWITCH',tab);return previous(tab);};document.addEventListener('click',e=>console.log('NAV DEBUG CLICK',e.target.outerHTML.slice(0,200)),true);});
  console.log('HOME BUTTON',await page.locator('[data-home-action=day]').evaluate(b=>({action:b.dataset.homeAction,handler:!!document.getElementById('home-actions').onclick})));
  await page.locator('[data-home-action=day]').click();
  await page.waitForSelector('.day-card',{timeout:10000}).catch(async e=>{console.error('DAY DEBUG',await page.evaluate(()=>({tab:document.body.dataset.tab,cards:document.querySelectorAll('.day-card').length,content:document.getElementById('day-content').innerHTML})),errors);throw e;});await page.screenshot({path:path.join(output,`${name}-${label}-tasks.png`),fullPage:true});

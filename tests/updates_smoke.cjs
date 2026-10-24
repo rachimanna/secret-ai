@@ -12,6 +12,7 @@ const server=http.createServer((req,res)=>{
   let raw="";req.on("data",b=>raw+=b);req.on("end",()=>{
    const data=JSON.parse(raw||"{}");calls.push({path:pathname,data,auth:req.headers["x-telegram-init-data"]});let result={ok:true};
    if(pathname==="/api/state")result=fixture;
+   else if(pathname==="/api/catalog")result={apps:[],next:null,enabled:false};
    else if(pathname==="/api/codex/state")result={chats:[],github:null,can_run:false};
    else if(pathname==="/api/day/state")result={tasks:[{id:1,title:"Отчёт",status:"open"}],timezone:"Europe/Moscow",inbox_count:0};
    else if(pathname==="/api/features/documents")result=docs;
