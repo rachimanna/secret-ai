@@ -9,6 +9,7 @@ const ready=new Promise((resolve,reject)=>{let raw='';const timeout=setTimeout((
  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{readText:async()=> 'a'.repeat(32)}}));
  await page.goto(url);assert(!page.url().includes('#'),'capability removed from address bar');
  await page.reload(); // Reload must retain only the connection capability, not account credentials.
+ await page.locator('#mode-code').click();
  await page.locator('#api-id').fill('123');await page.locator('[data-paste="api-hash"]').click();
  assert.equal(await page.locator('#api-hash').inputValue(),'a'.repeat(32));assert.notEqual(await page.locator('#api-hash').getAttribute('type'),'password');
  await page.locator('#phone').fill('79991234567');await page.locator('#secret').fill('fixture-key');

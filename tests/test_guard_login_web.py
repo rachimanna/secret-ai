@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
 from telethon import types
+from telethon.errors import SessionPasswordNeededError
 
 import httpx
 
@@ -29,6 +30,47 @@ class FakeClient:
 
     async def send_code_request(self,phone):
         return NS(type=types.auth.SentCodeTypeApp(length=5),phone_code_hash='DO_NOT_DISCLOSE')
+
+
+class FakeQR:
+    url='tg://login?token=FAKE_QR_NOT_A_LOGIN'
+    def __init__(self,scanned,with_password=False,expire_once=False):
+        self.scanned,self.with_password,self.expire_once=scanned,with_password,expire_once
+        self.recreated=0
+
+    async def wait(self):
+        if self.expire_once and not self.recreated:
+            raise asyncio.TimeoutError()
+        if not await asyncio.to_thread(self.scanned.wait,5):raise TimeoutError()
+        if self.with_password:raise SessionPasswordNeededError(request=None)
+        return NS(id=1,bot=False)
+
+    async def recreate(self):
+        self.recreated+=1
+
+
+class FakeQRClient(FakeClient):
+    scanned=threading.Event()
+    with_password=False
+    expire_once=False
+    instances=[]
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.receives_updates=kwargs['receive_updates']
+        self.connect=AsyncMock();self.sign_in=AsyncMock()
+        self.qr=FakeQR(self.scanned,self.with_password,self.expire_once)
+        self.instances.append(self)
+
+    async def qr_login(self):return self.qr
+
+
+class AutoQRClient(FakeQRClient):
+    async def qr_login(self):
+        async def accepted():
+            await asyncio.sleep(3)
+            return NS(id=1,bot=False)
+        self.qr.wait=accepted
+        return self.qr
 
 
 class WebLoginTest(unittest.TestCase):
@@ -100,6 +142,34 @@ class WebLoginTest(unittest.TestCase):
             self.wizard.submit(good)
         self.assertEqual(self.output.read_bytes(),b'preserved')
 
+    def test_qr_login_without_phone_or_code_and_expired_token_refresh(self):
+        class Client(FakeQRClient):
+            scanned=threading.Event();expire_once=True;instances=[]
+        self.wizard.client_factory=Client
+        self.wizard.submit(dict(mode='qr',api_id='123',api_hash='a'*32,secret='fixture-key'))
+        try:
+            self.wait_phase('qr')
+            self.assertIn('<svg',self.wizard.state()['qr_svg'])
+            Client.scanned.set()
+            self.wait_phase('done')
+            self.assertEqual(self.wizard.state()['qr_svg'],'')
+            self.assertTrue(Client.instances[0].receives_updates)
+            self.assertEqual(Client.instances[0].qr.recreated,1)
+        finally:Client.scanned.set()
+
+    def test_qr_two_factor_password_is_still_required(self):
+        class Client(FakeQRClient):
+            scanned=threading.Event();with_password=True;instances=[]
+        self.wizard.client_factory=Client
+        self.wizard.submit(dict(mode='qr',api_id='123',api_hash='a'*32,secret='fixture-key'))
+        try:
+            self.wait_phase('qr');Client.scanned.set();self.wait_phase('password')
+            self.assertEqual(self.wizard.state()['qr_svg'],'')
+            self.wizard.submit(dict(phase='password',answer='fixture-password'))
+            self.wait_phase('done')
+            Client.instances[0].sign_in.assert_awaited_once_with(password='fixture-password')
+        finally:Client.scanned.set()
+
     def test_http_requires_private_capability_and_never_returns_credentials(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),web.make_handler(self.wizard))
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
@@ -110,7 +180,7 @@ class WebLoginTest(unittest.TestCase):
                 self.assertIn('запусти программу',rejected.json()['error'])
                 result=client.post('/api/state',json={},headers={'X-Guard-Token':self.wizard.token})
                 self.assertEqual(result.status_code,200)
-                self.assertEqual(set(result.json()),{'phase','message','delivery','code_label'})
+                self.assertEqual(set(result.json()),{'phase','message','delivery','code_label','qr_svg'})
                 page=client.get('/')
                 self.assertNotIn(self.wizard.token,page.text)
                 self.assertEqual(page.headers['Cache-Control'],'no-store')

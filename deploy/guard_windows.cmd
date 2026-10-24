@@ -11,7 +11,7 @@ set "PYEXE=%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencie
 if not exist "%PYEXE%" set "PYEXE=python"
 if not exist ".venv\Scripts\python.exe" "%PYEXE%" -m venv .venv
 if errorlevel 1 goto failed
-".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --no-cache-dir "Telethon>=1.45,<2" "cryptography>=42,<46"
+".venv\Scripts\python.exe" -m pip install --disable-pip-version-check --no-cache-dir "Telethon>=1.45,<2" "cryptography>=42,<46" "qrcode>=8,<9"
 if errorlevel 1 goto failed
 ".venv\Scripts\python.exe" tools\guard_login_web.py
 if errorlevel 1 goto failed

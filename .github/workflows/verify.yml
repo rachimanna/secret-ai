@@ -48,3 +48,4 @@ jobs:
         if: always()
       - run: node tests/extensions_smoke.cjs
       - run: node tests/guard_login_smoke.cjs
+      - run: node tests/guard_qr_smoke.cjs

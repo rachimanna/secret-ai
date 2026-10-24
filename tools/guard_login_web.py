@@ -24,20 +24,26 @@ label{display:block;margin-top:18px}input{width:100%;padding:13px;border:1px sol
 .line{display:flex;gap:8px}.line input{flex:1}.line button{width:auto}button{cursor:pointer;border:0;border-radius:10px;background:#3b82f6;color:white;padding:13px;font:inherit}
 button:disabled{opacity:.5;cursor:wait}button[type=submit]{width:100%;margin-top:24px}.hint{font-size:14px;color:#a8b8ce}#status{white-space:pre-wrap;overflow-wrap:anywhere}#status.error{color:#fca5a5}input[aria-invalid=true]{border:2px solid #f87171}
 [hidden]{display:none!important}@media(max-width:480px){main{padding:20px}.line{flex-wrap:wrap}.line button{font-size:14px}}
+#qr-image{background:white;padding:12px;border-radius:12px;max-width:320px;margin:20px auto}#qr-image svg{display:block;width:100%;height:auto}.mode button{flex:1;background:#334155}.mode button.on{background:#3b82f6}
 </style><main><h1>Подключение аккаунта</h1><p>Ввод виден. Можно вставлять мышью или кнопкой «Вставить». Данные передаются только локальной программе на этом компьютере.</p>
 <form id="setup">
+<div class="line mode"><button type="button" id="mode-qr" class="on">Через QR · iPhone</button><button type="button" id="mode-code">Через код</button></div>
+<p class="hint" id="mode-hint">Для QR номер и SMS не нужны. Нужный аккаунт должен быть открыт в Telegram на iPhone.</p>
 <label for="api-id">api_id</label><div class="line"><input id="api-id" inputmode="numeric" autocomplete="off" required><button type="button" data-paste="api-id">Вставить</button></div>
 <label for="api-hash">api_hash</label><div class="line"><input id="api-hash" autocomplete="off" spellcheck="false" required><button type="button" data-paste="api-hash">Вставить</button></div><div class="hint" id="hash-count">Нужно 32 символа.</div>
-<label for="phone">Номер аккаунта с +</label><div class="line"><input id="phone" type="tel" autocomplete="off" required><button type="button" data-paste="phone">Вставить</button></div>
+<div id="phone-wrap" hidden><label for="phone">Номер аккаунта с +</label><div class="line"><input id="phone" type="tel" autocomplete="off" disabled><button type="button" data-paste="phone">Вставить</button></div></div>
 <label for="secret">Ключ шифрования бота на сервере</label><div class="line"><input id="secret" autocomplete="off" spellcheck="false" required><button type="button" data-paste="secret">Вставить</button></div>
 <p class="hint">Возьми ENCRYPTION_KEY из .env бота на hCloud. Если он не задан — TELEGRAM_TOKEN этого бота. Этот ключ не отправляется в Telegram.</p>
 <button type="submit">Продолжить</button></form>
+<section id="qr-panel" hidden><h2>Отсканируй QR на iPhone</h2><p>В Telegram выбери нужный аккаунт → Настройки → Устройства → Подключить устройство. Отсканируй код и подтверди вход.</p><div id="qr-image"></div><p class="hint">QR обновляется автоматически. Не отправляй его другим людям.</p></section>
 <form id="prompt" hidden><label for="answer" id="question"></label><div class="line"><input id="answer" autocomplete="off" spellcheck="false"><button type="button" data-paste="answer">Вставить</button></div><button type="submit">Подтвердить</button></form>
 <p id="status" role="status" aria-live="polite"></p><p class="hint">Не закрывай чёрное окно до завершения входа. Не публикуй снимок экрана с заполненными полями. После входа будет сохранён только зашифрованный файл сессии.</p></main>
 <script>
 let token=location.hash.slice(1);
 try{token=token||sessionStorage.getItem('guard-access')||'';if(token)sessionStorage.setItem('guard-access',token);history.replaceState(null,'',location.pathname);}catch{}
-const $=id=>document.getElementById(id);let phase='setup',sending=false,hasError=false;
+const $=id=>document.getElementById(id);let phase='setup',sending=false,hasError=false,mode='qr',qrSvg='';
+function setMode(next){mode=next;$('phone-wrap').hidden=mode==='qr';$('phone').disabled=mode==='qr';$('phone').required=mode==='code';$('mode-qr').classList.toggle('on',mode==='qr');$('mode-code').classList.toggle('on',mode==='code');$('mode-hint').textContent=mode==='qr'?'Для QR номер и SMS не нужны. Нужный аккаунт должен быть открыт в Telegram на iPhone.':'Telegram сам выбирает способ доставки кода. Помощник покажет выбранный способ.';}
+$('mode-qr').onclick=()=>setMode('qr');$('mode-code').onclick=()=>setMode('code');
 const status=text=>{$('status').textContent=text;$('status').className='';};
 function showError(message,field){hasError=true;status(message);$('status').className='error';if(field&&$(field)){$(field).setAttribute('aria-invalid','true');$(field).focus();}}
 async function api(action,data={}){if(!token)throw Error('Эта вкладка открыта без ключа связи. Закрой её и запусти файл помощника заново.');let r;try{r=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Guard-Token':token},body:JSON.stringify(data)});}catch{throw Error('Нет связи с локальной программой. Не закрывай чёрное окно запуска. Если оно уже закрыто, закрой эту вкладку и запусти помощник заново.');}const result=await r.json();if(!r.ok){const error=Error(result.error||'Не удалось выполнить запрос');error.field=result.field;throw error;}return result;}
@@ -45,10 +51,11 @@ document.querySelectorAll('input').forEach(input=>input.addEventListener('input'
 document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{try{const field=$(b.dataset.paste);field.value=(await navigator.clipboard.readText()).trim();field.dispatchEvent(new Event('input'));field.focus();}catch{status('Нажми правой кнопкой мыши внутри нужного поля и выбери «Вставить».');}});
 $('api-hash').oninput=()=>{$('hash-count').textContent='Введено символов: '+$('api-hash').value.trim().length+' из 32';};
 function draw(s){if(hasError&&phase===s.phase)return;hasError=false;const changed=phase!==s.phase;phase=s.phase;$('setup').hidden=phase!=='setup';$('prompt').hidden=!['code','password'].includes(phase);
+$('qr-panel').hidden=phase!=='qr';if((s.qr_svg||'')!==qrSvg){qrSvg=s.qr_svg||'';$('qr-image').innerHTML=qrSvg;}
 if(changed){$('answer').value='';if(phase==='code'||phase==='password'){$('question').textContent=phase==='code'?(s.code_label||'Код входа'):'Пароль двухэтапной проверки';$('answer').focus();}if(phase==='working'||phase==='done'){for(const id of ['api-id','api-hash','secret','phone'])$(id).value='';}}
 status(s.message||'');document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=sending||phase==='working');}
 async function submit(data){sending=true;hasError=false;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=true);try{draw(await api('submit',data));}catch(e){showError(e.message,e.field);}finally{sending=false;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=phase==='working');}}
-$('setup').onsubmit=e=>{e.preventDefault();if(!/^[0-9]+$/.test($('api-id').value.trim())){showError('В api_id нужны только цифры из my.telegram.org.','api-id');return;}if(!/^[a-fA-F0-9]{32}$/.test($('api-hash').value.trim())){showError('В api_hash должно быть ровно 32 символа: цифры и латинские буквы a–f.','api-hash');return;}submit({api_id:$('api-id').value.trim(),api_hash:$('api-hash').value.trim(),phone:$('phone').value.trim(),secret:$('secret').value.trim()});};
+$('setup').onsubmit=e=>{e.preventDefault();if(!/^[0-9]+$/.test($('api-id').value.trim())){showError('В api_id нужны только цифры из my.telegram.org.','api-id');return;}if(!/^[a-fA-F0-9]{32}$/.test($('api-hash').value.trim())){showError('В api_hash должно быть ровно 32 символа: цифры и латинские буквы a–f.','api-hash');return;}submit({api_id:$('api-id').value.trim(),api_hash:$('api-hash').value.trim(),phone:$('phone').value.trim(),secret:$('secret').value.trim(),mode});};
 $('prompt').onsubmit=e=>{e.preventDefault();const answer=phase==='password'?$('answer').value:$('answer').value.trim();if(answer)submit({answer,phase});};
 setInterval(async()=>{if(sending)return;try{draw(await api('state'));}catch{}},800);
 </script></html>'''
@@ -67,12 +74,13 @@ class Wizard:
         self.lock=threading.Lock();self.answers=queue.Queue()
         self.phase='setup';self.message='Заполни поля и нажми «Продолжить».'
         self.delivery='unknown';self.code_label='Код входа'
+        self.qr_svg=''
         self.code_hint='Telegram запросил код входа. Способ доставки пока не определён.'
         self.last_seen=time.monotonic()
 
     def state(self):
         with self.lock:
-            return {'phase':self.phase,'message':self.message,'delivery':self.delivery,'code_label':self.code_label}
+            return {'phase':self.phase,'message':self.message,'delivery':self.delivery,'code_label':self.code_label,'qr_svg':self.qr_svg if self.phase=='qr' else ''}
 
     def record_delivery(self,sent):
         kind=type(getattr(sent,'type',None)).__name__
@@ -94,6 +102,7 @@ class Wizard:
     def set(self,phase,message):
         with self.lock:
             self.phase,self.message=phase,message
+            if phase!='qr':self.qr_svg=''
 
     async def ask(self,phase):
         self.set(phase,self.code_hint if phase=='code' else 'Введи пароль двухэтапной проверки.')
@@ -112,11 +121,13 @@ class Wizard:
                 if api_id<=0:
                     raise ValidationError('api_id должен быть положительным числом.','api-id')
                 api_hash=data.get('api_hash','');phone=data.get('phone','');secret=data.get('secret','')
+                mode=data.get('mode','code')
+                if mode not in ('code','qr'):raise ValidationError('Выбери вход по QR или через код.')
                 if isinstance(api_hash,str):api_hash=api_hash.strip()
                 if not isinstance(api_hash,str) or not re.fullmatch(r'[a-fA-F0-9]{32}',api_hash):
                     raise ValidationError('В api_hash должно быть ровно 32 символа: цифры и латинские буквы a–f. Скопируй только значение App api_hash.','api-hash')
                 if isinstance(phone,str):phone=re.sub(r'[\s()\-]+','',phone)
-                if not isinstance(phone,str) or not re.fullmatch(r'\+[0-9]{7,16}',phone):
+                if mode=='code' and (not isinstance(phone,str) or not re.fullmatch(r'\+[0-9]{7,16}',phone)):
                     raise ValidationError('Номер телефона: начни с + и кода страны. Пробелы, скобки и дефисы можно оставить.','phone')
                 if isinstance(secret,str):secret=secret.strip()
                 if not isinstance(secret,str) or not 1<=len(secret)<=1024:
@@ -125,7 +136,7 @@ class Wizard:
                 if self.output.exists():
                     raise ValidationError('В этой папке уже есть файл '+self.output.name+'. Помощник не перезаписывает его. Если вход уже завершён, используй готовый файл; для нового входа запусти помощник из другой папки.')
                 self.phase,self.message='working','Подключаюсь к Telegram…'
-                threading.Thread(target=self.run,args=(api_id,api_hash,phone,secret),daemon=True).start()
+                threading.Thread(target=self.run,args=(api_id,api_hash,phone,secret,mode),daemon=True).start()
             elif self.phase in ('code','password') and data.get('phase')==self.phase:
                 answer=data.get('answer')
                 if not isinstance(answer,str) or not answer or len(answer)>1024:
@@ -136,15 +147,16 @@ class Wizard:
             else:
                 raise ValidationError('Дождись следующего шага: запрос уже обрабатывается.')
 
-    def run(self,api_id,api_hash,phone,secret):
+    def run(self,api_id,api_hash,phone,secret,mode='code'):
         try:
-            asyncio.run(self.authorize(api_id,api_hash,phone,secret))
+            asyncio.run(self.authorize(api_id,api_hash,phone,secret,mode))
             self.set('done','Готово! Зашифрованный файл сохранён:\n'+str(self.output.resolve())+'\nЗагрузи его в папку бота на hCloud после установки обновления с /guard.')
         except Exception as error:
             self.set('error','Вход не завершён ('+type(error).__name__+'). Закрой программу и запусти её заново. Проверь данные и подключение.')
 
-    async def authorize(self,api_id,api_hash,phone,secret):
+    async def authorize(self,api_id,api_hash,phone,secret,mode='code'):
         from telethon import TelegramClient
+        from telethon.errors import SessionPasswordNeededError,PasswordHashInvalidError
         from telethon.sessions import StringSession
         wizard=self
         class DeliveryClient(self.client_factory or TelegramClient):
@@ -152,9 +164,40 @@ class Wizard:
                 sent=await super().send_code_request(*args,**kwargs)
                 wizard.record_delivery(sent)
                 return sent
-        client=DeliveryClient(StringSession(),api_id,api_hash,receive_updates=False)
+        client=DeliveryClient(StringSession(),api_id,api_hash,receive_updates=mode=='qr')
         try:
-            await client.start(phone=phone,code_callback=lambda:self.ask('code'),password=lambda:self.ask('password'))
+            if mode=='qr':
+                await client.connect()
+                login=await client.qr_login()
+                try:
+                    for attempt in range(20):
+                        # Start listening before displaying a scannable token.
+                        waiting=asyncio.create_task(login.wait())
+                        await asyncio.sleep(0)
+                        try:
+                            import qrcode
+                            from qrcode.image.svg import SvgPathFillImage
+                            svg=qrcode.make(login.url,image_factory=SvgPathFillImage).to_string(encoding='unicode')
+                            with self.lock:
+                                self.qr_svg=svg;self.phase='qr';self.message='Отсканируй QR через Telegram на iPhone и подтверди вход. Код из SMS не нужен.'
+                            await waiting
+                            break
+                        except asyncio.TimeoutError:
+                            await login.recreate()
+                        finally:
+                            if not waiting.done():
+                                waiting.cancel();await asyncio.gather(waiting,return_exceptions=True)
+                    else:
+                        raise TimeoutError('QR login timeout')
+                except SessionPasswordNeededError:
+                    for attempt in range(3):
+                        password=await self.ask('password')
+                        try:
+                            await client.sign_in(password=password);break
+                        except PasswordHashInvalidError:
+                            if attempt==2:raise
+            else:
+                await client.start(phone=phone,code_callback=lambda:self.ask('code'),password=lambda:self.ask('password'))
             if (await client.get_me()).bot:
                 raise ValueError('User account required')
             guard_session.save(self.output,secret,api_id,api_hash,client.session.save())
