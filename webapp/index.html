@@ -1878,7 +1878,10 @@ function openGroupSheet(g) {
         <div class="body"><div class="t">${m ? esc(prettyModel(m)) : `${esc(prettyModel(state.settings.models[0]))} <span style="color:var(--hint)">· ${T.gModelDefault.toLowerCase()}</span>`}</div></div>
         <span class="check" style="color:var(--accent);opacity:${(g.model || "") === m ? 1 : 0}">${ICON.check}</span></button>`).join("")}</div>
     <div class="small">${T.adminOnly}</div>
+    <div class="small">${lang === "ru" ? "Восстановление сообщений" : "Message restoration"}</div>
+    <div id="g-guard" role="region" aria-label="${lang === "ru" ? "Восстановление сообщений" : "Message restoration"}"><p class="lead">${lang === "ru" ? "Проверяю состояние…" : "Checking status…"}</p></div>
     <div class="small">${T.groupCmds}</div>`);
+  loadGroupGuard(g.id,$("g-guard"));
   $("g-model").querySelectorAll("[data-model]").forEach(b => b.onclick = async () => {
     haptic("select");
     try {
@@ -1893,6 +1896,29 @@ function openGroupSheet(g) {
     try { state.groups = (await api("/api/groups/level", { chat_id: g.id, level: b.dataset.level })).groups; g.level = b.dataset.level; renderGroups(); toast(T.saved); }
     catch (e) { $("g-level").querySelectorAll("button").forEach(x => x.classList.toggle("on", x.dataset.level === prev)); toast(errorText(e)); haptic("error"); }
   });
+}
+
+async function loadGroupGuard(chatId,target,enabled) {
+  if (!target?.isConnected) return;
+  target.querySelectorAll('button').forEach(b=>b.disabled=true);
+  const ru=lang === "ru";
+  try {
+    const data=await api('/api/groups/guard',{chat_id:chatId,...(typeof enabled === 'boolean' ? {enabled} : {})});
+    if (!target.isConnected) return;
+    target.innerHTML=`<p class="lead" role="status">${data.enabled ? (ru ? 'Включено' : 'Enabled') : (ru ? 'Выключено' : 'Disabled')} · ${data.ready ? (ru ? 'Наблюдатель подключён' : 'Observer connected') : (ru ? 'Наблюдатель не подключён' : 'Observer disconnected')}</p>
+      <p class="hint">${ru ? 'Сохранено' : 'Saved'}: ${Number(data.saved || 0)} · ${ru ? 'Восстановлено' : 'Restored'}: ${Number(data.restored || 0)} · ${ru ? 'Не подтверждено' : 'Unconfirmed'}: ${Number(data.uncertain || 0)}</p>
+      ${data.error ? `<p class="lead" role="status">${esc(data.error)}</p>` : ''}
+      <button class="btn" id="g-guard-toggle" aria-pressed="${data.enabled}" ${!data.enabled && !data.ready ? 'disabled' : ''}>${data.enabled ? (ru ? 'Выключить восстановление' : 'Disable restoration') : (ru ? 'Включить восстановление' : 'Enable restoration')}</button>
+      <button class="btn ghost" id="g-guard-refresh">${ru ? 'Обновить состояние' : 'Refresh status'}</button>
+      <p class="hint">${ru ? 'Настраивают владелец и администраторы. Удаления владельцем и самим ботом не восстанавливаются.' : 'Managed by the owner and administrators. Deletions by the owner or the bot are not restored.'}</p>`;
+    target.querySelector('#g-guard-toggle').onclick=()=>loadGroupGuard(chatId,target,!data.enabled);
+    target.querySelector('#g-guard-refresh').onclick=()=>loadGroupGuard(chatId,target);
+  } catch(e) {
+    if (!target.isConnected) return;
+    const text=e.detail || (e.code === 'group_admin' ? (ru ? 'Управлять восстановлением могут владелец и администраторы этой группы.' : 'Only this group’s owner and administrators can manage restoration.') : errorText(e));
+    target.innerHTML=`<p class="lead" role="status">${esc(text)}</p><button class="btn ghost" id="g-guard-retry">${ru ? 'Повторить' : 'Retry'}</button>`;
+    target.querySelector('#g-guard-retry').onclick=()=>loadGroupGuard(chatId,target);
+  }
 }
 
 /* ---------------- quick + discover ---------------- */

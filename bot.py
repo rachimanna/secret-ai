@@ -6170,6 +6170,9 @@ class Bridge:
             return self.app.bot_data["groups"].groups_for(user_id)
         return self._run(read())
 
+    def group_guard(self,user_id,chat_id,enabled=None):
+        return self._run(message_guard.settings(self.app,user_id,chat_id,enabled))
+
     def set_group_level(self, user_id, chat_id, level):
         """Only the group's admins change how often the bot speaks up there. Returns False if not allowed."""
         async def write():

@@ -263,18 +263,52 @@ class Worker:
                 await client.disconnect()
 
 
+async def settings(app,user_id,chat_id,enabled=None):
+    """Authenticated Mini App group controls: check current Telegram admin rights on every call."""
+    if type(chat_id) is not int or not -(10**15)<chat_id<0:
+        raise ValueError("Некорректный ID группы.")
+    if enabled is not None and type(enabled) is not bool:
+        raise ValueError("enabled должен быть true или false.")
+    allowed=app.bot_data.get("allowed")
+    if allowed and user_id not in allowed:
+        raise PermissionError("group_admin")
+    try:
+        member=await app.bot.get_chat_member(chat_id,user_id)
+        if member.status not in ("administrator","creator"):
+            raise PermissionError("group_admin")
+        chat=await app.bot.get_chat(chat_id)
+    except TelegramError:
+        raise PermissionError("group_admin") from None
+    if chat.type!="supergroup":
+        raise ValueError("Восстановление доступно в супергруппе.")
+    guard=app.bot_data.get("message_guard")
+    store=guard.store if guard else Store(app.bot_data["connections"])
+    ready=bool(guard and guard.ready)
+    if enabled is True and not ready:
+        raise ValueError((guard.error if guard else "") or "Наблюдатель не подключён. Загрузите файл сессии, задайте GUARD_ENABLED=1 в .env и перезапустите бота.")
+    if enabled is not None:
+        store.configure(chat_id,enabled)
+    row,counts=store.status(chat_id)
+    error=(guard.error if guard and not ready else "") or (row[1] if row else "")
+    if not guard:
+        error="Наблюдатель не настроен: загрузите файл сессии, задайте GUARD_ENABLED=1 в .env и перезапустите бота."
+    return {"configured":bool(guard),"ready":ready,"enabled":bool(row and row[0]),
+            "saved":counts.get("saved",0),"restored":counts.get("restored",0),
+            "uncertain":counts.get("uncertain",0)+counts.get("attempting",0),"error":error}
+
+
 async def command(update,context):
     message,user=update.effective_message,update.effective_user
     if not message or not user or message.chat.type!="supergroup":
         if message:
-            await message.reply_text("Команда /guard работает в супергруппе. Включать защиту может её владелец.")
+            await message.reply_text("Команда /guard работает в супергруппе. Включать защиту могут владелец и администраторы.")
         return
     allowed=context.bot_data.get("allowed")
     if allowed and user.id not in allowed:
         return
     member=await context.bot.get_chat_member(message.chat_id,user.id)
-    if member.status!="creator" or message.sender_chat:
-        await message.reply_text("Управлять восстановлением может только владелец группы от своего аккаунта.");return
+    if member.status not in ("administrator","creator") or message.sender_chat:
+        await message.reply_text("Управлять восстановлением могут владелец и администраторы группы от своего аккаунта.");return
     guard=context.bot_data.get("message_guard")
     if not guard:
         await message.reply_text("Наблюдатель не настроен: загрузите .guard-session.enc и задайте GUARD_ENABLED=1 в .env хостинга, затем перезапустите бота.");return

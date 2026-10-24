@@ -494,6 +494,18 @@ def make_handler(config):
                     return
                 self._send(200, {"secretary": bridge.set_secretary(
                     uid, enabled=data.get("enabled"), rules=rules, notify=data.get("notify"))})
+            elif path == "/api/groups/guard":
+                try:
+                    if type(data.get("chat_id")) is not int or not -(10**15)<data["chat_id"]<0:
+                        raise ValueError("Некорректный ID группы.")
+                    if "enabled" in data and type(data["enabled"]) is not bool:
+                        raise ValueError("enabled должен быть true или false.")
+                    result=bridge.group_guard(uid,data["chat_id"],data.get("enabled"))
+                except PermissionError:
+                    self._send(403,{"error":"group_admin"});return
+                except ValueError as error:
+                    self._send(400,{"error":"guard","detail":str(error)[:300]});return
+                self._send(200,result)
             elif path == "/api/groups/level":
                 try:
                     chat_id = int(data.get("chat_id"))

@@ -65,6 +65,22 @@ class DayRouteTest(unittest.TestCase):
         self.handler._route('/api/day/status',{'id':1},{'id':7,'status':'done','user_id':2})
         self.bridge.day_status.assert_called_once_with(1,7,'done')
 
+    def test_group_guard_uses_verified_user_and_strict_types(self):
+        self.bridge.group_guard.return_value={'enabled':True}
+        self.handler._route('/api/groups/guard',{'id':1},{'chat_id':-100123,'enabled':True,'user_id':2})
+        self.bridge.group_guard.assert_called_once_with(1,-100123,True)
+        self.bridge.group_guard.reset_mock()
+        for value in (True,0,1,'-100123',None):
+            self.handler._route('/api/groups/guard',{'id':1},{'chat_id':value,'enabled':True})
+        self.handler._route('/api/groups/guard',{'id':1},{'chat_id':-100123,'enabled':'true'})
+        self.bridge.group_guard.assert_not_called()
+        self.assertEqual(self.handler._send.call_args.args[0],400)
+
+    def test_group_guard_denies_revoked_permissions(self):
+        self.bridge.group_guard.side_effect=PermissionError('group_admin')
+        self.handler._route('/api/groups/guard',{'id':1},{'chat_id':-100123,'enabled':True})
+        self.assertEqual(self.handler._send.call_args.args[0],403)
+
     def test_invalid_ids_and_statuses_never_reach_bridge(self):
         for value in (True,-1,0,'2',1.5,None):
             self.handler._route('/api/day/task',{'id':1},{'id':value})

@@ -142,15 +142,39 @@ class GuardTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args['photo'],'PHOTO');self.assertEqual(args['caption'],'Caption')
         self.assertEqual(args['message_thread_id'],7);self.assertEqual(args['reply_parameters'].message_id,5)
 
-    async def test_guard_command_only_group_owner_can_enable(self):
+    async def test_guard_command_admin_can_manage_but_member_cannot(self):
         self.worker.ready=True
         target=NS(chat_id=CHAT,chat=NS(type='supergroup'),sender_chat=None,reply_text=AsyncMock())
         update=NS(effective_message=target,effective_user=NS(id=2))
-        bot=NS(get_chat_member=AsyncMock(return_value=NS(status='administrator')))
+        bot=NS(get_chat_member=AsyncMock(return_value=NS(status='member')))
         context=NS(bot=bot,args=['off'],bot_data={'message_guard':self.worker,'allowed':set()})
         await guard.command(update,context);self.assertTrue(self.store.enabled(CHAT))
-        bot.get_chat_member.return_value=NS(status='creator')
+        bot.get_chat_member.return_value=NS(status='administrator')
         await guard.command(update,context);self.assertFalse(self.store.enabled(CHAT))
+
+    async def test_miniapp_guard_permissions_are_checked_live_for_each_group(self):
+        self.worker.ready=True
+        bot=NS(get_chat_member=AsyncMock(return_value=NS(status='administrator')),get_chat=AsyncMock(return_value=NS(type='supergroup')))
+        app=NS(bot=bot,bot_data={'message_guard':self.worker,'connections':self.vault,'allowed':set()})
+        result=await guard.settings(app,2,CHAT,False)
+        self.assertFalse(result['enabled'])
+        self.assertTrue((await guard.settings(app,2,CHAT,True))['enabled'])
+        bot.get_chat_member.return_value=NS(status='member')
+        with self.assertRaises(PermissionError):await guard.settings(app,2,CHAT,False)
+        with self.assertRaises(PermissionError):await guard.settings(app,2,CHAT)
+        self.assertTrue(self.store.enabled(CHAT))
+        bot.get_chat_member.return_value=NS(status='creator')
+        self.assertTrue((await guard.settings(app,1,CHAT))['enabled'])
+
+    async def test_miniapp_requires_ready_observer_and_can_disable_during_failure(self):
+        self.worker.ready=False
+        bot=NS(get_chat_member=AsyncMock(return_value=NS(status='administrator')),get_chat=AsyncMock(return_value=NS(type='supergroup')))
+        app=NS(bot=bot,bot_data={'message_guard':self.worker,'connections':self.vault,'allowed':{2}})
+        with self.assertRaises(ValueError):await guard.settings(app,2,CHAT,True)
+        self.assertFalse((await guard.settings(app,2,CHAT,False))['enabled'])
+        with self.assertRaises(PermissionError):await guard.settings(app,1,CHAT)
+        with self.assertRaises(ValueError):await guard.settings(app,2,CHAT,'true')
+        with self.assertRaises(ValueError):await guard.settings(app,2,True)
 
 
 class SessionTest(unittest.TestCase):
