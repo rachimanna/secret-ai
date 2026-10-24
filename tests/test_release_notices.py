@@ -54,6 +54,18 @@ class StoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.stage({"version":1,"text":"Другое сообщение"})
 
+    def test_editorial_correction_does_not_resend_or_add_recipients(self):
+        self.store.remember([1,2])
+        self.store.stage(self.release)
+        self.store.finish(self.store.claim(1),"sent")
+        self.store.remember([3])
+        corrected = {"version":1,"text":"Исправленный текст","correct_text":True}
+        self.assertFalse(self.store.stage(corrected))
+        self.assertEqual(self.db.execute("SELECT text FROM release_batches").fetchone()[0],corrected["text"])
+        self.assertEqual(self.store.claim(1)[1],2)
+        self.assertIsNone(self.store.claim(1))
+        self.assertEqual(self.db.execute("SELECT status FROM release_deliveries WHERE chat_id=1").fetchone()[0],"sent")
+
     def test_allowed_users_but_no_group_member_dms(self):
         self.db.executescript("CREATE TABLE messages(user_id INTEGER); INSERT INTO messages VALUES (1),(2);"
                               "CREATE TABLE settings(user_id INTEGER); INSERT INTO settings VALUES (3);"

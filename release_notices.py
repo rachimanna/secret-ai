@@ -62,7 +62,10 @@ class Store:
             latest = self.db.execute("SELECT MAX(version) FROM release_batches").fetchone()[0]
             existing = self.db.execute("SELECT text FROM release_batches WHERE version=?", (version,)).fetchone()
             if existing and existing[0] != text:
-                raise ValueError("Published release text is immutable; increment version")
+                if release.get("correct_text") is not True:
+                    raise ValueError("Published release text is immutable; increment version")
+                # Explicit editorial correction: preserve the audience and delivered receipts.
+                self.db.execute("UPDATE release_batches SET text=? WHERE version=?", (text,version))
             if latest is not None and version <= latest:
                 return False  # restart or rollback: no duplicate batch or historical announcements
             self.db.execute("INSERT INTO release_batches(version,text) VALUES (?,?)", (version,text))
