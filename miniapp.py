@@ -65,6 +65,15 @@ def make_handler(config):
     pipedream, github, direct = config["pipedream"], config["github"], config["direct"]
 
     class Handler(BaseHTTPRequestHandler):
+        def handle(self):
+            try:
+                super().handle()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # A peer may disconnect while BaseHTTPRequestHandler reads the first request line.
+                # Response writes already have the same narrow handling in _send.
+                self.close_connection = True
+                LOG.debug("Mini App client disconnected during request")
+
         def _send(self, status, body, content_type="application/json; charset=utf-8", head=False, cache="no-store"):
             data = body if isinstance(body, bytes) else (json.dumps(body) if not isinstance(body, str) else body).encode()
             try:
