@@ -23,7 +23,8 @@
   async function openLibrary() {
     if (busy) return;
     busy = true;
-    try { library = await call('state'); showLibrary(); }
+    const seq = sheetSeq, tab = document.body.dataset.tab;
+    try { library = await call('state'); if(seq === sheetSeq && tab === document.body.dataset.tab) showLibrary(); }
     catch (e) { fail(e); }
     finally { busy = false; }
   }
@@ -105,8 +106,11 @@
   }
   function openConnections() {
     const rows = state?.mcp || [];
+    const apps = (state?.apps?.connected || []).map(a=>({...a,description:(a.account || T.connected)+(a.healthy === false ? ' · ⚠️' : '')}));
+    if(state?.github?.connected) apps.unshift({slug:'github',name:'GitHub',img:GH_LOGO,description:'@'+state.github.login});
     openSheet(head(tr('Мои подключения','My connections'),tr('Подключите приложение из каталога или добавьте публичный HTTPS MCP-сервер. Проверка получает список инструментов без выполнения действий.','Connect an app from the catalog or add a public HTTPS MCP server. The check lists tools without executing actions.')) +
       button('ext-add-connector',tr('Добавить MCP-сервер','Add MCP server')) + button('ext-app-catalog',tr('Открыть каталог приложений','Browse apps')) +
+      `<div class="list">${apps.map(appRow).join('')}</div>` +
       `<div class="list">${rows.map((r,i)=>`<div class="row"><div class="body"><div class="t">${esc(r.label)}</div><div class="d">${esc(r.url)} · ${r.enabled !== false ? tr('Включён','Enabled') : tr('Выключен','Disabled')}</div><button class="press" data-ext-check="${i}">${tr('Проверить инструменты','Check tools')}</button> · <button class="press" data-ext-toggle="${i}">${r.enabled !== false ? tr('Выключить','Disable') : tr('Включить','Enable')}</button> · <button class="press" data-ext-remove="${i}">${tr('Удалить','Delete')}</button></div></div>`).join('')}</div><div id="ext-check-result" role="status" style="white-space:pre-wrap;overflow-wrap:anywhere"></div>`);
     $('ext-add-connector').onclick=()=>connectorForm();
     $('ext-app-catalog').onclick=()=>{closeSheet();switchTab('apps');$('search').focus();};
