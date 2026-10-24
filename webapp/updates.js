@@ -151,6 +151,7 @@
    ["fx-status",label("Состояние","Status"),status]].forEach(([id,text,action])=>{
      const b=document.createElement("button");b.id=id;b.textContent=text;b.onclick=action;tools.append(b);
    });
-  $("view-agent").prepend(tools);
+  // Keep primary navigation above secondary tools and clear of the fixed tab bar.
+  $("home-actions").after(tools);
   const ownerTimer=setInterval(()=>{if(state){$("fx-status").hidden=!state.gen?.owner;clearInterval(ownerTimer);}},500);
 })();
