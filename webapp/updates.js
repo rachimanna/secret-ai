@@ -35,7 +35,7 @@
       '<option value="0">'+label("Входящие","Inbox")+'</option>'+d.projects.map(p=>'<option value="'+p.id+'" '+(p.id===d.project?'selected':'')+'>'+esc(p.name)+'</option>').join("")+
       '</select></label>'+field("fx-project-name",label("Название нового проекта","New project name"))+
       button("fx-create",label("Создать проект","Create project"))+
-      '<p class="small">'+label("PDF, DOCX, XLSX, PPTX, текст, код и архивы — до 19 МБ. Сканы без OCR.","PDF, DOCX, XLSX, PPTX, text, code and archives, up to 19 MB. No OCR for scans.")+'</p>'+
+      '<p class="small">'+label("PDF, DOCX, XLSX, PPTX, текст, код и архивы — до 19 МБ. Исходники: до 64 МиБ на пользователя. Сканы без OCR.","PDF, DOCX, XLSX, PPTX, text, code and archives, up to 19 MB. Originals: up to 64 MiB per user. No OCR for scans.")+'</p>'+
       '<input class="field" type="file" id="fx-upload" aria-label="'+label("Загрузить документ","Upload document")+'">'+
       '<div class="list">'+d.files.map(f=>'<button class="row press" data-fx-file="'+f.id+'"><div class="body"><div class="t">'+esc(f.name)+' · v'+f.version+(f.id===d.selected?' ✓':'')+'</div><div class="d">'+esc((f.warnings||[]).join(" ").slice(0,220))+'</div></div></button>').join("")+'</div>'+
       button("fx-report",label("Подготовить отчёт","Prepare a report")));

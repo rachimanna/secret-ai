@@ -352,14 +352,14 @@ class CodexRestartAccountingTest(unittest.IsolatedAsyncioTestCase):
                     task=store.create(1,"project","Build",files={"main.py":"print(1)"})
                     store.update(task["id"],charged=3,stop_requested=explicit)
                     memory=NS(gen_refund=Mock())
-                    app=NS(bot_data={"codex":store,"codex_jobs":{},"memory":memory,"chat_default":"test","models":["test"]})
+                    app=NS(bot=NS(send_message=AsyncMock()),bot_data={"codex":store,"codex_jobs":{},"memory":memory,"chat_default":"test","models":["test"]})
                     started=asyncio.Event()
                     async def wait(*args,**kwargs):
                         started.set()
                         await asyncio.Event().wait()
                     with patch("bot.generate",side_effect=wait),patch("bot.codex_can_run",return_value=False):
                         job=asyncio.create_task(bot.run_codex(app,task["id"],"en"))
-                        await started.wait()
+                        await asyncio.wait_for(started.wait(),2)
                         job.cancel()
                         with self.assertRaises(asyncio.CancelledError):
                             await job

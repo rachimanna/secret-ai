@@ -174,6 +174,16 @@ async def dispatch(app, uid, action, payload, answer):
         if not raw or len(raw)>docreader.MAX_FILE:
             raise ValueError("Файл должен быть не больше 19 МБ.")
         document=await docreader.read_attachment(Upload(name,raw))
+        # Retaining editable originals must not grow a small hosting disk without bounds.
+        candidates=[f for f in space.files(uid,uid) if f["name"]==document["name"]]
+        same=next((f for f in candidates[:1] if f["document"]["text"]==document["text"]),None)
+        old=space.db.execute("SELECT length(content) FROM app_originals WHERE file_id=?",(same["id"],)).fetchone() if same else None
+        credit=old[0] if old else 0
+        total=space.db.execute("SELECT COALESCE(SUM(length(content)),0) FROM app_originals").fetchone()[0]
+        own=space.db.execute("SELECT COALESCE(SUM(length(o.content)),0) FROM app_originals o "
+                             "JOIN wb_files f ON f.id=o.file_id WHERE f.user_id=?",(uid,)).fetchone()[0]
+        if own-credit+len(raw)>64*1024*1024 or total-credit+len(raw)>128*1024*1024:
+            raise ValueError("Хранилище исходников заполнено. Удали ненужные версии файлов и повтори загрузку.")
         item=space.add(uid,uid,document)
         with space.db:
             space.db.execute("INSERT INTO app_originals(file_id,content) VALUES (?,?) "
