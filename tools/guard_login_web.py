@@ -22,7 +22,7 @@ PAGE = '''<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewp
 main{max-width:640px;margin:auto;background:#1e293b;padding:28px;border-radius:20px}h1{font-size:26px;margin:0 0 12px}p{color:#becbdb}
 label{display:block;margin-top:18px}input{width:100%;padding:13px;border:1px solid #64748b;border-radius:10px;background:#0f172a;color:white;font:inherit;min-width:0}
 .line{display:flex;gap:8px}.line input{flex:1}.line button{width:auto}button{cursor:pointer;border:0;border-radius:10px;background:#3b82f6;color:white;padding:13px;font:inherit}
-button:disabled{opacity:.5;cursor:wait}button[type=submit]{width:100%;margin-top:24px}.hint{font-size:14px;color:#a8b8ce}#status{white-space:pre-wrap;overflow-wrap:anywhere}#status.error{color:#fca5a5}
+button:disabled{opacity:.5;cursor:wait}button[type=submit]{width:100%;margin-top:24px}.hint{font-size:14px;color:#a8b8ce}#status{white-space:pre-wrap;overflow-wrap:anywhere}#status.error{color:#fca5a5}input[aria-invalid=true]{border:2px solid #f87171}
 [hidden]{display:none!important}@media(max-width:480px){main{padding:20px}.line{flex-wrap:wrap}.line button{font-size:14px}}
 </style><main><h1>Подключение аккаунта</h1><p>Ввод виден. Можно вставлять мышью или кнопкой «Вставить». Данные передаются только локальной программе на этом компьютере.</p>
 <form id="setup">
@@ -36,19 +36,27 @@ button:disabled{opacity:.5;cursor:wait}button[type=submit]{width:100%;margin-top
 <p id="status" role="status" aria-live="polite"></p><p class="hint">Не закрывай чёрное окно до завершения входа. Не публикуй снимок экрана с заполненными полями. После входа будет сохранён только зашифрованный файл сессии.</p></main>
 <script>
 const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
-const $=id=>document.getElementById(id);let phase='setup',sending=false;
+const $=id=>document.getElementById(id);let phase='setup',sending=false,hasError=false;
 const status=text=>{$('status').textContent=text;$('status').className='';};
-async function api(action,data={}){const r=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Guard-Token':token},body:JSON.stringify(data)});const result=await r.json();if(!r.ok)throw Error(result.error||'Не удалось выполнить запрос');return result;}
+function showError(message,field){hasError=true;status(message);$('status').className='error';if(field&&$(field)){$(field).setAttribute('aria-invalid','true');$(field).focus();}}
+async function api(action,data={}){const r=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Guard-Token':token},body:JSON.stringify(data)});const result=await r.json();if(!r.ok){const error=Error(result.error||'Не удалось выполнить запрос');error.field=result.field;throw error;}return result;}
+document.querySelectorAll('input').forEach(input=>input.addEventListener('input',()=>{input.removeAttribute('aria-invalid');hasError=false;}));
 document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{try{const field=$(b.dataset.paste);field.value=(await navigator.clipboard.readText()).trim();field.dispatchEvent(new Event('input'));field.focus();}catch{status('Нажми правой кнопкой мыши внутри нужного поля и выбери «Вставить».');}});
 $('api-hash').oninput=()=>{$('hash-count').textContent='Введено символов: '+$('api-hash').value.trim().length+' из 32';};
-function draw(s){const changed=phase!==s.phase;phase=s.phase;$('setup').hidden=phase!=='setup';$('prompt').hidden=!['code','password'].includes(phase);
+function draw(s){if(hasError&&phase===s.phase)return;hasError=false;const changed=phase!==s.phase;phase=s.phase;$('setup').hidden=phase!=='setup';$('prompt').hidden=!['code','password'].includes(phase);
 if(changed){$('answer').value='';if(phase==='code'||phase==='password'){$('question').textContent=phase==='code'?'Код входа из Telegram':'Пароль двухэтапной проверки';$('answer').focus();}if(phase==='working'||phase==='done'){for(const id of ['api-id','api-hash','secret','phone'])$(id).value='';}}
 status(s.message||'');document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=sending||phase==='working');}
-async function submit(data){sending=true;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=true);try{draw(await api('submit',data));}catch(e){status(e.message);$('status').className='error';}finally{sending=false;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=phase==='working');}}
-$('setup').onsubmit=e=>{e.preventDefault();if(!/^[0-9]+$/.test($('api-id').value.trim())||!/^[a-fA-F0-9]{32}$/.test($('api-hash').value.trim())){status('Проверь api_id и api_hash. В api_hash должно быть ровно 32 буквы/цифры из Telegram.');return;}submit({api_id:$('api-id').value.trim(),api_hash:$('api-hash').value.trim(),phone:$('phone').value.trim(),secret:$('secret').value.trim()});};
+async function submit(data){sending=true;hasError=false;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=true);try{draw(await api('submit',data));}catch(e){showError(e.message,e.field);}finally{sending=false;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=phase==='working');}}
+$('setup').onsubmit=e=>{e.preventDefault();if(!/^[0-9]+$/.test($('api-id').value.trim())){showError('В api_id нужны только цифры из my.telegram.org.','api-id');return;}if(!/^[a-fA-F0-9]{32}$/.test($('api-hash').value.trim())){showError('В api_hash должно быть ровно 32 символа: цифры и латинские буквы a–f.','api-hash');return;}submit({api_id:$('api-id').value.trim(),api_hash:$('api-hash').value.trim(),phone:$('phone').value.trim(),secret:$('secret').value.trim()});};
 $('prompt').onsubmit=e=>{e.preventDefault();const answer=phase==='password'?$('answer').value:$('answer').value.trim();if(answer)submit({answer,phase});};
 setInterval(async()=>{if(sending)return;try{draw(await api('state'));}catch{}},800);
 </script></html>'''
+
+
+class ValidationError(ValueError):
+    def __init__(self,message,field=None):
+        super().__init__(message)
+        self.field=field
 
 
 class Wizard:
@@ -80,28 +88,33 @@ class Wizard:
                 try:
                     api_id=int(data.get('api_id',''))
                 except (TypeError,ValueError):
-                    raise ValueError('Проверь api_id.') from None
+                    raise ValidationError('В поле api_id нужны только цифры из my.telegram.org.','api-id') from None
+                if api_id<=0:
+                    raise ValidationError('api_id должен быть положительным числом.','api-id')
                 api_hash=data.get('api_hash','');phone=data.get('phone','');secret=data.get('secret','')
-                if api_id<=0 or not isinstance(api_hash,str) or not re.fullmatch(r'[a-fA-F0-9]{32}',api_hash):
-                    raise ValueError('В api_hash должно быть ровно 32 символа.')
+                if isinstance(api_hash,str):api_hash=api_hash.strip()
+                if not isinstance(api_hash,str) or not re.fullmatch(r'[a-fA-F0-9]{32}',api_hash):
+                    raise ValidationError('В api_hash должно быть ровно 32 символа: цифры и латинские буквы a–f. Скопируй только значение App api_hash.','api-hash')
+                if isinstance(phone,str):phone=re.sub(r'[\s()\-]+','',phone)
                 if not isinstance(phone,str) or not re.fullmatch(r'\+[0-9]{7,16}',phone):
-                    raise ValueError('Введи номер аккаунта с + и кодом страны, без пробелов.')
+                    raise ValidationError('Номер телефона: начни с + и кода страны. Пробелы, скобки и дефисы можно оставить.','phone')
+                if isinstance(secret,str):secret=secret.strip()
                 if not isinstance(secret,str) or not 1<=len(secret)<=1024:
-                    raise ValueError('Проверь ключ шифрования.')
+                    raise ValidationError('Поле ключа сервера пустое или слишком длинное. Нужен ENCRYPTION_KEY из .env; если он не задан — TELEGRAM_TOKEN.','secret')
                 guard_session.cipher(secret)
                 if self.output.exists():
-                    raise ValueError('Файл сессии уже существует. Сохрани его отдельно или запусти программу в другой папке.')
+                    raise ValidationError('В этой папке уже есть файл '+self.output.name+'. Помощник не перезаписывает его. Если вход уже завершён, используй готовый файл; для нового входа запусти помощник из другой папки.')
                 self.phase,self.message='working','Подключаюсь к Telegram…'
                 threading.Thread(target=self.run,args=(api_id,api_hash,phone,secret),daemon=True).start()
             elif self.phase in ('code','password') and data.get('phase')==self.phase:
                 answer=data.get('answer')
                 if not isinstance(answer,str) or not answer or len(answer)>1024:
-                    raise ValueError('Заполни поле.')
+                    raise ValidationError('Заполни поле кода или пароля.','answer')
                 phase=self.phase
                 self.phase,self.message='working','Проверяю данные…'
                 self.answers.put(answer if phase=='password' else answer.strip())
             else:
-                raise ValueError('Дождись следующего шага.')
+                raise ValidationError('Дождись следующего шага: запрос уже обрабатывается.')
 
     def run(self,api_id,api_hash,phone,secret):
         try:
@@ -151,8 +164,10 @@ def make_handler(wizard):
                 if self.path=='/api/submit':wizard.submit(data)
                 elif self.path!='/api/state':self.send(404,{'error':'Не найдено'});return
                 self.send(200,wizard.state())
+            except ValidationError as error:
+                self.send(400,{'error':str(error),'field':error.field})
             except (ValueError,TypeError):
-                self.send(400,{'error':'Проверь заполненные поля: api_id, api_hash (32 символа), номер с + и ключ сервера. Убедись, что файл сессии ещё не существует.'})
+                self.send(400,{'error':'Не удалось прочитать запрос. Закрой вкладку и заново открой помощник.'})
     return Handler
 
 

@@ -9,7 +9,11 @@ const ready=new Promise((resolve,reject)=>{let raw='';const timeout=setTimeout((
  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{readText:async()=> 'a'.repeat(32)}}));
  await page.goto(url);await page.locator('#api-id').fill('123');await page.locator('[data-paste="api-hash"]').click();
  assert.equal(await page.locator('#api-hash').inputValue(),'a'.repeat(32));assert.notEqual(await page.locator('#api-hash').getAttribute('type'),'password');
- await page.locator('#phone').fill('+79991234567');await page.locator('#secret').fill('fixture-key');
+ await page.locator('#phone').fill('79991234567');await page.locator('#secret').fill('fixture-key');
+ await page.locator('#setup button[type=submit]').click();await page.waitForFunction(()=>document.getElementById('status').textContent.includes('Номер телефона:'));
+ await page.waitForTimeout(1100);assert((await page.locator('#status').textContent()).includes('Номер телефона:'),'validation reason survives state polling');
+ assert.equal(await page.locator('#phone').getAttribute('aria-invalid'),'true');
+ await page.locator('#phone').fill('+7 (999) 123-45-67');
  if(process.env.SECRET_GUARD_SCREENSHOT)await page.screenshot({path:process.env.SECRET_GUARD_SCREENSHOT});
  await page.locator('#setup button[type=submit]').click();await page.waitForFunction(()=>document.getElementById('question').textContent==='Код входа из Telegram');
  await page.locator('#answer').fill('11111');await page.locator('#prompt button[type=submit]').click();

@@ -65,6 +65,26 @@ class WebLoginTest(unittest.TestCase):
         self.wizard.submit({'phase':'password','answer':' fixture password '})
         self.assertEqual(self.wizard.answers.get_nowait(),' fixture password ')
 
+    def test_formatted_phone_number_is_accepted(self):
+        self.wizard.submit(dict(api_id='123',api_hash='a'*32,phone='+7 (999) 123-45-67',secret='fixture-key'))
+        self.wait_phase('code')
+        self.wizard.answers.put('11111')
+        self.wait_phase('password')
+        self.wizard.answers.put('fixture-password')
+        self.wait_phase('done')
+
+    def test_errors_identify_field_without_echoing_secrets(self):
+        good=dict(api_id='123',api_hash='a'*32,phone='+79991234567',secret='fixture-key')
+        for field,value,expected in [('api_id','wrong','api-id'),('api_hash','private-invalid-hash','api-hash'),('phone','79991234567','phone'),('secret',' ','secret')]:
+            with self.subTest(field=field),self.assertRaises(web.ValidationError) as caught:
+                self.wizard.submit(dict(good,**{field:value}))
+            self.assertEqual(caught.exception.field,expected)
+            self.assertNotIn('private-invalid-hash',str(caught.exception))
+        self.output.write_bytes(b'preserved')
+        with self.assertRaisesRegex(web.ValidationError,'уже есть файл'):
+            self.wizard.submit(good)
+        self.assertEqual(self.output.read_bytes(),b'preserved')
+
     def test_http_requires_private_capability_and_never_returns_credentials(self):
         server=ThreadingHTTPServer(('127.0.0.1',0),web.make_handler(self.wizard))
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
@@ -77,6 +97,10 @@ class WebLoginTest(unittest.TestCase):
                 page=client.get('/')
                 self.assertNotIn(self.wizard.token,page.text)
                 self.assertEqual(page.headers['Cache-Control'],'no-store')
+                invalid=client.post('/api/submit',json={'api_id':'not-an-id'},headers={'X-Guard-Token':self.wizard.token})
+                self.assertEqual(invalid.status_code,400)
+                self.assertEqual(invalid.json()['field'],'api-id')
+                self.assertIn('только цифры',invalid.json()['error'])
         finally:
             server.shutdown();server.server_close();thread.join()
 
