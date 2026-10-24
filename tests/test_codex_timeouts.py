@@ -80,7 +80,7 @@ class CodexTimeoutTest(unittest.IsolatedAsyncioTestCase):
                     repo='owner/repo', prompt='Explain this repository', model=MODEL)
         store = NS(get=lambda tid: task, thread=lambda *args: [], update=Mock())
         data = dict(codex=store, codex_jobs={}, github_apps=NS(fresh_token=AsyncMock()),
-                    http=NS(), connections=NS(), pending={})
+                    http=NS(), connections=NS(get=lambda *a: []), pending={})
         app = NS(bot_data=data, bot=NS(send_message=AsyncMock()))
         generate = AsyncMock(side_effect=timeout())
         with patch.object(bot, 'codex_can_run', return_value=False), \

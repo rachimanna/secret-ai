@@ -7,6 +7,7 @@ import tempfile
 import time
 import unittest
 import zlib
+from contextlib import ExitStack
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,6 +147,7 @@ class SnapshotSafetyTest(unittest.TestCase):
             path=Path(folder)/"memory.db"
             with sqlite3.connect(path) as db:
                 db.execute("CREATE TABLE x(id INTEGER)")
+            db.close()
             snapshots=persist.Snapshots("unused",path)
             with patch.object(snapshots,"_connect",side_effect=OSError("offline")):
                 self.assertFalse(snapshots.restore())
@@ -214,9 +216,9 @@ class GitHubRegressionTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(change["files"][0]["new"])
 
     async def test_concurrent_apply_runs_only_once_and_returns_same_result(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory() as folder, ExitStack() as cleanup:
             connections=integrations.Connections(Path(folder)/"db","key")
-            self.addCleanup(connections.close)
+            cleanup.callback(connections.close)
             store=codex.CodexStore(connections)
             task=store.create(1,"repo","fix",repo="o/r")
             store.update(task["id"],status=codex.STATUS_DONE,change={"user_id":1})
@@ -239,9 +241,9 @@ class GitHubRegressionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(gh.call.await_count,1)
 
     async def test_restart_pauses_task_and_preserves_files(self):
-        with tempfile.TemporaryDirectory() as folder:
+        with tempfile.TemporaryDirectory() as folder, ExitStack() as cleanup:
             conn=integrations.Connections(Path(folder)/"db","key")
-            self.addCleanup(conn.close)
+            cleanup.callback(conn.close)
             store=codex.CodexStore(conn)
             task=store.create(1,"project","build",files={"main.py":"print(1)"})
             restarted=codex.CodexStore(conn)
@@ -352,7 +354,7 @@ class CodexRestartAccountingTest(unittest.IsolatedAsyncioTestCase):
                     task=store.create(1,"project","Build",files={"main.py":"print(1)"})
                     store.update(task["id"],charged=3,stop_requested=explicit)
                     memory=NS(gen_refund=Mock())
-                    app=NS(bot=NS(send_message=AsyncMock()),bot_data={"codex":store,"codex_jobs":{},"memory":memory,"chat_default":"test","models":["test"]})
+                    app=NS(bot=NS(send_message=AsyncMock()),bot_data={"connections":conn,"codex":store,"codex_jobs":{},"memory":memory,"chat_default":"test","models":["test"]})
                     started=asyncio.Event()
                     async def wait(*args,**kwargs):
                         started.set()

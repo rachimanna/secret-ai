@@ -3,6 +3,7 @@ import base64
 import difflib
 import hashlib
 import hmac
+import ipaddress
 import json
 import re
 import sqlite3
@@ -10,7 +11,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from urllib.parse import parse_qsl, quote
+from urllib.parse import parse_qsl, quote, urlparse
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -321,7 +322,7 @@ class Toolbox:
         self.http, self.store, self.pending, self.user_id, self.language = http, store, pending, user_id, language
         github = store.get(user_id, "github")
         self.github = github[0] if github else None
-        self.mcp = store.get(user_id, "mcp")
+        self.mcp = [s for s in store.get(user_id, "mcp") if s["meta"].get("enabled", True)]
         # Apps connected in one tap (Pipedream Connect): ready MCP tool definitions and their display names.
         self.app_tools, self.app_names = list(apps[0]), list(apps[1])
         # media(kind, prompt, format) -> text for the model; set when photo/video generation is available.
@@ -597,10 +598,27 @@ async def delete_repos(http, store, change):
 
 
 def check_mcp(label, url):
-    label = (label or "").strip().replace(" ", "_").replace("-", "_")
-    url = (url or "").strip()
+    if not isinstance(label, str) or not isinstance(url, str):
+        raise ValueError("label")
+    label = label.strip().replace(" ", "_").replace("-", "_")
+    url = url.strip()
     if not MCP_LABEL.match(label):
         raise ValueError("label")
-    if not url.startswith("https://") or len(url) > 500:
+    parsed = urlparse(url)
+    if (parsed.scheme != "https" or not parsed.hostname or len(url) > 500 or parsed.username or parsed.password
+            or parsed.fragment or parsed.query or any(c.isspace() for c in url) or "\\" in url):
         raise ValueError("url")
+    host = parsed.hostname.lower().rstrip(".")
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")) or "." not in host:
+        raise ValueError("url")
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ValueError("url")
+    try:
+        parsed.port
+    except ValueError:
+        raise ValueError("url") from None
     return label, url

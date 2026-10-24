@@ -896,6 +896,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
   <section class="view" id="view-apps">
     <h1 class="page-title" data-t="apps"></h1>
     <p class="page-sub" id="apps-sub"></p>
+    <div id="extension-hub"></div>
     <label class="search glass">
       <svg class="i" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
       <input id="search" type="search" autocomplete="off" enterkeyhint="search">
@@ -1581,7 +1582,7 @@ function renderCodex() {
   $("cx-title").onclick = () => { if (!first) openCodexMode(); };
   $("cx-del")?.addEventListener("click", () => {
     const go = async () => { await api("/api/codex/delete", { thread: cx.thread }).catch(() => {}); cx.thread = null; cx.tasks = []; cx.visible=20; cxSave(); loadCodex(); };
-    tg?.showConfirm ? tg.showConfirm(C.delAsk, ok => ok && go()) : confirm(C.delAsk) && go();
+    tg?.showConfirm ? tg.showConfirm(C.delAsk, ok => ok && go()) : window.confirm(C.delAsk) && go();
   });
   document.querySelectorAll("#cx-thread [data-idea]").forEach(b => b.onclick = () => { $("cx-text").value = b.dataset.idea; cx.draft = b.dataset.idea; cxGrow(); $("cx-text").focus(); haptic("light"); });
   document.querySelectorAll("#cx-thread [data-mode]").forEach(b => b.onclick = () => { cx.mode = b.dataset.mode; cxSave(); haptic("select"); renderCodex(); });
@@ -1757,7 +1758,7 @@ function openCodexChats() {
   $('sheet').querySelectorAll('[data-thread]').forEach(b=>b.onclick=()=>{cx.thread=b.dataset.thread;cx.visible=20;cx.open.clear();cxSave();closeSheet();loadCodex().then(()=>cxScrollBottom());});
   $('sheet').querySelectorAll('[data-pin-chat]').forEach(b=>b.onclick=()=>{data.pins=data.pins.includes(b.dataset.pinChat)?data.pins.filter(x=>x!==b.dataset.pinChat):[...data.pins,b.dataset.pinChat];saveChatOrganization(data);openCodexChats();});
   $('sheet').querySelectorAll('[data-move-chat]').forEach(b=>b.onclick=()=>moveChatFolder(b.dataset.moveChat));
-  $('delete-chat-folder')?.addEventListener('click',()=>confirm(lang==='ru'?'Удалить папку? Сами чаты останутся.':'Delete this folder? Chats will be kept.',()=>{data.folders=data.folders.filter(f=>f.id!==chatFolder);for(const key of Object.keys(data.assigned))if(data.assigned[key]===chatFolder)delete data.assigned[key];saveChatOrganization(data);chatFolder='all';openCodexChats();}));
+  $('delete-chat-folder')?.addEventListener('click',()=>confirmAction(lang==='ru'?'Удалить папку? Сами чаты останутся.':'Delete this folder? Chats will be kept.',()=>{data.folders=data.folders.filter(f=>f.id!==chatFolder);for(const key of Object.keys(data.assigned))if(data.assigned[key]===chatFolder)delete data.assigned[key];saveChatOrganization(data);chatFolder='all';openCodexChats();}));
 }
 
 function openCodexMode() {
@@ -2001,7 +2002,8 @@ async function loadCatalog(reset) {
   try {
     const data = await api("/api/catalog", { q: catalog.q, after: reset ? "" : catalog.next || "" });
     if (seq !== catalog.seq) return;
-    catalog.items = reset ? data.apps : catalog.items.concat(data.apps);
+    catalog.items = [...new Map((reset ? data.apps : catalog.items.concat(data.apps)).map(a => [a.slug,a])).values()];
+    catalog.error = data.error === true;
     catalog.next = data.next;
     if (data.total) catalog.total = data.total;
     if (!catalog.q && reset && !catalog.featured.length) { catalog.featured = data.apps; if (state) renderHomeApps(); }
@@ -2021,6 +2023,7 @@ function renderCatalog(skeleton = false) {
   const items = catalog.items.filter(a => !mine.has(a.slug));
   el.classList.add("stagger");
   el.innerHTML = items.length ? items.map((a, i) => appRow(a, i % 40)).join("") : `<div class="empty">${T.none}</div>`;
+  if (catalog.error) el.insertAdjacentHTML("afterbegin", `<p class="lead" role="status">${lang === "ru" ? "Внешний каталог временно недоступен. Доступные прямые подключения показаны ниже; попробуйте поиск позже." : "The external catalog is temporarily unavailable. Direct connections are shown below; retry search later."}</p>`);
   if (catalog.next) el.insertAdjacentHTML("beforeend", `<div class="row skeleton"><div class="ic"></div><div class="body"><div class="bar" style="width:50%"></div></div></div>`);
 }
 new IntersectionObserver(entries => {
@@ -2126,7 +2129,7 @@ function openAppSheet(app, opts = {}) {
       <button class="btn ghost" id="off">${T.disconnect}</button>`);
     $("big").insertAdjacentHTML("beforeend", `<span class="done-check"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>`);
     $("try").onclick = () => { closeSheet(); sendToChat(lang === "ru" ? `Что ты можешь сделать с моим ${app.name}? Предложи 3 полезных действия.` : `What can you do with my ${app.name}? Suggest 3 useful actions.`); };
-    $("off").onclick = () => confirm(T.disconnectAsk(app.name), async () => {
+    $("off").onclick = () => confirmAction(T.disconnectAsk(app.name), async () => {
       try { state = await api("/api/apps/disconnect", { id: account.id }); renderAll(); closeSheet(); toast(T.removed); haptic("warning"); }
       catch (e) { toast(errorText(e)); }
     });
@@ -2134,7 +2137,9 @@ function openAppSheet(app, opts = {}) {
   }
   const available = app.direct || state.apps.enabled;
   openSheet(`<div class="head">${icon}<h3>${opts.needs ? esc(T.needsApp(app.name)) : esc(app.name)}</h3><p class="lead" id="lead">${available ? lead : T.notReadyApp}</p></div>
-    ${available ? `<button class="btn" id="go">${esc(T.connectApp(app.name))}</button>` : ""}`);
+    ${available ? `<button class="btn" id="go">${esc(T.connectApp(app.name))}</button>` : ""}
+    <button class="btn ghost" id="app-custom-mcp">${lang === "ru" ? "Подключить своим MCP-адресом / ключом" : "Connect with your MCP URL / key"}</button>`);
+  $("app-custom-mcp").onclick = () => document.dispatchEvent(new CustomEvent("secret-add-connector", {detail:{label:app.slug.slice(0,32),url:app.mcp_url || ""}}));
   if (!available) return;
   $("go").onclick = () => startConnect(app, opts);
 }
@@ -2175,7 +2180,7 @@ function connectedAnimation(app, opts) {
   if (!opts.then) setTimeout(() => { if ($("go") === btn && $("sheet").classList.contains("open")) closeSheet(); }, 1800);
 }
 
-function confirm(text, ok) {
+function confirmAction(text, ok) {
   if (tg?.showConfirm && tg.isVersionAtLeast?.("6.2")) tg.showConfirm(text, yes => yes && ok());
   else if (window.confirm(text)) ok();
 }
@@ -2188,7 +2193,7 @@ function openGitHubSheet() {
       <button class="btn" id="try">${T.tryAsk}</button><button class="btn ghost" id="off">${T.disconnect}</button>`);
     $("big").insertAdjacentHTML("beforeend", `<span class="done-check"><svg viewBox="0 0 24 24"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg></span>`);
     $("try").onclick = () => { closeSheet(); sendToChat(lang === "ru" ? "Покажи мои репозитории на GitHub." : "Show my GitHub repositories."); };
-    $("off").onclick = () => confirm(T.disconnectAsk("GitHub"), async () => {
+    $("off").onclick = () => confirmAction(T.disconnectAsk("GitHub"), async () => {
       try { state = await api("/api/disconnect", { service: "github", label: "github" }); renderAll(); closeSheet(); toast(T.removed); } catch (e) { toast(errorText(e)); }
     });
     return;
@@ -2550,8 +2555,8 @@ function renderSettings() {
   $("set-mcp").onclick = openMcpSheet;
   if ($("set-gen")) $("set-gen").onclick = openGenKeySheet;
   $("set-id").onclick = () => { navigator.clipboard?.writeText(String(state.user.id)); toast(T.copied); haptic("light"); };
-  $("set-mem").onclick = () => confirm(T.clearAsk, clearMemory);
-  $("set-clear").onclick = () => confirm(T.clearAsk, clearMemory);
+  $("set-mem").onclick = () => confirmAction(T.clearAsk, clearMemory);
+  $("set-clear").onclick = () => confirmAction(T.clearAsk, clearMemory);
 }
 async function clearMemory() {
   try { state.settings = (await api("/api/reset")).settings; renderSettings(); toast(T.cleared); haptic("success"); }
@@ -3043,5 +3048,6 @@ function initInterface() {
 init();
 </script>
 <script src="/updates.js"></script>
+<script src="/extensions.js"></script>
 </body>
 </html>

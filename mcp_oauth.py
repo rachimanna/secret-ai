@@ -70,7 +70,7 @@ class MCPAuthError(Exception):
 def direct_catalog(language):
     ru = language == "ru"
     return [{"slug": slug, "name": name, "description": d_ru if ru else d_en, "img": f"https://cdn.simpleicons.org/{icon}",
-             "direct": True} for slug, (name, _, d_ru, d_en, icon) in DIRECT_APPS.items()]
+             "direct": True, "mcp_url":url} for slug, (name, url, d_ru, d_en, icon) in DIRECT_APPS.items()]
 
 
 def _pkce():
@@ -228,7 +228,10 @@ class DirectApps:
             slug = item["label"]
             if slug not in DIRECT_APPS or slug in seen:
                 continue
-            token = self._fresh(user_id, slug, item)
+            try:
+                token = self._fresh(user_id, slug, item)
+            except (MCPAuthError,httpx.HTTPError,KeyError,ValueError):
+                continue  # one broken token must not hide the other connected applications
             if not token:
                 continue
             seen.add(slug)

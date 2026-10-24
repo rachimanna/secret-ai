@@ -275,7 +275,7 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
             pass
         refresh, app_tools = AsyncMock(), AsyncMock()
         data = dict(models=[SONNET], memory=NS(persona=lambda uid: next(iter(bot.PERSONAS))), pending={},
-                    github_apps=NS(fresh_token=refresh), http=NS(), connections=NS())
+                    github_apps=NS(fresh_token=refresh), http=NS(), connections=NS(get=lambda *a: [], public=lambda *a: [], get_meta=lambda *a: None))
         update = NS(effective_user=NS(id=1, language_code='ru'))
         with patch.object(bot, 'open_reply', AsyncMock(return_value=NS())), \
              patch.object(bot, 'app_tools', app_tools), \

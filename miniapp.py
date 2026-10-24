@@ -13,6 +13,8 @@ import httpx
 
 import codex
 import gentemplates
+import extensions
+import connector_check
 
 from apps import PipedreamError, featured
 from mcp_oauth import DIRECT_APPS, MCPAuthError, direct_catalog
@@ -26,6 +28,7 @@ LOGO = WEBAPP / "logo.svg"
 SITE = WEBAPP / "site.html"
 MASCOT = Path(__file__).with_name("assets") / "mascot.png"
 MAX_BODY = 64 * 1024
+MAX_EXTENSION_BODY = 720 * 1024
 MAX_UPLOAD = 28 * 1024 * 1024  # /api/edit: up to 4 photos (resized in the browser)
 MAX_PROMPT = 1500
 
@@ -128,7 +131,11 @@ def make_handler(config):
             if not pipedream.enabled:
                 return {"enabled": False, "connected": connected}
             try:
-                return {"enabled": True, "connected": connected + pipedream.accounts(uid, fresh=fresh)}
+                accounts = pipedream.accounts(uid, fresh=fresh)
+                names = [a["name"] for a in accounts]
+                if config["store"].get_meta(f"app_names:{uid}") != names:
+                    config["store"].set_meta(f"app_names:{uid}",names)
+                return {"enabled": True, "connected": connected + accounts}
             except (PipedreamError, httpx.HTTPError, KeyError, ValueError) as exc:
                 LOG.warning("Pipedream accounts failed: %s", exc if isinstance(exc, PipedreamError) else type(exc).__name__)
                 return {"enabled": True, "connected": connected, "error": True}
@@ -142,7 +149,7 @@ def make_handler(config):
                 "github": {"connected": bool(saved), "login": saved["meta"].get("login") if saved else None,
                            "ready": bool(github.creds() and config["public_url"]),
                            "owner": config["store"].claim_owner(uid) == uid},
-                "mcp": [{"label": i["label"], "url": i["url"]} for i in items if i["service"] == "mcp"],
+                "mcp": [{"label": i["label"], "url": i["url"], "enabled": i["meta"].get("enabled",True)} for i in items if i["service"] == "mcp"],
                 "apps": self._apps(uid, fresh),
                 "settings": config["bridge"].settings(uid),
                 "gen": config["bridge"].gen_state(uid),
@@ -176,7 +183,7 @@ def make_handler(config):
                     self._send(200, image, "image/jpeg", cache="public, max-age=86400")
                 else:
                     self._send(404, b"", "text/plain")
-            elif url.path in ("/play-core.js", "/play-ui.js", "/play.css", "/updates.js"):
+            elif url.path in ("/play-core.js", "/play-ui.js", "/play.css", "/updates.js", "/extensions.js"):
                 content_type = "text/css" if url.path.endswith(".css") else "application/javascript"
                 self._send(200, (WEBAPP / url.path[1:]).read_bytes(), content_type + "; charset=utf-8", cache="no-cache")
             elif url.path == "/logo.svg":
@@ -220,7 +227,8 @@ def make_handler(config):
             if not user:
                 return
             try:
-                data = self._json(MAX_UPLOAD if path in ("/api/edit", "/api/live/turn", "/api/features/upload") else MAX_BODY)
+                limit = MAX_EXTENSION_BODY if path.startswith("/api/extensions/") else MAX_UPLOAD if path in ("/api/edit", "/api/live/turn", "/api/features/upload") else MAX_BODY
+                data = self._json(limit)
             except ValueError:
                 self._send(400, {"error": "bad request"})
                 return
@@ -297,7 +305,31 @@ def make_handler(config):
         def _route(self, path, user, data):
             store, uid, bridge = config["store"], user["id"], config["bridge"]
             language = "ru" if (user.get("language_code") or "ru").startswith("ru") else "en"
-            if path.startswith("/api/features/"):
+            if path.startswith("/api/extensions/"):
+                action = path[len("/api/extensions/"):]
+                try:
+                    if action == "check":
+                        row = next((r for r in store.get(uid,"mcp") if r["label"] == data.get("label")),None)
+                        if not row:
+                            raise ValueError("Подключение не найдено.")
+                        result = connector_check.check(row)
+                    elif action == "connector-toggle":
+                        if type(data.get("enabled")) is not bool:
+                            raise ValueError("enabled должен быть true или false.")
+                        with store.lock, store.db:
+                            row = store.db.execute("SELECT meta FROM connections WHERE user_id=? AND service='mcp' AND label=?",(uid,data.get("label"))).fetchone()
+                            if not row:
+                                raise ValueError("Подключение не найдено.")
+                            meta=json.loads(row[0]); meta["enabled"]=data["enabled"]
+                            store.db.execute("UPDATE connections SET meta=? WHERE user_id=? AND service='mcp' AND label=?",(json.dumps(meta),uid,data.get("label")))
+                        result = {"ok":True}
+                    else:
+                        result = extensions.dispatch(store,uid,action,data)
+                except (ValueError,TypeError) as exc:
+                    self._send(400,{"error":"extension","detail":str(exc)[:300]})
+                    return
+                self._send(200,result)
+            elif path.startswith("/api/features/"):
                 try:
                     result = bridge.features(uid,path[len("/api/features/"):],data)
                 except PermissionError:
@@ -330,19 +362,24 @@ def make_handler(config):
             elif path == "/api/catalog":
                 query, after = str(data.get("q") or "").strip().lower(), str(data.get("after") or "")
                 # Apps that connect without any keys always come first.
-                own = [] if after else [a for a in direct_catalog(language) if not query or query in a["name"].lower()]
+                own = [] if after else [a for a in direct_catalog(language) if not query or query in (a["name"]+" "+a["slug"]+" "+a["description"]).lower()]
+                catalog_error = False
                 if not pipedream.enabled:
                     rest = [a for a in featured(language) if not query or query in a["name"].lower()]
                     cursor, total = None, None
                 else:
-                    rest, cursor, total = pipedream.catalog(query, after)
+                    try:
+                        rest, cursor, total = pipedream.catalog(query, after)
+                    except (PipedreamError,httpx.HTTPError,KeyError,ValueError):
+                        rest, cursor, total = [], None, None
+                        catalog_error = True
                     if not query and not after:  # everyday apps (Gmail, Calendar, Drive…) first, with their icons
                         picks = featured(language)
                         known = {a["slug"] for a in picks}
                         rest = picks + [a for a in rest if a["slug"] not in known]
                 taken = {a["slug"] for a in own} | {"linear_app", "jira", "confluence"}  # same services as the direct ones
                 self._send(200, {"apps": own + [a for a in rest if a["slug"] not in taken], "next": cursor, "total": total,
-                                 "enabled": pipedream.enabled})
+                                 "enabled": pipedream.enabled,"error":catalog_error})
             elif path == "/api/apps/connect":
                 slug = str(data.get("slug") or "").strip()
                 if not slug or len(slug) > 80 or not slug.replace("_", "").replace("-", "").isalnum():

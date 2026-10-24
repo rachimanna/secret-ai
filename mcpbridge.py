@@ -5,6 +5,7 @@ for everyone else the bot does it: lists each server's tools, offers them as fun
 MCP over "streamable HTTP": JSON-RPC posted to the server URL, answers as JSON or as server-sent events.
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -40,7 +41,9 @@ def _key(server):
 
 
 def _name(label, tool):
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", f"{label}__{tool}")[:64]
+    raw = f"{label}__{tool}"
+    normalized = re.sub(r"[^a-zA-Z0-9_-]", "_", raw)
+    return normalized if len(normalized) <= 64 and normalized == raw else normalized[:51] + "_" + hashlib.sha256(raw.encode()).hexdigest()[:12]
 
 
 class Server:
@@ -145,22 +148,33 @@ async def load(http, servers):
             return server_def, server, cached[2]
         await server.open()
         tools = await server.tools()
+        if len(_cache) >= 256:
+            _cache.clear()
         _cache[_key(server_def)] = (time.monotonic() + CACHE_SECONDS, server.session, tools)
         return server_def, server, tools
 
     results = await asyncio.gather(*(one(s) for s in servers), return_exceptions=True)
+    available = []
     for server_def, result in zip(servers, results):
         if isinstance(result, Exception):
             LOG.warning("MCP server %s unavailable: %s %s", server_def.get("server_label"), type(result).__name__,
                         str(result)[:200])
             continue
         _, server, tools = result
-        for tool in tools:
-            if len(bridge.functions) >= MAX_TOOLS or not tool.get("name"):
-                break
+        available.append((server, [t for t in tools if isinstance(t, dict) and isinstance(t.get("name"),str) and t["name"]]))
+    # Give every connected app a turn before large servers consume the context budget.
+    for index in range(max((len(tools) for _, tools in available), default=0)):
+        for server, tools in available:
+            if len(bridge.functions) >= MAX_TOOLS:
+                return bridge
+            if index >= len(tools):
+                continue
+            tool = tools[index]
             name = _name(server.label, tool["name"])
+            if name in bridge.routes:
+                continue
             schema = tool.get("inputSchema") or {"type": "object", "properties": {}}
-            if schema.get("type") != "object":
+            if not isinstance(schema,dict) or schema.get("type") != "object":
                 schema = {"type": "object", "properties": {}}
             bridge.routes[name] = (server, tool["name"], server.label)
             bridge.functions.append({"type": "function", "function": {
