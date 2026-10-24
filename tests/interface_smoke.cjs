@@ -37,7 +37,8 @@ const server=http.createServer((req,res)=>{
  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);assert.equal(overflow,false,name+' '+label+' horizontal overflow');
  assert.equal(await page.locator('.action-card').count(),4);
  await page.screenshot({path:path.join(output,`${name}-${label}-home.png`),fullPage:true});
- await page.locator('[data-home-action=day]').click();await page.waitForSelector('.day-card');await page.screenshot({path:path.join(output,`${name}-${label}-tasks.png`),fullPage:true});
+ await page.locator('[data-home-action=day]').click();
+ await page.waitForSelector('.day-card',{timeout:10000}).catch(async e=>{console.error('DAY DEBUG',await page.evaluate(()=>({tab:document.body.dataset.tab,cards:document.querySelectorAll('.day-card').length,content:document.getElementById('day-content').innerHTML})),errors);throw e;});await page.screenshot({path:path.join(output,`${name}-${label}-tasks.png`),fullPage:true});
  await page.locator('[data-day-id="1"]').click();await page.waitForFunction(()=>document.getElementById('day-result')?.textContent.includes('Guten Tag'));
  await page.locator('[data-day-status=done]').click();await page.waitForFunction(()=>!document.getElementById('sheet').classList.contains('open'));
  assert.equal(await page.locator('.day-card').count(),1);
