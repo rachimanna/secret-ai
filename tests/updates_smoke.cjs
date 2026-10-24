@@ -25,7 +25,7 @@ const server=http.createServer((req,res)=>{
    res.writeHead(200,{"Content-Type":"application/json"});res.end(JSON.stringify(result));
   });return;
  }
- if(["/updates.js","/play-core.js","/play-ui.js","/play.css","/logo.svg"].includes(pathname)){
+ if(["/updates.js","/extensions.js","/play-core.js","/play-ui.js","/play.css","/logo.svg"].includes(pathname)){
   res.writeHead(200,{"Content-Type":pathname.endsWith(".js")?"application/javascript":pathname.endsWith(".css")?"text/css":"image/svg+xml"});
   res.end(fs.readFileSync(path.join(root,"webapp",pathname.slice(1))));return;
  }

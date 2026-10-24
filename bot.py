@@ -65,6 +65,8 @@ import game
 import hosting
 import links
 import mcpbridge
+import message_guard
+import extensions
 import miniapp
 import persist
 import secretary as sec
@@ -3056,11 +3058,15 @@ def wants_apps(bot_data, user_id, text):
 def apps_named(bot_data, user_id, text):
     """The message itself is about the apps (only this opens the follow-up window, so small talk lets it close)."""
     text = text or ""
-    names = bot_data.setdefault("app_names", {}).get(user_id) or []
-    return bool(APP_WORDS.search(text)) or any(name.lower()[:5] in text.lower() for name in names if len(name) >= 4)
+    names = list(bot_data.setdefault("app_names", {}).get(user_id) or [])
+    store = bot_data.get("connections")
+    if store:
+        names += [r["label"] for r in store.public(user_id) if r["service"] in ("mcp", "mcpapp") and r["meta"].get("enabled",True)]
+        names += store.get_meta(f"app_names:{user_id}") or []
+    return bool(APP_WORDS.search(text)) or any(re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", text.lower()) for name in names if len(name) >= 2)
 
 
-async def app_tools(bot_data, user_id, taken):
+async def app_tools(bot_data, user_id, taken, text=""):
     """MCP tools of apps the user connected in one tap; an outage of one source must not break the answer."""
     tools, names = [], []
     try:
@@ -3070,7 +3076,7 @@ async def app_tools(bot_data, user_id, taken):
     pipedream = bot_data["pipedream"]
     if pipedream.enabled:
         try:
-            more, more_names = await asyncio.to_thread(pipedream.mcp_tools, user_id, list(taken) + [t["server_label"] for t in tools])
+            more, more_names = await asyncio.to_thread(pipedream.mcp_tools, user_id, list(taken) + [t["server_label"] for t in tools], text)
             tools, names = tools + more, names + more_names
         except (PipedreamError, httpx.HTTPError, KeyError, ValueError) as exc:
             LOG.warning("Connected apps unavailable: %s", type(exc).__name__)
@@ -3147,7 +3153,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         if use_apps:
             taken = [server["label"] for server in context.bot_data["connections"].public(user_id) if server["service"] == "mcp"]
             _, apps = await asyncio.gather(context.bot_data["github_apps"].fresh_token(context.bot_data["http"], user_id),
-                                           app_tools(context.bot_data, user_id, taken))
+                                           app_tools(context.bot_data, user_id, taken, saved_question))
             context.bot_data.setdefault("app_names", {})[user_id] = list(apps[1])
         if not scoped_reply and not document_turn and apps_named(context.bot_data, user_id, saved_question):
             context.bot_data.setdefault("apps_until", {})[user_id] = time.monotonic() + APPS_FOLLOW_UP
@@ -3170,10 +3176,11 @@ async def respond(update, context, target, content, saved_question, voice=False)
             return f"Not started ({error}). Tell the user briefly that generation is unavailable right now."
         return "Started. The result will arrive in the chat by itself in a moment; tell the user briefly."
     toolbox = None
+    skill_tools = extensions.skill_tool(context.bot_data["connections"], user_id) if not scoped_reply else []
     if not scoped_reply:
         toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                           apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
-                                                         edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)])
+                                                         edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)] + skill_tools)
         if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
             toolbox.mcp = []
     greeting = not scoped_reply and persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
@@ -3192,7 +3199,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
     model = user_model(context.bot_data, user_id)
     # Gateway small talk skips tool definitions and unnecessary app handshakes.
     slow_gateway = bool(model) and bool(chat_provider(model))
-    light = scoped_reply or (slow_gateway and not use_apps and not needs_tools(saved_question))
+    light = scoped_reply or (slow_gateway and not use_apps and not skill_tools and not needs_tools(saved_question))
     if not light and toolbox.instructions():
         instructions += " " + toolbox.instructions()
     history = [] if scoped_reply else memory.history(user_id, limit=6) if greeting else memory.history(user_id)
@@ -5680,6 +5687,9 @@ async def keep_awake(app):
 async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
+    if app.bot_data.get("message_guard"):
+        app.bot.request.bot_id=app.bot.id
+        app.bot_data["message_guard_task"]=asyncio.create_task(app.bot_data["message_guard"].run(app.bot))
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     if app.bot_data.get("daily_controls"):
         app.bot_data["daily_task"] = asyncio.create_task(app.bot_data["daily_controls"].run(app))
@@ -5883,9 +5893,9 @@ async def live_turn(app, tg_user, audio, image=None, mode=None):
     context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
     use_apps = wants_apps(data, user_id, heard)
     taken = [server["label"] for server in data["connections"].public(user_id) if server["service"] == "mcp"]
-    apps = await app_tools(data, user_id, taken) if use_apps else ([], [])
+    apps = await app_tools(data, user_id, taken, heard) if use_apps else ([], [])
     toolbox = Toolbox(data["http"], data["connections"], data["pending"], user_id, language, apps=apps,
-                      extra=[memory_tool(context, user_id)])
+                      extra=[memory_tool(context, user_id)] + extensions.skill_tool(data["connections"], user_id))
     if not use_apps:
         toolbox.mcp = []
     instructions = (SYSTEM + now_note() + ACCENT + LIVE_RULES + (LIVE_GERMAN if mode == "de" else "") + model_identity(model)
@@ -6160,6 +6170,9 @@ class Bridge:
             return self.app.bot_data["groups"].groups_for(user_id)
         return self._run(read())
 
+    def group_guard(self,user_id,chat_id,enabled=None):
+        return self._run(message_guard.settings(self.app,user_id,chat_id,enabled))
+
     def set_group_level(self, user_id, chat_id, level):
         """Only the group's admins change how often the bot speaks up there. Returns False if not allowed."""
         async def write():
@@ -6306,11 +6319,14 @@ async def run_codex(app, task_id, language, charged=0):
             tools = RepoTools(Toolbox(data["http"], data["connections"], data["pending"], user_id, language))
         else:
             tools = codex.Workspace(store, task_id, can_run=can_run, language=language)
+        skill_tools = extensions.skill_tool(data["connections"], user_id)
+        if skill_tools:
+            tools = extensions.SkillWorkspace(tools, skill_tools)
         live.status("Изучаю задачу" if ru else "Reading the task")
         answer, _ = await generate(
             context, live, tools, model=codex_model(data, task["model"]), store=False, max_output_tokens=32000, rounds=codex.ROUNDS,
             api_timeout=180, stream_retries=1,
-            instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language),
+            instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language) + " " + " ".join(s["hint"] for s in skill_tools),
             input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
                                                                           else "") + task["prompt"]}] + continuation)
     except asyncio.CancelledError:
@@ -6494,9 +6510,14 @@ def main():
     pipedream = Pipedream(os.environ.get("PIPEDREAM_CLIENT_ID", "").strip(), os.environ.get("PIPEDREAM_CLIENT_SECRET", "").strip(),
                           os.environ.get("PIPEDREAM_PROJECT_ID", "").strip(), os.environ.get("PIPEDREAM_ENVIRONMENT", "production").strip(),
                           os.environ.get("PIPEDREAM_MCP_URL", "").strip())
-    app = Application.builder().token(token).concurrent_updates(True).post_init(post_init).post_shutdown(shutdown).build()
+    guard=None
+    builder=Application.builder().token(token).concurrent_updates(True).post_init(post_init).post_shutdown(shutdown)
+    if os.environ.get("GUARD_ENABLED", "0").strip()=="1" and not hosting.is_test_bot():
+        guard=message_guard.Worker(message_guard.Store(connections),os.environ.get("GUARD_SESSION_FILE", ".guard-session.enc"))
+        builder=builder.request(message_guard.RecordingRequest(guard.store))
+    app = builder.build()
     app.bot_data.update(
-        connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
+        connections=connections, message_guard=guard, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key or "off", timeout=120, max_retries=2), openai=use_openai,
         stt=AsyncOpenAI(api_key=key, timeout=120, max_retries=2) if use_openai else speech.GoogleSpeech(),
         memory=Memory(database), allowed=allowed, snapshots=snapshots, codex=codex.CodexStore(connections), codex_jobs={},
@@ -6597,6 +6618,7 @@ def main():
         quick_answer=quick_answer, read_question=read_question, lookup=web_lookup, test_mode=test_mode))
     app.bot_data["daily_controls"] = daily_controls
     daily_controls.register(app)
+    app.add_handler(CommandHandler("guard",message_guard.command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))

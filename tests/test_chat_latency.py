@@ -46,7 +46,7 @@ class ChatLatencyTest(unittest.IsolatedAsyncioTestCase):
                                                {'id': 2, 'role': 'assistant', 'content': 'Хорошо'}]),
                     recall=Mock(return_value=[]), append_turn=Mock())
         data = dict(models=[MODEL], model=MODEL, chat_default=MODEL, fallbacks=[MODEL],
-                    memory=memory, pending={}, http=NS(), connections=NS(), last_answer={})
+                    memory=memory, pending={}, http=NS(), connections=NS(get=lambda *a: [], public=lambda *a: [], get_meta=lambda *a: None), last_answer={})
         live = NS(text='', halted=None, finish=AsyncMock(return_value=NS(message_id=1)), abort=AsyncMock())
         tools = NS(mcp=[], instructions=Mock(return_value='Tool instructions'), proposals=[])
         generate = AsyncMock(return_value=('Привет! Как ты?', False))

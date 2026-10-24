@@ -161,11 +161,16 @@ class Pipedream:
 
     # ----- model tools -----
 
-    def mcp_tools(self, user_id, taken=()):
+    def mcp_tools(self, user_id, taken=(), query=""):
         """Remote MCP tool definitions for the user's connected apps, plus their display names."""
         if not self.enabled:
             return [], []
         accounts = [a for a in self.accounts(user_id) if a["healthy"]]
+        # A named app must remain reachable even after the user connects more than the context limit.
+        query = query.casefold()
+        if query:
+            accounts.sort(key=lambda a: not any(re.search(r"(?<!\w)"+re.escape(value.casefold())+r"(?!\w)",query)
+                                                for value in (a["name"],a["slug"]) if len(value)>=2))
         if not accounts:
             return [], []
         token = self.access_token()
