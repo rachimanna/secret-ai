@@ -1228,6 +1228,13 @@ CHAT_PROVIDERS = {ABACUS_PREFIX: "abacus", ANYMODEL_PREFIX: "anymodel_chat", "gr
                   **{f"{name}:": name for name in EXTRA_PROVIDERS}}
 # Very fast inference on special chips, free keys: GROQ_API_KEY (console.groq.com), CEREBRAS_API_KEY (cloud.cerebras.ai).
 FAST_PROVIDERS = {"groq": "https://api.groq.com/openai/v1", "cerebras": "https://api.cerebras.ai/v1"}
+
+
+def gateway_enabled(name):
+    """The Oxion trial is paused by default, even if its key remains on the server."""
+    return bool(os.environ.get(f"{name.upper()}_API_KEY", "").strip()) and (
+        name != "oxionai" or os.environ.get("OXIONAI_ENABLED", "0").strip() == "1")
+
 FAST_PICK = (r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
 OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-6"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
 GPT_PICK = "gpt-6.1-sol"  # the second model in the picker
@@ -6525,7 +6532,7 @@ def main():
            for name, url in FAST_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
         **{name: AsyncOpenAI(api_key=os.environ[f"{name.upper()}_API_KEY"].strip(), timeout=120, max_retries=1,
                              base_url=os.environ.get(f"{name.upper()}_BASE", "").strip().rstrip("/") or spec[0])
-           for name, spec in EXTRA_PROVIDERS.items() if os.environ.get(f"{name.upper()}_API_KEY", "").strip()},
+           for name, spec in EXTRA_PROVIDERS.items() if gateway_enabled(name)},
         anymodel_chat=AsyncOpenAI(api_key=os.environ["ANYMODEL_API_KEY"].strip().removeprefix("Bearer ").strip(),
                                   base_url=os.environ.get("ANYMODEL_BASE", "").strip().rstrip("/") or ANYMODEL_API,
                                   timeout=httpx.Timeout(120, connect=8, read=45), max_retries=0) if os.environ.get("ANYMODEL_API_KEY", "").strip() else None,
