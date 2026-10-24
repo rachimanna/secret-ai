@@ -6264,10 +6264,10 @@ async def run_codex(app, task_id, language, charged=0):
         context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
         live = codex.TaskLive(store, task_id, language)
         earlier = [t for t in store.thread(task["thread"], user_id) if t["id"] != task_id and t["created"] <= task["created"]]
-        continuation = ([{"role":"assistant","content":task["summary"][:6000]},
+        continuation = ([{"role":"assistant","content":task["summary"][:6000] or "Task interrupted; inspect the saved files."},
                          {"role":"user","content":"Continue the interrupted task. Existing project files are preserved; inspect them before editing. "
                           "For a repository inspect the current branch and prepare a complete proposal again."}]
-                        if task.get("summary") else [])
+                        if task.get("resumed") or task.get("summary") else [])
         can_run = await asyncio.to_thread(codex_can_run, data, user_id)
         if task["mode"] == "repo":
             await data["github_apps"].fresh_token(data["http"], user_id)

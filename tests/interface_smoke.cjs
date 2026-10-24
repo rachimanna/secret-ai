@@ -32,7 +32,7 @@ const server=http.createServer((req,res)=>{
  tasks=tasks.map(t=>({...t,status:'open'}));const context=await browser.newContext({viewport:{width,height},locale:'ru-RU',colorScheme:'dark',reducedMotion:process.env.SECRET_UI_MOTION==='1'?'no-preference':'reduce'});
  await context.route('https://telegram.org/**',r=>r.fulfill({body:''}));
  await context.addInitScript(()=>{window.Telegram={WebApp:{initData:'fixture',initDataUnsafe:{user:{id:1,first_name:'Рахим',language_code:'ru'}},colorScheme:'dark',ready(){},expand(){},isVersionAtLeast(){return true;},onEvent(){},setHeaderColor(){},setBackgroundColor(){},setBottomBarColor(){},disableVerticalSwipes(){},openTelegramLink(url){window.lastTelegramLink=url;},BackButton:{show(){},hide(){},onClick(){}}}};});
- const page=await context.newPage();const errors=[];page.on('pageerror',e=>errors.push(e.message));
+ const page=await context.newPage();const errors=[];page.on('pageerror',e=>{errors.push(e.message);console.error('BROWSER',name,label,e.message);});
  await page.goto(origin);await page.waitForFunction(()=>typeof bootReady!=='undefined'&&bootReady);await page.waitForSelector('#splash',{state:'detached'});
  const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);assert.equal(overflow,false,name+' '+label+' horizontal overflow');
  assert.equal(await page.locator('.action-card').count(),4);

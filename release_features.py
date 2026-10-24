@@ -119,7 +119,7 @@ async def dispatch(app, uid, action, payload, answer):
             raise ValueError("Нет приостановленной задачи.")
         if any(t["status"]==codex.STATUS_RUNNING for t in store.list(uid)):
             raise ValueError("Сначала дождись текущей задачи.")
-        store.update(task["id"],status=codex.STATUS_RUNNING,error="")
+        store.update(task["id"],status=codex.STATUS_RUNNING,error="",resumed=True)
         # The original task and its files are reused; no extra charge for a restart.
         import bot
         language="ru" if str(payload.get("language") or "ru").startswith("ru") else "en"

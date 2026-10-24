@@ -248,3 +248,95 @@ class GitHubRegressionTest(unittest.IsolatedAsyncioTestCase):
             saved=restarted.get(task["id"],1)
             self.assertEqual(saved["status"],codex.STATUS_PAUSED)
             self.assertEqual(saved["files"],{"main.py":"print(1)"})
+
+
+class BootstrapRegressionTest(unittest.TestCase):
+    def namespace(self):
+        import ast
+        source=Path("deploy/start.py").read_text()
+        tree=ast.parse(source)
+        tree.body=[node for node in tree.body if not (isinstance(node,ast.Expr) and isinstance(node.value,ast.Call)
+                   and isinstance(node.value.func,ast.Name) and node.value.func.id=="main")]
+        namespace={"__name__":"bootstrap_test"}
+        exec(compile(tree,"deploy/start.py","exec"),namespace)
+        return namespace
+
+    def test_archive_fallback_respects_requested_branch(self):
+        namespace=self.namespace()
+        namespace["branch"]=lambda:"stable"
+        import zipfile
+        archive=io.BytesIO()
+        with zipfile.ZipFile(archive,"w") as z:
+            z.writestr("secret-ai-stable/hello.txt","ok")
+        with tempfile.TemporaryDirectory() as folder:
+            namespace["HOME"]=folder
+            with patch("shutil.which",return_value=None),patch("urllib.request.urlopen",return_value=io.BytesIO(archive.getvalue())) as fetched:
+                namespace["fetch_code"]()
+            self.assertIn("/stable.zip",fetched.call_args.args[0])
+            self.assertEqual((Path(folder)/"hello.txt").read_text(),"ok")
+
+    def test_checkout_failure_never_reports_success(self):
+        namespace=self.namespace()
+        namespace["branch"]=lambda:"stable"
+        namespace["git"]=Mock(side_effect=[NS(returncode=0),NS(returncode=0),NS(returncode=0),NS(returncode=1,stderr="denied")])
+        with tempfile.TemporaryDirectory() as folder,patch("shutil.which",return_value="git"):
+            namespace["HOME"]=folder
+            with self.assertRaises(RuntimeError):
+                namespace["fetch_code"]()
+
+    def test_install_failure_aborts_instead_of_starting_broken_bot(self):
+        namespace=self.namespace()
+        with patch("subprocess.run",return_value=NS(returncode=1)):
+            with self.assertRaises(RuntimeError):
+                namespace["install"]()
+
+
+@unittest.skipUnless(__import__("os").environ.get("TEST_SNAPSHOT_DATABASE_URL"),"requires isolated test Postgres")
+class PostgresSnapshotIntegrationTest(unittest.TestCase):
+    def test_versions_restore_and_pending_request_survive_fresh_machine(self):
+        import os
+        import uuid
+        url=os.environ["TEST_SNAPSHOT_DATABASE_URL"]
+        name="test-"+uuid.uuid4().hex
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"memory.db"
+            snapshots=persist.Snapshots(url,path,name)
+            self.assertFalse(snapshots.restore())
+            with sqlite3.connect(path) as db:
+                db.execute("CREATE TABLE values_test(value TEXT)")
+                db.execute("INSERT INTO values_test VALUES ('first')")
+            self.assertTrue(snapshots.save())
+            old=snapshots.versions()[0]["id"]
+            with sqlite3.connect(path) as db:
+                db.execute("INSERT INTO values_test VALUES ('second')")
+            self.assertTrue(snapshots.save())
+            self.assertEqual(len(snapshots.versions()),2)
+            snapshots.stage_restore(old)
+            # Emulate a redeploy with no local disk: restore intent is in Postgres.
+            fresh_path=Path(folder)/"fresh.db"
+            fresh=persist.Snapshots(url,fresh_path,name)
+            self.assertTrue(fresh.restore())
+            with sqlite3.connect(fresh_path) as db:
+                self.assertEqual(db.execute("SELECT value FROM values_test").fetchall(),[("first",)])
+            self.assertTrue(fresh.ready)
+            with fresh._connect() as conn:
+                self.assertIsNone(conn.execute("SELECT data FROM bot_snapshot_restore WHERE name=%s",(name,)).fetchone())
+                for table in ("bot_snapshot_versions","bot_snapshots"):
+                    conn.execute("DELETE FROM "+table+" WHERE name=%s",(name,))
+
+    def test_invalid_pending_restore_fails_closed_even_with_existing_database(self):
+        import os
+        import uuid
+        name="test-"+uuid.uuid4().hex
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"memory.db"
+            with sqlite3.connect(path) as db:
+                db.execute("CREATE TABLE x(id INTEGER)")
+            snapshots=persist.Snapshots(os.environ["TEST_SNAPSHOT_DATABASE_URL"],path,name)
+            snapshots.restore()
+            with snapshots._connect() as conn:
+                conn.execute("INSERT INTO bot_snapshot_restore(name,data) VALUES (%s,%s)",(name,zlib.compress(b"broken")))
+            with self.assertRaises(ValueError):
+                persist.Snapshots(snapshots.url,path,name).restore()
+            with snapshots._connect() as conn:
+                conn.execute("DELETE FROM bot_snapshot_restore WHERE name=%s",(name,))

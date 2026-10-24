@@ -955,7 +955,7 @@ const T = {
           noChats: "Чатов пока нет", ph: "Опиши задачу…", phMore: "Уточни или попроси доработать…", free: "бесплатно", unlimited: "∞ безлимит", perAnswer: n => `💎 ${n} / задача`,
           ideasRepo: ["Найди и исправь баги", "Напиши тесты", "Добавь README", "Отрефактори код"],
           ideasProject: ["Игра «змейка»", "Сайт-портфолио", "Telegram-бот на Python", "Лендинг кофейни"],
-          st: { running: "В работе", done: "Готово", applied: "PR создан", failed: "Ошибка", stopped: "Остановлено" },
+          st: { running: "В работе", applying: "Применяется", paused: "На паузе", done: "Готово", applied: "PR создан", failed: "Ошибка", stopped: "Остановлено" },
           pr: "🚀 Создать PR", applying: "Создаю…", openPr: "🔗 Pull request", openCommit: "Коммит", send: "📦 В чат", site: "🌐 Сайт", sent: "Отправил в чат",
           retry: "↻ Повторить", delAsk: "Удалить этот чат?", files: n => `${n} файл.`, models: "Модель для Codex",
           errBusy: "Codex ещё работает — дождись или останови", errGh: "Сначала подключи GitHub", errCredits: "Не хватает кредитов для платной модели",
@@ -1036,7 +1036,7 @@ const T = {
           noChats: "No chats yet", ph: "Describe a task…", phMore: "Clarify or ask for more…", free: "free", unlimited: "∞ unlimited", perAnswer: n => `💎 ${n} / task`,
           ideasRepo: ["Find and fix bugs", "Write tests", "Add a README", "Refactor the code"],
           ideasProject: ["Snake game", "Portfolio site", "Telegram bot in Python", "Coffee shop landing"],
-          st: { running: "Working", done: "Ready", applied: "PR opened", failed: "Error", stopped: "Stopped" },
+          st: { running: "Working", applying: "Applying", paused: "Paused", done: "Ready", applied: "PR opened", failed: "Error", stopped: "Stopped" },
           pr: "🚀 Create PR", applying: "Creating…", openPr: "🔗 Pull request", openCommit: "Commit", send: "📦 To chat", site: "🌐 Site", sent: "Sent to the chat",
           retry: "↻ Retry", delAsk: "Delete this chat?", files: n => `${n} files`, models: "Model for Codex",
           errBusy: "Codex is still working — wait or stop it", errGh: "Connect GitHub first", errCredits: "Not enough credits for the paid model",
@@ -1643,7 +1643,7 @@ function renderComposer() {
       <button class="cx-send press" id="cx-send"></button></div>`;
     $("cx-text").addEventListener("input", e => { cx.draft = e.target.value; cxGrow(); });
     $("cx-text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCodex(); });
-    $("cx-send").onclick = () => cxRunning() ? stopCodex() : sendCodex();
+    $("cx-send").onclick = () => cx.tasks.some(t=>t.status==="applying") ? toast(lang==="ru"?"Изменения применяются. Дождись результата.":"Applying changes. Please wait.") : cxRunning() ? stopCodex() : sendCodex();
     $("cx-model").onclick = openCodexModels;
     $("cx-clip").onclick = () => cx.tasks.length ? openCodexChats() : openCodexMode();
   }

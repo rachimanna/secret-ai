@@ -28,6 +28,8 @@ def unpack(packed):
 
 
 def verify(data):
+    if len(data) > 256 * 1024 * 1024 or not data.startswith(b"SQLite format 3\x00"):
+        raise ValueError("Invalid or oversized SQLite snapshot")
     with tempfile.TemporaryDirectory(prefix="secret-verify-") as folder:
         path = Path(folder) / "check.db"
         path.write_bytes(data)
@@ -67,11 +69,13 @@ class Snapshots:
 
     def restore(self):
         with self.lock:
+            restoring = False
             try:
                 with self._connect() as conn:
                     self._tables(conn)
                     pending = conn.execute("SELECT data FROM bot_snapshot_restore WHERE name=%s",(self.name,)).fetchone()
                     if pending:
+                        restoring = True
                         self._install(unpack(pending[0]))
                         conn.execute("DELETE FROM bot_snapshot_restore WHERE name=%s",(self.name,))
                         self.ready = True
@@ -88,7 +92,7 @@ class Snapshots:
             except Exception as exc:
                 self.last_error = type(exc).__name__
                 # An existing local database is usable during a Postgres outage.
-                if self.path.exists() and self.path.stat().st_size > 0:
+                if not restoring and self.path.exists() and self.path.stat().st_size > 0:
                     self.ready = True
                     return False
                 raise

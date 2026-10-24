@@ -29,6 +29,9 @@ def git(*args):
 
 def branch():
     """UPDATE_BRANCH from .env: the main bot can run "stable" while a test bot tries "main"."""
+    configured = os.environ.get("UPDATE_BRANCH", "").strip()
+    if configured:
+        return configured
     try:
         with open(os.path.join(HOME, ".env"), encoding="utf-8") as env:
             for line in env:
