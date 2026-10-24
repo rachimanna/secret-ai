@@ -89,7 +89,7 @@ class GuardTest(unittest.IsolatedAsyncioTestCase):
     async def test_telethon_event_uses_original_deleted_message(self):
         original=types.ChannelAdminLogEvent(id=100,date=datetime.now(timezone.utc),user_id=2,
             action=types.ChannelAdminLogEventActionDeleteMessage(message=types.Message(id=10,peer_id=types.PeerChannel(1234567890),date=datetime.now(timezone.utc),message='Hello')))
-        actual=AdminLogEvent(original,{2:NS(id=2)})
+        actual=AdminLogEvent(original,{2:types.User(id=2,access_hash=123,first_name='Admin')})
         self.assertIs(actual.deleted_message,True)
         self.store.capture(message(),BOT)
         await self.worker.event(self.bot,self.store.chats()[0],actual)
