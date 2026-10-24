@@ -56,6 +56,7 @@ import workbench_ui
 import inline_ai
 import reply_context
 import release_features
+import release_notices
 import daily
 import daily_ui
 import chatserial
@@ -5721,6 +5722,9 @@ async def post_init(app):
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp("Secret AI", WebAppInfo(app.bot_data["public_url"] + "/app")))
     except TelegramError:
         LOG.warning("Could not register the command menu")
+    # Start only after initialization has succeeded; cancellation is handled with the other workers.
+    app.bot_data["release_notice_task"] = asyncio.create_task(
+        release_notices.Worker(app, is_test_bot=hosting.is_test_bot, test_mode=test_mode).run())
 
 
 async def shutdown(app):
@@ -6515,6 +6519,9 @@ def main():
         chat_reasoning=os.environ.get("CHAT_REASONING_EFFORT", "low").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},
         biz_activity=sec.Activity())
+    app.bot_data["release_notices"] = release_notices.Store(app.bot_data["memory"].db)
+    # Track real private/group chats, without changing any command or message handler.
+    app.add_handler(TypeHandler(Update, release_notices.track), group=-1)
     # Business updates first: their messages must not reach the regular chat handlers.
     app.add_handler(TypeHandler(Update, test_gate), group=-3)  # /test: only the owner gets through
     app.add_handler(TypeHandler(Update, stop_generation, block=False), group=-2)
