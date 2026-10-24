@@ -45,7 +45,7 @@ document.querySelectorAll('input').forEach(input=>input.addEventListener('input'
 document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{try{const field=$(b.dataset.paste);field.value=(await navigator.clipboard.readText()).trim();field.dispatchEvent(new Event('input'));field.focus();}catch{status('Нажми правой кнопкой мыши внутри нужного поля и выбери «Вставить».');}});
 $('api-hash').oninput=()=>{$('hash-count').textContent='Введено символов: '+$('api-hash').value.trim().length+' из 32';};
 function draw(s){if(hasError&&phase===s.phase)return;hasError=false;const changed=phase!==s.phase;phase=s.phase;$('setup').hidden=phase!=='setup';$('prompt').hidden=!['code','password'].includes(phase);
-if(changed){$('answer').value='';if(phase==='code'||phase==='password'){$('question').textContent=phase==='code'?'Код входа из Telegram':'Пароль двухэтапной проверки';$('answer').focus();}if(phase==='working'||phase==='done'){for(const id of ['api-id','api-hash','secret','phone'])$(id).value='';}}
+if(changed){$('answer').value='';if(phase==='code'||phase==='password'){$('question').textContent=phase==='code'?(s.code_label||'Код входа'):'Пароль двухэтапной проверки';$('answer').focus();}if(phase==='working'||phase==='done'){for(const id of ['api-id','api-hash','secret','phone'])$(id).value='';}}
 status(s.message||'');document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=sending||phase==='working');}
 async function submit(data){sending=true;hasError=false;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=true);try{draw(await api('submit',data));}catch(e){showError(e.message,e.field);}finally{sending=false;document.querySelectorAll('button[type=submit]').forEach(b=>b.disabled=phase==='working');}}
 $('setup').onsubmit=e=>{e.preventDefault();if(!/^[0-9]+$/.test($('api-id').value.trim())){showError('В api_id нужны только цифры из my.telegram.org.','api-id');return;}if(!/^[a-fA-F0-9]{32}$/.test($('api-hash').value.trim())){showError('В api_hash должно быть ровно 32 символа: цифры и латинские буквы a–f.','api-hash');return;}submit({api_id:$('api-id').value.trim(),api_hash:$('api-hash').value.trim(),phone:$('phone').value.trim(),secret:$('secret').value.trim()});};
@@ -66,18 +66,37 @@ class Wizard:
         self.token=secrets.token_urlsafe(32)
         self.lock=threading.Lock();self.answers=queue.Queue()
         self.phase='setup';self.message='Заполни поля и нажми «Продолжить».'
+        self.delivery='unknown';self.code_label='Код входа'
+        self.code_hint='Telegram запросил код входа. Способ доставки пока не определён.'
         self.last_seen=time.monotonic()
 
     def state(self):
         with self.lock:
-            return {'phase':self.phase,'message':self.message}
+            return {'phase':self.phase,'message':self.message,'delivery':self.delivery,'code_label':self.code_label}
+
+    def record_delivery(self,sent):
+        kind=type(getattr(sent,'type',None)).__name__
+        if kind=='SentCodeTypeApp':
+            delivery,label,hint='app','Код из служебного чата Telegram','Telegram выбрал доставку сообщением в приложение. Открой служебный чат Telegram с галочкой в том аккаунте, который уже открыт на компьютере.'
+        elif kind in ('SentCodeTypeSms','SentCodeTypeSmsWord','SentCodeTypeSmsPhrase','SentCodeTypeFirebaseSms'):
+            delivery,label,hint='sms','Код из SMS','Telegram выбрал доставку SMS на номер аккаунта. Для этого способа нужен доступ к SMS номера. Помощник не может принудительно заменить SMS сообщением в Telegram.'
+        elif kind=='SentCodeTypeEmailCode':
+            delivery,label,hint='email','Код из электронной почты','Telegram выбрал доставку кода на привязанную электронную почту. Проверь почту этого аккаунта.'
+        elif kind in ('SentCodeTypeCall','SentCodeTypeFlashCall','SentCodeTypeMissedCall'):
+            delivery,label,hint='call','Код из звонка','Telegram выбрал доставку звонком. Для этого способа нужен доступ к звонкам номера; сообщение в Telegram этим запросом не выбрано.'
+        elif kind=='SentCodeTypeFragmentSms':
+            delivery,label,hint='fragment','Код через Fragment','Telegram выбрал получение кода через Fragment. Обычный служебный чат Telegram этим запросом не выбран.'
+        else:
+            delivery,label,hint='unknown','Код входа','Telegram запросил код, но эта версия помощника не распознала способ доставки. Нельзя утверждать, что он отправлен сообщением в Telegram.'
+        with self.lock:
+            self.delivery,self.code_label,self.code_hint=delivery,label,hint
 
     def set(self,phase,message):
         with self.lock:
             self.phase,self.message=phase,message
 
     async def ask(self,phase):
-        self.set(phase,'Введи код из Telegram.' if phase=='code' else 'Введи пароль двухэтапной проверки.')
+        self.set(phase,self.code_hint if phase=='code' else 'Введи пароль двухэтапной проверки.')
         answer=await asyncio.to_thread(self.answers.get,True,600)
         if answer is None:
             raise ValueError('Cancelled')
@@ -127,7 +146,13 @@ class Wizard:
     async def authorize(self,api_id,api_hash,phone,secret):
         from telethon import TelegramClient
         from telethon.sessions import StringSession
-        client=(self.client_factory or TelegramClient)(StringSession(),api_id,api_hash,receive_updates=False)
+        wizard=self
+        class DeliveryClient(self.client_factory or TelegramClient):
+            async def send_code_request(self,*args,**kwargs):
+                sent=await super().send_code_request(*args,**kwargs)
+                wizard.record_delivery(sent)
+                return sent
+        client=DeliveryClient(StringSession(),api_id,api_hash,receive_updates=False)
         try:
             await client.start(phone=phone,code_callback=lambda:self.ask('code'),password=lambda:self.ask('password'))
             if (await client.get_me()).bot:

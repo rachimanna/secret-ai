@@ -7,6 +7,7 @@ from http.server import ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock
+from telethon import types
 
 import httpx
 
@@ -22,8 +23,12 @@ class FakeClient:
 
     async def start(self,phone,code_callback,password):
         assert phone=='+79991234567'
+        await self.send_code_request(phone)
         assert await code_callback()=='11111'
         assert await password()=='fixture-password'
+
+    async def send_code_request(self,phone):
+        return NS(type=types.auth.SentCodeTypeApp(length=5),phone_code_hash='DO_NOT_DISCLOSE')
 
 
 class WebLoginTest(unittest.TestCase):
@@ -42,6 +47,16 @@ class WebLoginTest(unittest.TestCase):
         self.assertIn('data-paste="api-hash"',web.PAGE)
         self.assertIn("navigator.clipboard.readText()",web.PAGE)
         self.assertNotIn('type="password"',web.PAGE)
+
+    def test_delivery_comes_from_telegram_response_not_a_fixed_label(self):
+        for actual,delivery,label in [(types.auth.SentCodeTypeApp(length=5),'app','Telegram'),
+                (types.auth.SentCodeTypeSms(length=5),'sms','SMS'),
+                (types.auth.SentCodeTypeEmailCode(email_pattern='m***@example.com',length=5),'email','почты')]:
+            self.wizard.record_delivery(NS(type=actual,phone_code_hash='DO_NOT_DISCLOSE'))
+            state=self.wizard.state()
+            self.assertEqual(state['delivery'],delivery)
+            self.assertIn(label,state['code_label'])
+            self.assertNotIn('DO_NOT_DISCLOSE',str(state))
 
     def test_login_stages_and_encrypted_output_without_real_telegram(self):
         self.wizard.submit(dict(api_id='123',api_hash='a'*32,phone='+79991234567',secret='fixture-key'))
@@ -95,7 +110,7 @@ class WebLoginTest(unittest.TestCase):
                 self.assertIn('запусти программу',rejected.json()['error'])
                 result=client.post('/api/state',json={},headers={'X-Guard-Token':self.wizard.token})
                 self.assertEqual(result.status_code,200)
-                self.assertEqual(set(result.json()),{'phase','message'})
+                self.assertEqual(set(result.json()),{'phase','message','delivery','code_label'})
                 page=client.get('/')
                 self.assertNotIn(self.wizard.token,page.text)
                 self.assertEqual(page.headers['Cache-Control'],'no-store')

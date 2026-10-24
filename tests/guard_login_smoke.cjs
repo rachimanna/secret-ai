@@ -17,7 +17,8 @@ const ready=new Promise((resolve,reject)=>{let raw='';const timeout=setTimeout((
  assert.equal(await page.locator('#phone').getAttribute('aria-invalid'),'true');
  await page.locator('#phone').fill('+7 (999) 123-45-67');
  if(process.env.SECRET_GUARD_SCREENSHOT)await page.screenshot({path:process.env.SECRET_GUARD_SCREENSHOT});
- await page.locator('#setup button[type=submit]').click();await page.waitForFunction(()=>document.getElementById('question').textContent==='Код входа из Telegram');
+ await page.locator('#setup button[type=submit]').click();await page.waitForFunction(()=>document.getElementById('question').textContent==='Код из служебного чата Telegram');
+ assert((await page.locator('#status').textContent()).includes('выбрал доставку сообщением'));
  await page.locator('#answer').fill('11111');await page.locator('#prompt button[type=submit]').click();
  await page.waitForFunction(()=>document.getElementById('question').textContent==='Пароль двухэтапной проверки');
  await page.locator('#answer').fill('fixture-password');await page.locator('#prompt button[type=submit]').click();
