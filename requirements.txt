@@ -13,3 +13,4 @@ pypdf>=6,<7
 defusedxml>=0.7,<1
 tzdata>=2025.2
 PyYAML>=6,<7
+Telethon>=1.45,<2

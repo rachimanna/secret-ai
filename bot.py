@@ -65,6 +65,7 @@ import game
 import hosting
 import links
 import mcpbridge
+import message_guard
 import extensions
 import miniapp
 import persist
@@ -5686,6 +5687,9 @@ async def keep_awake(app):
 async def post_init(app):
     app.bot_data["loop"] = asyncio.get_running_loop()
     app.bot_data["bot_name"] = app.bot.username
+    if app.bot_data.get("message_guard"):
+        app.bot.request.bot_id=app.bot.id
+        app.bot_data["message_guard_task"]=asyncio.create_task(app.bot_data["message_guard"].run(app.bot))
     app.bot_data["username_task"] = asyncio.create_task(watch_username(app))
     if app.bot_data.get("daily_controls"):
         app.bot_data["daily_task"] = asyncio.create_task(app.bot_data["daily_controls"].run(app))
@@ -6503,9 +6507,14 @@ def main():
     pipedream = Pipedream(os.environ.get("PIPEDREAM_CLIENT_ID", "").strip(), os.environ.get("PIPEDREAM_CLIENT_SECRET", "").strip(),
                           os.environ.get("PIPEDREAM_PROJECT_ID", "").strip(), os.environ.get("PIPEDREAM_ENVIRONMENT", "production").strip(),
                           os.environ.get("PIPEDREAM_MCP_URL", "").strip())
-    app = Application.builder().token(token).concurrent_updates(True).post_init(post_init).post_shutdown(shutdown).build()
+    guard=None
+    builder=Application.builder().token(token).concurrent_updates(True).post_init(post_init).post_shutdown(shutdown)
+    if os.environ.get("GUARD_ENABLED", "0").strip()=="1" and not hosting.is_test_bot():
+        guard=message_guard.Worker(message_guard.Store(connections),os.environ.get("GUARD_SESSION_FILE", ".guard-session.enc"))
+        builder=builder.request(message_guard.RecordingRequest(guard.store))
+    app = builder.build()
     app.bot_data.update(
-        connections=connections, http=httpx.AsyncClient(), pending={}, public_url=public_url,
+        connections=connections, message_guard=guard, http=httpx.AsyncClient(), pending={}, public_url=public_url,
         client=AsyncOpenAI(api_key=key or "off", timeout=120, max_retries=2), openai=use_openai,
         stt=AsyncOpenAI(api_key=key, timeout=120, max_retries=2) if use_openai else speech.GoogleSpeech(),
         memory=Memory(database), allowed=allowed, snapshots=snapshots, codex=codex.CodexStore(connections), codex_jobs={},
@@ -6606,6 +6615,7 @@ def main():
         quick_answer=quick_answer, read_question=read_question, lookup=web_lookup, test_mode=test_mode))
     app.bot_data["daily_controls"] = daily_controls
     daily_controls.register(app)
+    app.add_handler(CommandHandler("guard",message_guard.command))
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))
