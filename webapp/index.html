@@ -955,7 +955,7 @@ const T = {
           noChats: "Чатов пока нет", ph: "Опиши задачу…", phMore: "Уточни или попроси доработать…", free: "бесплатно", unlimited: "∞ безлимит", perAnswer: n => `💎 ${n} / задача`,
           ideasRepo: ["Найди и исправь баги", "Напиши тесты", "Добавь README", "Отрефактори код"],
           ideasProject: ["Игра «змейка»", "Сайт-портфолио", "Telegram-бот на Python", "Лендинг кофейни"],
-          st: { running: "В работе", done: "Готово", applied: "PR создан", failed: "Ошибка", stopped: "Остановлено" },
+          st: { running: "В работе", applying: "Применяется", paused: "На паузе", done: "Готово", applied: "PR создан", failed: "Ошибка", stopped: "Остановлено" },
           pr: "🚀 Создать PR", applying: "Создаю…", openPr: "🔗 Pull request", openCommit: "Коммит", send: "📦 В чат", site: "🌐 Сайт", sent: "Отправил в чат",
           retry: "↻ Повторить", delAsk: "Удалить этот чат?", files: n => `${n} файл.`, models: "Модель для Codex",
           errBusy: "Codex ещё работает — дождись или останови", errGh: "Сначала подключи GitHub", errCredits: "Не хватает кредитов для платной модели",
@@ -1036,7 +1036,7 @@ const T = {
           noChats: "No chats yet", ph: "Describe a task…", phMore: "Clarify or ask for more…", free: "free", unlimited: "∞ unlimited", perAnswer: n => `💎 ${n} / task`,
           ideasRepo: ["Find and fix bugs", "Write tests", "Add a README", "Refactor the code"],
           ideasProject: ["Snake game", "Portfolio site", "Telegram bot in Python", "Coffee shop landing"],
-          st: { running: "Working", done: "Ready", applied: "PR opened", failed: "Error", stopped: "Stopped" },
+          st: { running: "Working", applying: "Applying", paused: "Paused", done: "Ready", applied: "PR opened", failed: "Error", stopped: "Stopped" },
           pr: "🚀 Create PR", applying: "Creating…", openPr: "🔗 Pull request", openCommit: "Commit", send: "📦 To chat", site: "🌐 Site", sent: "Sent to the chat",
           retry: "↻ Retry", delAsk: "Delete this chat?", files: n => `${n} files`, models: "Model for Codex",
           errBusy: "Codex is still working — wait or stop it", errGh: "Connect GitHub first", errCredits: "Not enough credits for the paid model",
@@ -1539,7 +1539,7 @@ try { cx.mode = localStorage.getItem("cx-mode") || "project"; cx.repo = localSto
 const cxSave = () => { try { localStorage.setItem("cx-mode", cx.mode); localStorage.setItem("cx-repo", cx.repo); cx.thread ? localStorage.setItem("cx-thread", cx.thread) : localStorage.removeItem("cx-thread"); } catch (e) {} };
 const cxAgo = t => { const m = Math.max(0, Math.round((Date.now() / 1000 - t) / 60));
   return m < 1 ? (lang === "ru" ? "сейчас" : "now") : m < 60 ? `${m} ${lang === "ru" ? "мин" : "min"}` : m < 1440 ? `${Math.round(m / 60)} ${lang === "ru" ? "ч" : "h"}` : `${Math.round(m / 1440)} ${lang === "ru" ? "дн" : "d"}`; };
-const cxRunning = () => cx.tasks.some(t => t.status === "running");
+const cxRunning = () => cx.tasks.some(t => ["running","applying"].includes(t.status));
 async function loadCodex() {
   if (document.hidden) return;
   const before = JSON.stringify([cx.thread,cx.tasks,cx.chats,cx.github,state?.settings?.model]);
@@ -1614,6 +1614,9 @@ function cxMessage(t) {
       ${log.length ? `<div class="cx-log">${log.map((l, i) => `<div class="${running && i === log.length - 1 ? "now" : ""}">${esc(l.text)}</div>`).join("")}</div>` : ""}
       ${running && !t.summary ? `<div class="cx-think"><i></i><i></i><i></i></div>` : ""}
       ${t.summary ? `<div class="cx-sum">${esc(t.summary)}</div>` : ""}
+      ${t.status === "paused" ? `<div class="cx-sum">${lang==="ru"?"Задача приостановлена после перезапуска. Файлы сохранены; продолжение без повторной оплаты.":"Paused after restart. Files saved; resume without an extra charge."}</div>` : ""}
+      ${ch ? `<div class="cx-sum">${lang==="ru"?"Готово к проверке: ":"Ready for review: "}${ch.files.length} ${lang==="ru"?"файлов.":"files."}</div>` : ""}
+      ${!running ? `<div class="cx-sum">${(t.checks||[]).length ? (t.checks||[]).map(c=>`<details><summary>${esc(c.command)}</summary><pre>${esc(c.result)}</pre></details>`).join("") : (lang==="ru"?"Автоматические проверки кода не выполнялись.":"No automated code checks were run.")}</div>` : ""}
       ${t.error ? `<div class="cx-err">⚠️ ${esc(t.error === "restart" ? C.errRestart : t.error)}</div>` : ""}
       ${ch ? `<div class="cx-target">${esc(ch.repo)} · ${esc(ch.base)} → ${esc(ch.branch)}</div>` + ch.files.map(f => det(`${t.id}:${f.path}`,
         `<b>${f.kind === "new" ? "🆕" : f.kind === "delete" ? "🗑" : "✏️"} ${esc(f.path)}</b><span class="add">+${f.added}</span><span class="del">−${f.removed}</span>`, cxDiff(f.patch))).join("") : ""}
@@ -1625,7 +1628,7 @@ function cxMessage(t) {
         ${t.result?.commit ? `<a class="cx-act" href="#" data-link="${esc(t.result.commit)}">${C.openCommit}</a>` : ""}
         ${!running && lastOfThread && files.some(([p]) => p.endsWith(".html")) ? `<button class="cx-act main press" data-act="site" data-id="${t.id}">${C.site}</button>` : ""}
         ${!running && lastOfThread && files.length ? `<button class="cx-act press" data-act="send" data-id="${t.id}">${C.send}</button>` : ""}
-        ${["failed", "stopped"].includes(t.status) && lastOfThread ? `<button class="cx-act press" data-act="retry" data-id="${t.id}">${C.retry}</button>` : ""}
+        ${["failed", "stopped", "paused"].includes(t.status) && lastOfThread ? `<button class="cx-act press" data-act="retry" data-id="${t.id}">${C.retry}</button>` : ""}
       </div></div></div>`;
 }
 function renderComposer() {
@@ -1640,7 +1643,7 @@ function renderComposer() {
       <button class="cx-send press" id="cx-send"></button></div>`;
     $("cx-text").addEventListener("input", e => { cx.draft = e.target.value; cxGrow(); });
     $("cx-text").addEventListener("keydown", e => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) sendCodex(); });
-    $("cx-send").onclick = () => cxRunning() ? stopCodex() : sendCodex();
+    $("cx-send").onclick = () => cx.tasks.some(t=>t.status==="applying") ? toast(lang==="ru"?"Изменения применяются. Дождись результата.":"Applying changes. Please wait.") : cxRunning() ? stopCodex() : sendCodex();
     $("cx-model").onclick = openCodexModels;
     $("cx-clip").onclick = () => cx.tasks.length ? openCodexChats() : openCodexMode();
   }
@@ -1715,7 +1718,8 @@ async function codexAction(act, id, b) {
   else if (act === "send") { try { await api("/api/codex/send", { id }); toast(C.sent, "📦"); haptic("success"); } catch (e) { toast(T.err); } }
   else if (act === "retry") {
     const t = cx.tasks.find(x => x.id === id);
-    try { await api("/api/codex/start", { mode: t.mode, prompt: t.prompt, repo: t.repo, thread: cx.thread }); loadCodex(); }
+    try { if(t.status==="paused") await api("/api/features/resume",{id:t.id,language:lang});
+      else await api("/api/codex/start", { mode: t.mode, prompt: t.prompt, repo: t.repo, thread: cx.thread }); loadCodex(); }
     catch (e) { toast({ busy: C.errBusy, github: C.errGh, credits: C.errCredits }[e.code] || T.err); }
   }
 }
@@ -2946,8 +2950,12 @@ function renderHomeActions() {
     ['💬','Новый разговор','Начни с любой мысли','chat'],['🎨','Создать','Фото, видео и обработка','gen'],
     ['✅','Мой день','Дела и следующие шаги','day'],['🎮','Игры','Память, логика и испытание дня','games'],
   ] : [['💬','New conversation','Start with an idea','chat'],['🎨','Create something','Photos, videos and edits','gen'],['✅','My day','Tasks and next steps','day'],['🎮','Games','Memory, logic and a daily challenge','games']];
-  $('home-actions').innerHTML=actions.map(([icon,title,sub,action],i)=>`<button class="action-card press ${i===0?'primary':''}" data-home-action="${action}"><span class="action-icon">${lineIcon(icon)}</span><b>${title}</b><small>${sub}</small></button>`).join('');
-  $('home-actions').querySelectorAll('[data-home-action]').forEach(b=>b.onclick=()=>b.dataset.homeAction==='chat'?newConversation():switchTab(b.dataset.homeAction));
+  const homeActions=$('home-actions');
+  if(homeActions.dataset.language!==lang){homeActions.dataset.language=lang;
+  homeActions.innerHTML=actions.map(([icon,title,sub,action],i)=>`<button class="action-card press ${i===0?'primary':''}" data-home-action="${action}"><span class="action-icon">${lineIcon(icon)}</span><b>${title}</b><small>${sub}</small></button>`).join('');
+  }
+  homeActions.onclick=event=>{const b=event.target.closest('[data-home-action]');if(!b)return;
+    b.dataset.homeAction==='chat'?newConversation():switchTab(b.dataset.homeAction);};
   if(state?.user?.first_name)$('account-button').textContent=Array.from(state.user.first_name)[0].toLocaleUpperCase();
 }
 let recentLoading=null,recentUpdated=0,recentChats=[];
@@ -3034,5 +3042,6 @@ function initInterface() {
 
 init();
 </script>
+<script src="/updates.js"></script>
 </body>
 </html>

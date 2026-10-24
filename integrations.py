@@ -469,7 +469,7 @@ class Toolbox:
                 raise GitHubError(f"{path} is listed twice; merge its changes into one entry")
             seen.add(path)
             blob, mode = tree.get(path, (None, "100644"))
-            old = await gh.text(repo, path, base_commit) if blob else None
+            old = await gh.text(repo, path, base_commit) if blob and action != "delete" else None
             if action == "delete":
                 if old is None and not blob:
                     raise GitHubError(f"{path} does not exist")
@@ -487,7 +487,7 @@ class Toolbox:
                 new = item.get("content")
                 if new is None:
                     raise GitHubError(f"content is required to write {path}")
-            if new == old:
+            if new == old and action != "delete":
                 continue
             files.append({"path": path, "old": old or "", "new": new, "blob": blob, "mode": mode})
         if not files:
@@ -530,32 +530,38 @@ def describe(change, language="ru"):
     return text, "".join(diff)
 
 
-async def apply_change(http, store, change):
+async def apply_change(http, store, change, checkpoint=None):
     """Commit a confirmed change in one commit; return (commit url, pull request url or None)."""
     github = store.get(change["user_id"], "github")
     if not github:
         raise GitHubError("GitHub is not connected anymore")
     gh = GitHub(http, github[0]["token"])
     repo, branch = change["repo"], change["branch"]
-    head = await gh.branch_sha(repo, branch)
-    if head is None:
-        await gh.call("POST", f"/repos/{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": change["base_commit"]})
-        head = change["base_commit"]
-    tree_sha, tree, _ = await gh.tree(repo, head)
-    if head != change["base_commit"]:
+    if change.get("applied_commit"):
+        commit = change["applied_commit"]
+    else:
+        head = await gh.branch_sha(repo, branch)
+        if head is None:
+            await gh.call("POST", f"/repos/{repo}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": change["base_commit"]})
+            head = change["base_commit"]
+        tree_sha, tree, _ = await gh.tree(repo, head)
+        if head != change["base_commit"]:
+            for f in change["files"]:
+                if tree.get(f["path"], (None,))[0] != f["blob"]:
+                    raise GitHubError(f"{f['path']} changed after the proposal; ask again")
+        entries = []
         for f in change["files"]:
-            if tree.get(f["path"], (None,))[0] != f["blob"]:
-                raise GitHubError(f"{f['path']} changed after the proposal; ask again")
-    entries = []
-    for f in change["files"]:
-        if f["new"] is None:
-            if f["path"] in tree:
-                entries.append({"path": f["path"], "mode": tree[f["path"]][1], "type": "blob", "sha": None})
-        else:
-            entries.append({"path": f["path"], "mode": tree.get(f["path"], (None, f["mode"]))[1], "type": "blob", "content": f["new"]})
-    new_tree = await gh.call("POST", f"/repos/{repo}/git/trees", json={"base_tree": tree_sha, "tree": entries})
-    commit = await gh.call("POST", f"/repos/{repo}/git/commits", json={"message": change["message"], "tree": new_tree["sha"], "parents": [head]})
-    await gh.call("PATCH", f"/repos/{repo}/git/refs/heads/{quote(branch)}", json={"sha": commit["sha"]})
+            if f["new"] is None:
+                if f["path"] in tree:
+                    entries.append({"path": f["path"], "mode": tree[f["path"]][1], "type": "blob", "sha": None})
+            else:
+                entries.append({"path": f["path"], "mode": tree.get(f["path"], (None, f["mode"]))[1], "type": "blob", "content": f["new"]})
+        new_tree = await gh.call("POST", f"/repos/{repo}/git/trees", json={"base_tree": tree_sha, "tree": entries})
+        commit = await gh.call("POST", f"/repos/{repo}/git/commits", json={"message": change["message"], "tree": new_tree["sha"], "parents": [head]})
+        await gh.call("PATCH", f"/repos/{repo}/git/refs/heads/{quote(branch)}", json={"sha": commit["sha"]})
+        change["applied_commit"] = {"sha": commit["sha"], "html_url": commit["html_url"]}
+        if checkpoint:
+            checkpoint(change)
     pull = None
     if change["pull_request"]:
         title = change["message"].splitlines()[0][:120]

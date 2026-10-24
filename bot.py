@@ -55,6 +55,8 @@ import workbench
 import workbench_ui
 import inline_ai
 import reply_context
+import release_features
+import release_notices
 import daily
 import daily_ui
 import chatserial
@@ -1299,8 +1301,12 @@ async def chat_completion(data, model_id, client, **options):
     waits = list(RATE_RETRIES)
     while True:
         try:
-            return await client.chat.completions.create(**options)
+            started = __import__("time").monotonic()
+            response = await client.chat.completions.create(**options)
+            __import__("release_features").record(data,model_id,started)
+            return response
         except RateLimitError as exc:
+            __import__("release_features").record(data,model_id,started,type(exc).__name__)
             if not waits or OUT_OF_CREDITS.search(str(exc)):
                 raise
             header = (getattr(getattr(exc, "response", None), "headers", None) or {}).get("retry-after")
@@ -1312,6 +1318,7 @@ async def chat_completion(data, model_id, client, **options):
             LOG.warning("%s is overloaded (429); retrying in %.0f s", model_id, delay)
             await asyncio.sleep(delay)
         except BadRequestError as exc:
+            __import__("release_features").record(data,model_id,started,type(exc).__name__)
             if "reasoning_effort" not in options or not re.search(r"reason|effort|thinking", str(exc), re.I):
                 raise
             if options["reasoning_effort"] == "minimal":
@@ -1321,6 +1328,9 @@ async def chat_completion(data, model_id, client, **options):
                 data.setdefault("no_effort", set()).add(model_id)
                 options.pop("reasoning_effort")
             LOG.info("Adjusted effort compatibility for %s", model_id)
+        except Exception as exc:
+            __import__("release_features").record(data,model_id,started,type(exc).__name__)
+            raise
 
 
 async def chat_stream(data, model_id, client, *, retries=0, on_retry=None, **options):
@@ -5712,6 +5722,9 @@ async def post_init(app):
             await app.bot.set_chat_menu_button(menu_button=MenuButtonWebApp("Secret AI", WebAppInfo(app.bot_data["public_url"] + "/app")))
     except TelegramError:
         LOG.warning("Could not register the command menu")
+    # Start only after initialization has succeeded; cancellation is handled with the other workers.
+    app.bot_data["release_notice_task"] = asyncio.create_task(
+        release_notices.Worker(app, is_test_bot=hosting.is_test_bot, test_mode=test_mode).run())
 
 
 async def shutdown(app):
@@ -5962,7 +5975,13 @@ class Bridge:
             coro.close()
             raise RuntimeError("bot is not running yet")
         future = asyncio.run_coroutine_threadsafe(coro, loop)
-        return future.result(timeout=15) if wait else None
+        if not wait:
+            return None
+        try:
+            return future.result(timeout=15)
+        except TimeoutError:
+            future.cancel()
+            raise
 
     def notify(self, user_id, text):
         self._run(self.app.bot.send_message(user_id, text), wait=False)
@@ -5972,7 +5991,21 @@ class Bridge:
         if not loop:
             coro.close()
             raise RuntimeError("bot is not running yet")
-        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=seconds)
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        try:
+            return future.result(timeout=seconds)
+        except TimeoutError:
+            future.cancel()
+            raise
+
+    def features(self, user_id, action, payload):
+        async def perform():
+            lock = self.app.bot_data["locks"][user_id]
+            if lock.locked():
+                raise RuntimeError("busy")
+            async with lock:
+                return await release_features.dispatch(self.app,user_id,action,payload,quick_answer)
+        return self._run_long(perform(),180)
 
     def live_turn(self, tg_user, audio, image=None, mode=None):
         return self._run_long(live_turn(self.app, tg_user, audio, image, mode), 150)
@@ -6160,6 +6193,7 @@ class Bridge:
             task = self.app.bot_data["codex"].get(task_id, user_id)
             job = self.app.bot_data["codex_jobs"].get(task_id)
             if task and job:
+                self.app.bot_data["codex"].update(task_id,stop_requested=True)
                 job.cancel()
             return bool(task and job)
         return self._run(stop())
@@ -6229,12 +6263,17 @@ async def run_codex(app, task_id, language, charged=0):
     data, store = app.bot_data, app.bot_data["codex"]
     task = store.get(task_id)
     user_id = task["user_id"]
+    charged = charged or task.get("charged", 0)
     ru = language == "ru"
     branch = task.get("branch") or f"codex/{codex.slug(task['prompt'])}-{task_id[:4]}"
     try:  # everything, the GitHub setup included: a failure always ends the task and gives the credits back
         context = SimpleNamespace(bot_data=data, bot=app.bot, application=app)
         live = codex.TaskLive(store, task_id, language)
         earlier = [t for t in store.thread(task["thread"], user_id) if t["id"] != task_id and t["created"] <= task["created"]]
+        continuation = ([{"role":"assistant","content":task["summary"][:6000] or "Task interrupted; inspect the saved files."},
+                         {"role":"user","content":"Continue the interrupted task. Existing project files are preserved; inspect them before editing. "
+                          "For a repository inspect the current branch and prepare a complete proposal again."}]
+                        if task.get("resumed") or task.get("summary") else [])
         can_run = await asyncio.to_thread(codex_can_run, data, user_id)
         if task["mode"] == "repo":
             await data["github_apps"].fresh_token(data["http"], user_id)
@@ -6247,11 +6286,14 @@ async def run_codex(app, task_id, language, charged=0):
             api_timeout=180, stream_retries=1,
             instructions=codex.instructions(task["mode"], task["repo"], branch, can_run, language),
             input=codex.history(earlier) + [{"role": "user", "content": (f"Repository: {task['repo']}\n\n" if task["repo"] and not earlier
-                                                                          else "") + task["prompt"]}])
-    except asyncio.CancelledError:  # stopped by the user: nothing was delivered, so the credits come back
-        if charged:
+                                                                          else "") + task["prompt"]}] + continuation)
+    except asyncio.CancelledError:
+        latest = store.get(task_id)
+        explicit = bool(latest and latest.get("stop_requested"))
+        if explicit and charged:
             data["memory"].gen_refund(user_id, "credits", charged)
-        store.update(task_id, status=codex.STATUS_STOPPED, step="")
+        store.update(task_id, status=codex.STATUS_STOPPED if explicit else codex.STATUS_PAUSED,
+                     charged=0 if explicit else charged, step="")
         raise
     except Exception as exc:
         LOG.warning("Codex task failed: %s %s", type(exc).__name__, str(exc)[:200])
@@ -6262,7 +6304,7 @@ async def run_codex(app, task_id, language, charged=0):
                      "The model did not respond in time. Retry the request or choose another model.")
         else:
             error = f"{type(exc).__name__}: {str(exc)[:300]}"
-        store.update(task_id, status=codex.STATUS_FAILED, step="", error=error)
+        store.update(task_id, status=codex.STATUS_FAILED, step="", error=error, charged=0)
         return
     finally:
         data["codex_jobs"].pop(task_id, None)
@@ -6271,7 +6313,7 @@ async def run_codex(app, task_id, language, charged=0):
         change = data["pending"].pop(tools.proposals[-1], None)
         if change and change["branch"] == change["default"]:  # Codex never writes to the main branch: a branch and a PR
             change.update(branch=branch, branch_exists=False, pull_request=True)
-    store.update(task_id, status=codex.STATUS_DONE, step="", summary=(answer or "").strip()[:8000], change=change)
+    store.update(task_id, status=codex.STATUS_DONE, step="", summary=(answer or "").strip()[:8000], change=change, charged=0)
     try:
         title = task["prompt"][:60] + ("…" if len(task["prompt"]) > 60 else "")
         await app.bot.send_message(user_id, (f"✅ Codex: «{title}» готово. Открой Secret AI → Codex." if ru else
@@ -6315,6 +6357,7 @@ def codex_start(app, tg_user, mode, prompt, repo, thread=None):
         if not data["memory"].gen_charge(user_id, "chat", charged):
             return None, "credits"
     task = store.create(user_id, mode, prompt, repo if mode == "repo" else "", model, thread=thread, files=files, branch=branch)
+    store.update(task["id"], charged=charged)
     if mode == "repo" and not branch:
         store.update(task["id"], branch=f"codex/{codex.slug(prompt)}-{task['id'][:4]}")
     job = asyncio.create_task(run_codex(app, task["id"], language, charged))
@@ -6323,15 +6366,28 @@ def codex_start(app, tg_user, mode, prompt, repo, thread=None):
 
 
 async def codex_apply(app, user_id, task_id):
-    """Commit a repository task's change on its branch and open the pull request."""
+    """Serialize application and retain committed results if opening a PR fails."""
     data, store = app.bot_data, app.bot_data["codex"]
-    task = store.get(task_id, user_id)
-    if not task or not task.get("change") or task["status"] != codex.STATUS_DONE:
-        raise GitHubError("nothing to apply")
-    await data["github_apps"].fresh_token(data["http"], user_id)
-    commit, pull = await apply_change(data["http"], data["connections"], task["change"])
-    store.update(task_id, status=codex.STATUS_APPLIED, result={"commit": commit, "pull": pull})
-    return store.get(task_id)
+    lock = data.setdefault("codex_apply_locks", {}).setdefault(task_id, asyncio.Lock())
+    async with lock:
+        task = store.get(task_id, user_id)
+        if task and task["status"] == codex.STATUS_APPLIED:
+            return task
+        if not task or not task.get("change") or task["status"] not in (codex.STATUS_DONE, "applying"):
+            raise GitHubError("nothing to apply")
+        store.update(task_id, status="applying", error="")
+        change = task["change"]
+        def checkpoint(updated):
+            store.update(task_id, change=updated)
+        try:
+            await data["github_apps"].fresh_token(data["http"], user_id)
+            commit, pull = await apply_change(data["http"], data["connections"], change, checkpoint=checkpoint)
+        except Exception:
+            store.update(task_id, status=codex.STATUS_DONE,
+                         error="Не удалось завершить применение. Проверь результат и повтори; сохранённый коммит не дублируется.")
+            raise
+        store.update(task_id, status=codex.STATUS_APPLIED, result={"commit": commit, "pull": pull}, error="")
+        return store.get(task_id)
 
 
 async def codex_repos(app, user_id):
@@ -6392,7 +6448,7 @@ def main():
         try:
             snapshots.restore()
         except Exception as exc:  # better to start with an empty memory than not at all
-            LOG.error("Could not restore the database from Postgres: %s %s", type(exc).__name__, str(exc)[:200])
+            raise SystemExit("Database restore failed; refusing to overwrite the saved database. Retry startup.") from exc
     hosting.start_test_bot(port)  # TEST_TELEGRAM_TOKEN in .env: a test bot on the newest code runs next to this one
     tunnel = hosting.start_tunnel(port)
     if tunnel:  # the tunnel's address changes on every start: a Cloudflare Worker gives a permanent one in front of it
@@ -6463,6 +6519,9 @@ def main():
         chat_reasoning=os.environ.get("CHAT_REASONING_EFFORT", "low").strip(),
         locks=defaultdict(asyncio.Lock), last_answer={}, groups=GroupStore(database), group_spoke={},
         biz_activity=sec.Activity())
+    app.bot_data["release_notices"] = release_notices.Store(app.bot_data["memory"].db)
+    # Track real private/group chats, without changing any command or message handler.
+    app.add_handler(TypeHandler(Update, release_notices.track), group=-1)
     # Business updates first: their messages must not reach the regular chat handlers.
     app.add_handler(TypeHandler(Update, test_gate), group=-3)  # /test: only the owner gets through
     app.add_handler(TypeHandler(Update, stop_generation, block=False), group=-2)

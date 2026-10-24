@@ -318,7 +318,7 @@ class Controls:
             for j in rows:
                 t=store.task(user,j['task_id'])
                 lines.append(f"#{j['id']} · задача #{j['task_id']} {t['title'] if t else ''} · "+datetime.fromtimestamp(j['run_at'],daily.zone(p['tz'])).strftime('%d.%m %H:%M'))
-            lines.append('/remind ID_задачи через 20 минут\n/remind cancel ID_напоминания')
+            lines.append('/remind ID_задачи через 20 минут\n/remind ID_задачи каждый понедельник в 10:00\n/remind ID_задачи по будням в 18:00\n/remind cancel ID_напоминания')
             await self.send(update,'\n'.join(lines))
         elif len(args)==2 and args[0]=='cancel' and args[1].isdigit():
             if not store.cancel(user,int(args[1])):
@@ -488,6 +488,9 @@ class Controls:
                 store.configure(user,chat,active_task=None)
                 self.material_only.discard(user)
                 await self.send(update,'Вышел из задачи. /life off — обычный чат.')
+            elif action in ('snooze15','snooze60','tomorrow'):
+                store.snooze(user,item,{'snooze15':900,'snooze60':3600,'tomorrow':86400}[action])
+                await self.send(update,'Напоминание перенесено.')
             elif action=='source':
                 await self.source(update,context,item)
             elif action=='drop_source':
@@ -544,7 +547,9 @@ class Controls:
                         urls=re.findall(r'https?://[^\s<>"\]]+', '\n'.join(s['text'] for s in store.materials(user,t['id'])))
                         if urls:
                             body+='\n\nМатериалы:\n'+'\n'.join(urls[:3])[:700]
-                    markup=self.buttons(user,[[('Продолжить задачу','open',t['id']),('Готово','done',t['id'])]])
+                    markup=self.buttons(user,[[('Продолжить задачу','open',t['id']),('Готово','done',t['id'])],
+                                              [('На 15 минут','snooze15',job['id']),('На час','snooze60',job['id'])],
+                                              [('Перенести на 24 часа','tomorrow',job['id'])]])
                 else:
                     body=store.plan(user,'review' if job['kind']=='evening' else 'plan')
                     markup=self.buttons(user,[[('Мои задачи','tasks',0),('Подготовить завтра','prepare',0)]])

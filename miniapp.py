@@ -26,7 +26,7 @@ LOGO = WEBAPP / "logo.svg"
 SITE = WEBAPP / "site.html"
 MASCOT = Path(__file__).with_name("assets") / "mascot.png"
 MAX_BODY = 64 * 1024
-MAX_UPLOAD = 16 * 1024 * 1024  # /api/edit: up to 4 photos (resized in the browser)
+MAX_UPLOAD = 28 * 1024 * 1024  # /api/edit: up to 4 photos (resized in the browser)
 MAX_PROMPT = 1500
 
 
@@ -106,7 +106,7 @@ def make_handler(config):
 
         def _json(self, limit=MAX_BODY):
             length = int(self.headers.get("Content-Length") or 0)
-            if length > limit:
+            if length < 0 or length > limit:
                 raise ValueError("too large")
             data = json.loads(self.rfile.read(length) or b"{}")
             if not isinstance(data, dict):
@@ -167,7 +167,7 @@ def make_handler(config):
                     self._send(200, image, "image/jpeg", cache="public, max-age=86400")
                 else:
                     self._send(404, b"", "text/plain")
-            elif url.path in ("/play-core.js", "/play-ui.js", "/play.css"):
+            elif url.path in ("/play-core.js", "/play-ui.js", "/play.css", "/updates.js"):
                 content_type = "text/css" if url.path.endswith(".css") else "application/javascript"
                 self._send(200, (WEBAPP / url.path[1:]).read_bytes(), content_type + "; charset=utf-8", cache="no-cache")
             elif url.path == "/logo.svg":
@@ -211,7 +211,7 @@ def make_handler(config):
             if not user:
                 return
             try:
-                data = self._json(MAX_UPLOAD if path in ("/api/edit", "/api/live/turn") else MAX_BODY)
+                data = self._json(MAX_UPLOAD if path in ("/api/edit", "/api/live/turn", "/api/features/upload") else MAX_BODY)
             except ValueError:
                 self._send(400, {"error": "bad request"})
                 return
@@ -261,11 +261,12 @@ def make_handler(config):
                 self._send(200, {"ok": bridge.codex_stop(uid, task_id)})
             elif action == "apply":
                 try:
-                    task = bridge.codex_apply(uid, task_id)
+                    result = bridge.features(uid, "apply", {"id": task_id})
+                    self._send(200, result)
+                    return
                 except GitHubError as exc:
                     self._send(409, {"error": "github", "detail": str(exc)[:200]})
                     return
-                self._send(200, {"task": codex.public(task)})
             elif action == "repos":
                 try:
                     self._send(200, {"repos": bridge.codex_repos(uid)})
@@ -287,7 +288,17 @@ def make_handler(config):
         def _route(self, path, user, data):
             store, uid, bridge = config["store"], user["id"], config["bridge"]
             language = "ru" if (user.get("language_code") or "ru").startswith("ru") else "en"
-            if path in ("/api/day/state", "/api/day/task", "/api/day/status"):
+            if path.startswith("/api/features/"):
+                try:
+                    result = bridge.features(uid,path[len("/api/features/"):],data)
+                except PermissionError:
+                    self._send(403, {"error":"forbidden"})
+                    return
+                except (ValueError, TypeError) as exc:
+                    self._send(400, {"error":"feature", "detail":str(exc)[:300]})
+                    return
+                self._send(200,result)
+            elif path in ("/api/day/state", "/api/day/task", "/api/day/status"):
                 try:
                     if path == "/api/day/state":
                         result = bridge.day_state(uid)

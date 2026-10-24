@@ -266,7 +266,11 @@ async def self_update(before_restart):
                                 (installed.stderr or installed.stdout or "").strip()[-300:])
                     skipped[latest] = time.monotonic()
                     continue
-            await asyncio.to_thread(_git, "reset", "-q", "--hard", f"origin/{branch}")
+            applied = await asyncio.to_thread(_git, "reset", "-q", "--hard", latest)
+            if applied.returncode:
+                LOG.warning("Update reset failed; no restart: %s", (applied.stderr or "")[-300:])
+                skipped[latest] = time.monotonic()
+                continue
             # The new code must at least compile; otherwise go back to the version that was running.
             broken = await asyncio.to_thread(_compile_errors)
             if broken:
