@@ -127,11 +127,14 @@ class Worker:
         self.app, self.is_test_bot, self.test_mode, self.rate = app, is_test_bot, test_mode, rate
         self.release = None
         self.prepared = False
+        self.needs_checkpoint = False
 
     async def checkpoint(self):
+        self.needs_checkpoint = True
         snapshots = self.app.bot_data.get("snapshots")
         if snapshots:
             await asyncio.to_thread(snapshots.save)
+        self.needs_checkpoint = False
 
     async def tick(self):
         from telegram.error import BadRequest, ChatMigrated, Forbidden, RetryAfter, TelegramError
@@ -147,6 +150,8 @@ class Worker:
             # Save the batch before delivery; don't send if its checkpoint failed.
             await self.checkpoint()
             self.prepared = True
+        elif self.needs_checkpoint:
+            await self.checkpoint()
         for _ in range(20):
             if self.is_test_bot() or self.test_mode(data):
                 break

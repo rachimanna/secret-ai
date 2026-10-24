@@ -208,6 +208,18 @@ class WorkerTest(unittest.IsolatedAsyncioTestCase):
         await self.worker.tick()
         self.assertEqual(self.app.bot.send_message.await_count,3)
 
+    async def test_failed_delivery_checkpoint_blocks_further_sends(self):
+        snapshots = NS(save=Mock(side_effect=[None,RuntimeError("offline"),RuntimeError("offline"),None,None,None]))
+        self.app.bot_data["snapshots"] = snapshots
+        with self.assertRaises(RuntimeError):
+            await self.worker.tick()
+        self.assertEqual(self.app.bot.send_message.await_count,1)
+        with self.assertRaises(RuntimeError):
+            await self.worker.tick()
+        self.assertEqual(self.app.bot.send_message.await_count,1)
+        await self.worker.tick()
+        self.assertEqual(self.app.bot.send_message.await_count,3)
+
     async def test_cancellation_retains_lease_for_recovery(self):
         self.app.bot.send_message.side_effect = asyncio.CancelledError
         with self.assertRaises(asyncio.CancelledError):
