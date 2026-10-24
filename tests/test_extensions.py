@@ -221,10 +221,10 @@ class HTTPTest(unittest.TestCase):
         cls.client.close();cls.server.shutdown();cls.server.server_close();cls.thread.join();cls.store.db.close();cls.folder.cleanup()
 
     def request(self,action,data=None,uid=1):
-        return self.client.post('/api/extensions/'+action,json=data or {},headers={'X-Telegram-Init-Data':init_data(uid)})
+        return self.client.post('/api/extensions/'+action,json=data,headers={'X-Telegram-Init-Data':init_data(uid)})
 
     def test_authentication_and_ownership_on_real_http_routes(self):
-        self.assertEqual(self.client.post('/api/extensions/state',json={}).status_code,401)
+        self.assertEqual(self.client.post('/api/extensions/state').status_code,401)
         self.assertEqual(self.request('state',uid=3).status_code,403)
         self.assertEqual(self.request('install',{'content':MARKDOWN,'confirm':True,'user_id':2}).status_code,200)
         self.assertEqual(self.request('state',uid=2).json()['installed'],[])
