@@ -35,11 +35,12 @@ button:disabled{opacity:.5;cursor:wait}button[type=submit]{width:100%;margin-top
 <form id="prompt" hidden><label for="answer" id="question"></label><div class="line"><input id="answer" autocomplete="off" spellcheck="false"><button type="button" data-paste="answer">Вставить</button></div><button type="submit">Подтвердить</button></form>
 <p id="status" role="status" aria-live="polite"></p><p class="hint">Не закрывай чёрное окно до завершения входа. Не публикуй снимок экрана с заполненными полями. После входа будет сохранён только зашифрованный файл сессии.</p></main>
 <script>
-const token=location.hash.slice(1);history.replaceState(null,'',location.pathname);
+let token=location.hash.slice(1);
+try{token=token||sessionStorage.getItem('guard-access')||'';if(token)sessionStorage.setItem('guard-access',token);history.replaceState(null,'',location.pathname);}catch{}
 const $=id=>document.getElementById(id);let phase='setup',sending=false,hasError=false;
 const status=text=>{$('status').textContent=text;$('status').className='';};
 function showError(message,field){hasError=true;status(message);$('status').className='error';if(field&&$(field)){$(field).setAttribute('aria-invalid','true');$(field).focus();}}
-async function api(action,data={}){const r=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Guard-Token':token},body:JSON.stringify(data)});const result=await r.json();if(!r.ok){const error=Error(result.error||'Не удалось выполнить запрос');error.field=result.field;throw error;}return result;}
+async function api(action,data={}){if(!token)throw Error('Эта вкладка открыта без ключа связи. Закрой её и запусти файл помощника заново.');let r;try{r=await fetch('/api/'+action,{method:'POST',headers:{'Content-Type':'application/json','X-Guard-Token':token},body:JSON.stringify(data)});}catch{throw Error('Нет связи с локальной программой. Не закрывай чёрное окно запуска. Если оно уже закрыто, закрой эту вкладку и запусти помощник заново.');}const result=await r.json();if(!r.ok){const error=Error(result.error||'Не удалось выполнить запрос');error.field=result.field;throw error;}return result;}
 document.querySelectorAll('input').forEach(input=>input.addEventListener('input',()=>{input.removeAttribute('aria-invalid');hasError=false;}));
 document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{try{const field=$(b.dataset.paste);field.value=(await navigator.clipboard.readText()).trim();field.dispatchEvent(new Event('input'));field.focus();}catch{status('Нажми правой кнопкой мыши внутри нужного поля и выбери «Вставить».');}});
 $('api-hash').oninput=()=>{$('hash-count').textContent='Введено символов: '+$('api-hash').value.trim().length+' из 32';};
@@ -153,12 +154,18 @@ def make_handler(wizard):
             else:self.send(404,{'error':'Не найдено'})
 
         def do_POST(self):
+            try:
+                size=int(self.headers.get('Content-Length') or 0)
+                if not 0<=size<=8192:raise ValueError()
+            except ValueError:
+                self.send(400,{'error':'Некорректный размер запроса.'});return
+            # Consume the small body before replying, including on denied access. Closing a socket
+            # with unread bytes can reset it on Windows and hide the actual 403 from fetch().
+            raw=self.rfile.read(size)
             if not hmac.compare_digest(self.headers.get('X-Guard-Token',''),wizard.token):
                 self.send(403,{'error':'Закрой эту вкладку и запусти программу заново.'});return
             try:
-                size=int(self.headers.get('Content-Length') or 0)
-                if not 0<=size<=8192:raise ValueError('Слишком большой запрос.')
-                data=json.loads(self.rfile.read(size) or b'{}')
+                data=json.loads(raw or b'{}')
                 if not isinstance(data,dict):raise ValueError('Некорректный запрос.')
                 wizard.last_seen=time.monotonic()
                 if self.path=='/api/submit':wizard.submit(data)

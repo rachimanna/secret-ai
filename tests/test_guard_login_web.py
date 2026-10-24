@@ -90,7 +90,9 @@ class WebLoginTest(unittest.TestCase):
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             with httpx.Client(base_url=f'http://127.0.0.1:{server.server_port}') as client:
-                self.assertEqual(client.post('/api/state').status_code,403)
+                rejected=client.post('/api/state',json={'unused':'fixture body'})
+                self.assertEqual(rejected.status_code,403)
+                self.assertIn('запусти программу',rejected.json()['error'])
                 result=client.post('/api/state',json={},headers={'X-Guard-Token':self.wizard.token})
                 self.assertEqual(result.status_code,200)
                 self.assertEqual(set(result.json()),{'phase','message'})

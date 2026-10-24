@@ -7,7 +7,9 @@ const ready=new Promise((resolve,reject)=>{let raw='';const timeout=setTimeout((
  page.on('pageerror',e=>errors.push(e.message));
  // Fake clipboard: never read or overwrite the user's actual clipboard.
  await page.addInitScript(()=>Object.defineProperty(navigator,'clipboard',{value:{readText:async()=> 'a'.repeat(32)}}));
- await page.goto(url);await page.locator('#api-id').fill('123');await page.locator('[data-paste="api-hash"]').click();
+ await page.goto(url);assert(!page.url().includes('#'),'capability removed from address bar');
+ await page.reload(); // Reload must retain only the connection capability, not account credentials.
+ await page.locator('#api-id').fill('123');await page.locator('[data-paste="api-hash"]').click();
  assert.equal(await page.locator('#api-hash').inputValue(),'a'.repeat(32));assert.notEqual(await page.locator('#api-hash').getAttribute('type'),'password');
  await page.locator('#phone').fill('79991234567');await page.locator('#secret').fill('fixture-key');
  await page.locator('#setup button[type=submit]').click();await page.waitForFunction(()=>document.getElementById('status').textContent.includes('Номер телефона:'));
