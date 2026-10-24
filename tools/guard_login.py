@@ -18,7 +18,7 @@ async def login(output):
     if Path(output).exists():
         raise ValueError("Файл уже существует. Выберите другое имя через --output.")
     api_id = int(input("Ваш api_id: ").strip())
-    api_hash = getpass.getpass("Ваш api_hash (ввод скрыт): ").strip()
+    api_hash = input("Ваш api_hash (текст виден): ").strip()
     if api_id <= 0 or not re.fullmatch(r"[a-fA-F0-9]{32}",api_hash):
         raise ValueError("Проверьте api_id и api_hash.")
     print("Нужен тот же ENCRYPTION_KEY, который указан в .env бота на сервере.")

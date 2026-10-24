@@ -47,3 +47,4 @@ jobs:
       - run: node tests/updates_smoke.cjs
         if: always()
       - run: node tests/extensions_smoke.cjs
+      - run: node tests/guard_login_smoke.cjs
