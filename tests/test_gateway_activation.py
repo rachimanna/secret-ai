@@ -6,9 +6,9 @@ import bot
 
 
 class GatewayActivationTest(unittest.TestCase):
-    def test_oxion_key_enables_gateway_by_default(self):
+    def test_retained_oxion_key_alone_does_not_enable_paused_trial(self):
         with patch.dict(os.environ,{"OXIONAI_API_KEY":"test-key"},clear=True):
-            self.assertTrue(bot.gateway_enabled("oxionai"))
+            self.assertFalse(bot.gateway_enabled("oxionai"))
 
     def test_switch_off_wins_over_a_configured_key(self):
         with patch.dict(os.environ,{"OXIONAI_API_KEY":"test-key","OXIONAI_ENABLED":"0"},clear=True):

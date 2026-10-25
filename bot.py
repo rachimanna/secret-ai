@@ -1233,9 +1233,9 @@ FAST_PROVIDERS = {"groq": "https://api.groq.com/openai/v1", "cerebras": "https:/
 
 
 def gateway_enabled(name):
-    """Oxion AI is active when its key is present, unless explicitly disabled with OXIONAI_ENABLED=0."""
+    """The Oxion trial is paused by default, even if its key remains on the server."""
     return bool(os.environ.get(f"{name.upper()}_API_KEY", "").strip()) and (
-        name != "oxionai" or os.environ.get("OXIONAI_ENABLED", "1").strip() != "0")
+        name != "oxionai" or os.environ.get("OXIONAI_ENABLED", "0").strip() == "1")
 
 FAST_PICK = (r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
 OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-6"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
@@ -1697,9 +1697,9 @@ async def refresh_models_loop(app):
             LOG.warning("Model recovery failed: %s", type(exc).__name__)
 
 
-# Grok 4.7 uses the exact AnyModel ID observed in the owner's catalog.
-# Keep previously supported Fast IDs for gateways that explicitly list them.
+# The owner's catalog: Claude Opus 4.6 (default), backed up by Grok 4.7.
 MODEL_CATALOG = [
+    ("Claude Opus 4.6", r"(?:^|:)cc/claude-opus-4-6$|(?:^|[/:])(?:claude[-._ ])?opus[-._ ]4[-._ ]6(?!\d).*$"),
     ("Grok 4.7", r"(?:^|:)xai/grok-4\.7$|(?:^|[/:])grok[-._ ]4[-._ ]7[-._ ]fast(?:[-._ ](?:non[-._ ]reasoning|reasoning))?(?::free)?$"),
 ]
 DEFAULT_PICK = MODEL_CATALOG[0][1]
