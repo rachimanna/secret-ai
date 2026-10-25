@@ -10,6 +10,7 @@ import logging
 import re
 
 from PIL import Image, ImageDraw
+from telegram import InputFile
 from telegram.error import BadRequest
 
 import quizart
@@ -99,9 +100,9 @@ class Digest:
             text = ""
         caption = text if len(text) <= 1000 else ""
         try:
-            await bot.send_photo(chat_id, card, caption=caption or None, parse_mode="HTML" if caption else None)
+            await bot.send_photo(chat_id, InputFile(card, filename="digest.jpg"), caption=caption or None, parse_mode="HTML" if caption else None)
         except BadRequest:  # the model's HTML didn't parse: plain text; don't duplicate timed-out uploads
-            await bot.send_photo(chat_id, card, caption=re.sub(r"<[^>]+>", "", caption)[:1000] or None)
+            await bot.send_photo(chat_id, InputFile(card, filename="digest.jpg"), caption=re.sub(r"<[^>]+>", "", caption)[:1000] or None)
         if text and not caption:
             try:
                 await bot.send_message(chat_id, text[:4000], parse_mode="HTML")

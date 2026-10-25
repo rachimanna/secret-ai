@@ -307,7 +307,9 @@ if __name__ == '__main__':
     try:
         # Parsing happens in a killable child with no inherited API credentials.
         import os
+        keep = {k: v for k, v in os.environ.items() if k.upper() in {"SYSTEMROOT", "SYSTEMDRIVE", "PATH", "PATHEXT", "TEMP", "TMP", "COMSPEC"}}
         os.environ.clear()
+        os.environ.update(keep)
         try:
             import resource
             resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))

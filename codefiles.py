@@ -56,7 +56,7 @@ def extract_files(answer):
             name = _name(info, code, taken)
             files.append((name, (code + "\n").encode("utf-8")))
             return f"📎 {name}"
-        return code  # a short snippet stays in the message
+        return match.group(0)  # a short snippet stays in the message
 
     text = FENCE.sub(replace, answer)
     text = re.sub(r"\n{3,}", "\n\n", text).strip()

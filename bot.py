@@ -6637,7 +6637,7 @@ def main():
     thread.start()
     try:
         app.run_polling(allowed_updates=["message", "callback_query", "pre_checkout_query", "business_connection", "business_message",
-                                        "stopped_message_generation", "inline_query"], drop_pending_updates=False, bootstrap_retries=3)
+                                        "stopped_message_generation", "inline_query", "my_chat_member", "chat_member"], drop_pending_updates=False, bootstrap_retries=3)
     finally:
         server.shutdown()
         server.server_close()

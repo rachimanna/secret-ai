@@ -182,7 +182,7 @@ class Quiz:
             LOG.warning("Quiz banner animation failed: %s", type(exc).__name__)
             try:
                 banner = await asyncio.to_thread(quizart.banner)
-                game.lobby_message = await bot.send_photo(chat_id, banner, caption=caption, parse_mode="HTML", reply_markup=keyboard)
+                game.lobby_message = await bot.send_photo(chat_id, jpg(banner), caption=caption, parse_mode="HTML", reply_markup=keyboard)
             except Exception:
                 game.lobby_message = await bot.send_message(chat_id, caption, parse_mode="HTML", reply_markup=keyboard)
         game.task = asyncio.create_task(self._expire(game))
@@ -458,7 +458,7 @@ class Quiz:
             LOG.warning("Quiz podium animation failed: %s", type(exc).__name__)
             try:
                 image = await asyncio.to_thread(quizart.podium, rows, len(game.questions), topic)
-                await bot.send_photo(game.chat_id, image, caption=caption, parse_mode="HTML")
+                await bot.send_photo(game.chat_id, jpg(image), caption=caption, parse_mode="HTML")
             except Exception:
                 text = caption + "\n\n" + "\n".join(f"{i+1}. {esc(name[:24])}: {points}" for i, (name, points, _) in enumerate(rows))
                 await bot.send_message(game.chat_id, text, parse_mode="HTML")
@@ -469,7 +469,7 @@ class Quiz:
         if not rows:
             await bot.send_message(chat_id, f"Тут ещё никто не играл. Начать: /{START}")
             return
-        await bot.send_photo(chat_id, quizart.leaderboard(rows, title),
+        await bot.send_photo(chat_id, jpg(quizart.leaderboard(rows, title)),
                              caption=f"🏆 Рейтинг викторины за всё время · новая игра — /{START}")
 
     # ---------- questions ----------

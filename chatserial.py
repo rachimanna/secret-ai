@@ -395,7 +395,7 @@ async def make_episode(folder, plan, episode, cast, speak, image=None):
                       "-af", "adelay=150:all=1,apad", "-t", f"{seconds:.3f}",
                       "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-threads", "1",
                       "-c:a", "aac", "-ar", "44100", "-ac", "2", str(clip), timeout=120)
-        listing.append(f"file '{clip.name}'\n")
+        listing.append(f"file '{clip.resolve().as_posix()}'\n")
     (folder / "clips.txt").write_text("".join(listing), encoding="utf-8")
     await asyncio.to_thread(music, folder / "score.wav", total_seconds + 1)
     await _ffmpeg("-f", "concat", "-safe", "0", "-i", str(folder / "clips.txt"), "-i", str(folder / "score.wav"),
