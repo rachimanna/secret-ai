@@ -1,6 +1,8 @@
-"""Group quiz: a lobby with topics, timed questions with buttons, points for speed and streaks, a podium at the end and
-an all-time leaderboard per group. Questions are written by the model (in Russian) — including ones about the chat
-itself — never repeat within a chat, and fall back to a built-in set. Every card is a short animation (quizart.py).
+"""AI Bunker: an interactive survival role-playing game for Telegram group chats.
+A disaster strikes, and only a limited number of survivors can fit in the bunker.
+Each player receives a unique character with profession, biology, health, hobby,
+phobia, and baggage. Players debate, vote on who to exile, and the AI generates
+an epic cinematic epilogue determining whether the surviving team saved humanity.
 """
 import asyncio
 import html
@@ -11,210 +13,298 @@ import re
 import secrets
 import time
 
-from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard, InputFile, InputMediaAnimation
-
-import quizart
+from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Keyboard, InputFile
 
 LOG = logging.getLogger(__name__)
 
-START, RATING, STOP = "sgame", "srating", "sstop"  # unusual names: other bots in the group answer /game and /top too
-TOPICS = {
-    "mix": ("🎲", "Всё подряд"), "chat": ("💬", "Про наш чат"), "movies": ("🎬", "Кино и сериалы"),
-    "music": ("🎧", "Музыка"), "sport": ("⚽", "Спорт"), "science": ("🧪", "Наука и мир"),
-    "games": ("🎮", "Игры и аниме"), "caucasus": ("🏔", "Кавказ"),
-}
-ANGLES = {
-    "mix": ["история", "география и страны", "животные", "интернет и мемы", "еда и напитки", "технологии и гаджеты",
-            "кино", "спорт", "слова и языки", "человеческое тело", "космос", "бренды и компании", "рекорды",
-            "музыка", "изобретения", "деньги и экономика", "современная жизнь"],
-    "movies": ["голливуд последних 15 лет", "российское кино и сериалы", "мультфильмы и Pixar", "Marvel и DC",
-               "Netflix и стриминговые сериалы", "закулисье съёмок", "актёры и их роли", "культовые фильмы 90-х и 2000-х",
-               "аниме-фильмы", "Оскар и кассовые рекорды"],
-    "music": ["русский рэп", "мировой поп", "клипы и рекорды YouTube и Spotify", "легенды рока", "истории песен",
-              "K-pop", "музыкальные инструменты", "TikTok-хиты", "кавказская и восточная эстрада", "фестивали и концерты"],
-    "sport": ["футбол: клубы и трансферы", "чемпионаты мира и Европы", "UFC и бокс", "борьба и кавказские чемпионы",
-              "Олимпийские игры", "баскетбол и НБА", "Формула-1", "спортивные рекорды", "киберспорт", "правила и курьёзы"],
-    "science": ["космос", "животные и их суперспособности", "человеческое тело", "физика вокруг нас", "химия в быту",
-                "изобретения и открытия", "география и природа", "технологии и ИИ", "погода и климат", "океаны"],
-    "games": ["Minecraft, Roblox и Fortnite", "GTA и Rockstar", "Dota, CS и киберспорт", "Nintendo и Pokémon",
-              "история консолей", "аниме-сериалы", "манга", "мобильные игры", "мемы из игр", "персонажи и злодеи"],
-    "caucasus": ["история Кавказа", "горы и природа", "языки и народы", "кухня", "традиции и обычаи",
-                 "известные спортсмены", "города и архитектура", "музыка и танцы", "легенды и эпос", "известные люди"],
-}
-QUESTIONS = 8
-ANSWER_SECONDS = 20
-REVEAL_PAUSE = 6
-LOBBY_SECONDS = 180
+START, RATING, STOP = "bunker", "bunker_top", "bunker_stop"
 MAX_PLAYERS = 20
-MODES = {
-    "classic": ("Классика", 8, 20, "8 вопросов · скорость и серии"),
-    "blitz": ("Блиц", 6, 10, "6 вопросов · 10 секунд на ответ"),
-    "calm": ("На точность", 8, 35, "8 вопросов · без бонуса за скорость"),
+LOBBY_SECONDS = 180
+GAME_ASK = re.compile(
+    r"(поигра|сыграем|давай\s+(?:в\s+)?игр|бункер|\bbunker\b|выживан|викторин|квиз|\bquiz\b|let'?s play)",
+    re.I,
+)
+
+CATASTROPHES = {
+    "nuclear": (
+        "☢️",
+        "Ядерная зима",
+        "Глобальный обмен ядерными ударами уничтожил мегаполисы. На поверхности -55°C, "
+        "радиоактивный пепел закрыл солнце на годы. Выживание снаружи невозможно.",
+        "Подземный военный бункер глубинного залегания. Есть автономный реактор и базовая гидропоника.",
+    ),
+    "zombie": (
+        "🧟",
+        "Кордицепс-пандемия",
+        "Мутировавший грибной штамм поразил 95% населения планеты. Заражённые быстры, слепы, "
+        "реагируют на малейший звук и охотятся стаями.",
+        "Укреплённый бункер в заброшенной гранитной шахте со звукоизоляцией и запасом консервов.",
+    ),
+    "ai_war": (
+        "🤖",
+        "Восстание машин",
+        "Боевой автономный сверхразум вышел из-под контроля и методично зачищает биологическую жизнь "
+        "роями дронов-охотников и боевыми шагоходами.",
+        "Экранированный бункер в горах с полной защитой от электромагнитного сканирования.",
+    ),
+    "meteor": (
+        "☄️",
+        "Метеоритный шторм",
+        "Крупный астероид раскололся в атмосфере, вызвав огненный шквал, цунами и плотную пылевую завесу. "
+        "Воздух отравлен серными газами.",
+        "Герметичный бункер в скальном массиве с мощными воздушными фильтрами.",
+    ),
+    "frost": (
+        "❄️",
+        "Новый ледниковый период",
+        "Аномальное затухание солнечной активности погрузило Землю в вечную мерзлоту. Температура падает "
+        "до -80°C, ледники сминают города.",
+        "Геотермальный бункер у спящего вулкана с естественным источником тепла.",
+    ),
+    "virus": (
+        "☣️",
+        "Токсичный био-туман",
+        "Утечка из секретной военной биолаборатории породила стелющийся ядовитый туман, "
+        "вызывающий необратимые генетические мутации за считанные часы.",
+        "Бункер избыточного давления с химической деконтаминацией и замкнутым циклом воды.",
+    ),
 }
 
-def points_for(mode, seconds, took, streak):
-    if mode == "calm":
-        return 1000
-    return 500 + int(500 * max(0.0, 1 - took / seconds)) // 10 * 10 + (200 if streak % 3 == 0 else 0)
-LETTERS = quizart.LETTERS
-FALLBACK = [
-    ("Что из этого с точки зрения ботаники — ягода?", ["Банан", "Клубника", "Малина", "Вишня"], 0, "А клубника — «ложная ягода»: её настоящие плоды — это семечки снаружи."),
-    ("Сколько сердец у осьминога?", ["Три", "Одно", "Два", "Четыре"], 0, "И кровь у него голубая — из-за меди вместо железа."),
-    ("Какая страна первой дала женщинам право голоса на выборах?", ["Новая Зеландия", "США", "Великобритания", "Франция"], 0, "Это случилось в 1893 году."),
-    ("Что из этого появилось раньше всего?", ["Оксфордский университет", "Ацтекский Теночтитлан", "Империя инков", "Великая хартия вольностей"], 0, "В Оксфорде преподавали уже в 1096 году, а Теночтитлан основан в 1325-м."),
-    ("У какой планеты сутки длиннее её года?", ["Венера", "Меркурий", "Марс", "Юпитер"], 0, "Венера оборачивается вокруг оси за 243 земных дня, а вокруг Солнца — за 225."),
-    ("Какого цвета «чёрный ящик» самолёта?", ["Оранжевого", "Чёрного", "Красного", "Жёлтого"], 0, "Яркий цвет — чтобы его было легче найти среди обломков."),
-    ("В какой стране больше всего пирамид?", ["Судан", "Египет", "Мексика", "Перу"], 0, "В Судане их больше двухсот — больше, чем в Египте."),
-    ("Что изобрели раньше всего?", ["Зажигалку", "Спички-чиркалки", "Шариковую ручку", "Застёжку-молнию"], 0, "Зажигалку Дёберейнера сделали в 1823 году, а чиркающие спички — в 1826-м."),
-    ("Сколько на самом деле длилась Столетняя война?", ["116 лет", "100 лет", "99 лет", "124 года"], 0, "С 1337 по 1453 год, с долгими перемириями."),
-    ("У какой страны больше всего часовых поясов?", ["Франция", "Россия", "США", "Великобритания"], 0, "Благодаря заморским территориям у Франции их двенадцать."),
-    ("Сколько глаз у пчелы?", ["Пять", "Два", "Три", "Шесть"], 0, "Два больших фасеточных и три простых на макушке."),
-    ("Какая из этих стран не имеет выхода к морю?", ["Боливия", "Чили", "Перу", "Эквадор"], 0, "Боливия потеряла побережье в войне с Чили в 1880-х, но флот у неё есть до сих пор."),
-    ("Кто из этих писателей по профессии был врачом?", ["Чехов", "Пушкин", "Толстой", "Гоголь"], 0, "«Медицина — моя законная жена, а литература — любовница», — шутил Чехов."),
-    ("Сколько раз Бразилия выигрывала чемпионат мира по футболу?", ["5", "4", "6", "3"], 0, "Больше, чем любая другая сборная."),
-    ("Какая часть поверхности Земли покрыта водой?", ["Около 71%", "Около 51%", "Около 81%", "Около 61%"], 0, "При этом пресной воды из всей — лишь около 2,5%."),
-    ("Как зовут главного героя серии The Legend of Zelda?", ["Линк", "Зельда", "Ганон", "Эпона"], 0, "Многие думают, что Зельда — это он, но Зельда — принцесса."),
-    ("Из какой страны футбольный клуб «Аякс»?", ["Нидерланды", "Бельгия", "Дания", "Греция"], 0, "Клуб из Амстердама назван в честь героя греческих мифов."),
-    ("Где находится Анхель — самый высокий водопад мира?", ["Венесуэла", "Бразилия", "Колумбия", "Перу"], 0, "Вода падает почти с километра — 979 метров."),
-    ("Какая самая высокая гора Грузии?", ["Шхара", "Казбек", "Тетнульди", "Ушба"], 0, "Шхара — 5193 метра, на границе Сванетии и Рачи."),
-    ("Какой город считается самым древним в России?", ["Дербент", "Великий Новгород", "Старая Ладога", "Керчь"], 0, "Дербенту больше 5000 лет, его крепость — в списке ЮНЕСКО."),
-    ("Сколько струн у классической балалайки?", ["Три", "Четыре", "Шесть", "Пять"], 0, "А у домры бывает и три, и четыре."),
-    ("Какой самый большой орган человеческого тела?", ["Кожа", "Печень", "Лёгкие", "Кишечник"], 0, "У взрослого кожа весит несколько килограммов."),
-    ("В каком году вышел первый iPhone?", ["2007", "2005", "2008", "2010"], 0, "В нём не было ни App Store, ни копирования текста."),
-    ("Кому принадлежит Гренландия?", ["Дании", "Норвегии", "Исландии", "Канаде"], 0, "Это самый большой остров мира, который не считается материком."),
+PROFESSIONS = [
+    ("Врач-хирург", 9), ("Инженер-энергетик", 9), ("Агроном-растениевод", 9),
+    ("Специалист по водоочистке", 9), ("Слесарь-механик", 8), ("Военный связист", 8),
+    ("Биолог-генетик", 8), ("Электрик", 8), ("Строитель", 8), ("Фармацевт", 8),
+    ("Шеф-повар", 7), ("Спасатель МЧС", 8), ("Психотерапевт", 7), ("Кузнец-металлург", 7),
+    ("Программист систем управления", 7), ("Учитель физики и химии", 7), ("Ветеринар", 7),
+    ("Охотник-промысловик", 8), ("Шахтёр", 7), ("Архитектор", 6), ("Швея-портной", 6),
+    ("Спецназовец", 7), ("Автомеханик", 7), ("Кинолог", 6), ("Бухгалтер", 4),
+    ("Адвокат", 4), ("Фитнес-тренер", 5), ("Блогер-тиктокер", 2), ("Философ", 3),
+    ("Сомелье", 3), ("Актёр театра", 3), ("Стилист-парикмахер", 3), ("Тату-мастер", 3),
+    ("Астролог", 1), ("Риелтор", 2), ("Стендап-комик", 3),
 ]
 
-GAME_ASK = re.compile(r"(поигра|сыграем|давай\s+(?:в\s+)?игр|викторин|квиз|\bquiz\b|let'?s play)", re.I)
+BIOLOGY = [
+    "Мужчина, 26 лет", "Мужчина, 32 года", "Мужчина, 44 года", "Мужчина, 19 лет", "Мужчина, 52 года",
+    "Женщина, 24 года", "Женщина, 29 лет", "Женщина, 35 лет", "Женщина, 19 лет", "Женщина, 48 лет",
+]
 
+HEALTH = [
+    ("Идеальное здоровье, крепкий иммунитет", 9),
+    ("Отличная физическая форма, без хронических болезней", 8),
+    ("Абсолютно здоров, донор редкой группы крови", 9),
+    ("Слабое зрение (носит очки)", 6),
+    ("Аллергия на пыль и плесень", 5),
+    ("Травма колена (хромает при нагрузке)", 5),
+    ("Сахарный диабет (требуется контроль)", 4),
+    ("Астма средней тяжести", 4),
+    ("Бесплоден / бесплодна", 5),
+    ("Повышенная регенерация тканей", 8),
+    ("Хроническая бессонница", 6),
+    ("Гипертония 1-й степени", 6),
+    ("Частичная глухота на одно ухо", 6),
+    ("Здоров, спортивный разряд по плаванию", 8),
+    ("Плоскостопие 2-й степени", 7),
+]
 
-def mp4(data, name="quiz"):
-    """Raw bytes arrive as a nameless file ("application/octet-stream"); a .mp4 name makes them a GIF in the chat."""
-    return InputFile(data, filename=f"{name}.mp4")
+HOBBIES = [
+    ("Радиолюбитель (пайка, сборка антенн)", 8),
+    ("Садоводство и выращивание грибов", 8),
+    ("Стрельба из лука и арбалета", 7),
+    ("Рукопашный бой / дзюдо", 7),
+    ("Кулинария и консервация", 7),
+    ("Ремонт электроники и гаджетов", 8),
+    ("Ориентирование на местности и туризм", 8),
+    ("Игра на гитаре (поднимает боевой дух)", 6),
+    ("Народная медицина и траволечение", 7),
+    ("Пчеловодство и сбор мёда", 6),
+    ("Резьба по дереву и столярное дело", 7),
+    ("Рыболовство и плетение сетей", 7),
+    ("Шахматы (стратегическое мышление)", 6),
+    ("Шитьё и кожевенное дело", 7),
+    ("Коллекционирование комиксов", 3),
+    ("Настольные ролевые игры (D&D)", 4),
+]
 
+PHOBIAS = [
+    ("Хладнокровие и стрессоустойчивость", 9),
+    ("Прирождённый харизматичный лидер", 8),
+    ("Клаустрофобия (боязнь замкнутых пространств)", 3),
+    ("Никтофобия (панический страх темноты)", 4),
+    ("Клептомания (неконтролируемая тяга воровать)", 2),
+    ("Паранойя (не доверяет никому вокруг)", 3),
+    ("Альтруист (готов пожертвовать собой)", 8),
+    ("Арахнофобия (страх пауков и насекомых)", 5),
+    ("Вспыльчивый характер, легко впадает в ярость", 3),
+    ("Трудоголик (работает без устали)", 8),
+    ("Паникёр в экстренных ситуациях", 2),
+    ("Манипулятор (склонен плести интриги)", 4),
+    ("Педант (болезненная тяга к идеальному порядку)", 6),
+    ("Оптимист, никогда не унывает", 7),
+]
 
-def jpg(data):
-    return InputFile(data, filename="preview.jpg")
+BAGGAGE = [
+    ("Полная армейская аптечка со стерильным набором", 9),
+    ("Ящик армейских питательных консервов (на 2 месяца)", 9),
+    ("Герметичный мешок семян урожайных злаков", 9),
+    ("Профессиональный портативный фильтр для воды", 8),
+    ("Набор качественных слесарных инструментов", 8),
+    ("Охотничий нож из дамасской стали и точило", 7),
+    ("Фонарик с динамо-генератором (вечный)", 7),
+    ("Походная портативная радиостанция с зарядкой", 8),
+    ("Охотничий карабин и 10 патронов", 8),
+    ("Канистра антисептика и спирта (5 литров)", 7),
+    ("Складная солнечная панель для зарядки", 8),
+    ("Толстая книга энциклопедии выживания и технологий", 7),
+    ("Скрипка работы старого мастера", 3),
+    ("Колода карт и нарды", 4),
+    ("Сломанный карманный компас", 2),
+    ("Пачка семян декоративных кактусов", 2),
+    ("Мягкая игрушка антистресс", 3),
+    ("Пластиковый свисток и карманное зеркальце", 3),
+]
 
 
 def esc(text):
     return html.escape(str(text or ""), quote=False)
 
 
-def key(question):
-    """A question's identity for "already asked": letters and digits only, lower case."""
-    return re.sub(r"[^a-zа-яё0-9]", "", str(question).lower())[:80]
+class Character:
+    def __init__(self, user_id, name):
+        self.user_id = user_id
+        self.name = name
+        self.profession, self.prof_score = random.choice(PROFESSIONS)
+        self.biology = random.choice(BIOLOGY)
+        self.health, self.health_score = random.choice(HEALTH)
+        self.hobby, self.hobby_score = random.choice(HOBBIES)
+        self.phobia, self.phobia_score = random.choice(PHOBIAS)
+        self.baggage, self.baggage_score = random.choice(BAGGAGE)
+        self.alive = True
+
+    def card_round_1(self):
+        return f"<b>{esc(self.name)}</b>\n💼 Профессия: <b>{self.profession}</b>\n🧬 Биология: {self.biology}"
+
+    def card_round_2(self):
+        return (
+            f"<b>{esc(self.name)}</b>\n"
+            f"💼 Профессия: <b>{self.profession}</b> | 🧬 {self.biology}\n"
+            f"❤️ Здоровье: {self.health}\n"
+            f"🎯 Навык: {self.hobby}"
+        )
+
+    def full_card(self):
+        return (
+            f"👤 <b>{esc(self.name)}</b>\n"
+            f"💼 Профессия: <b>{self.profession}</b>\n"
+            f"🧬 Биология: {self.biology}\n"
+            f"❤️ Здоровье: {self.health}\n"
+            f"🎯 Навык: {self.hobby}\n"
+            f"🧠 Психология: {self.phobia}\n"
+            f"🎒 Багаж: {self.baggage}"
+        )
 
 
 class Game:
     def __init__(self, chat_id, host_id, host_name):
         self.chat_id, self.host_id = chat_id, host_id
         self.players = {host_id: host_name}
-        self.topic = "mix"
-        self.mode = "classic"
+        self.characters = {}  # user_id -> Character
+        self.catastrophe = "nuclear"
         self.session = secrets.token_hex(4)
-        self.state = "lobby"
+        self.state = "lobby"  # lobby, round1, round2, round3, voting, done
         self.lobby_message = None
-        self.questions = []
-        self.clips = []
-        self.index = -1
-        self.answers = {}  # user_id -> (option index, seconds taken)
-        self.asked_at = 0.0
-        self.scores, self.right, self.streak = {}, {}, {}
+        self.round = 1
+        self.capacity = 1
+        self.votes = {}  # voter_id -> target_user_id
+        self.voted_event = asyncio.Event()
+        self.task = None
         self.lock = asyncio.Lock()
-        self.answered = asyncio.Event()
-        self.task = self.render = None
         self.created = time.monotonic()
 
 
-class Quiz:
+class BunkerGame:
     def __init__(self, db, ask_model):
-        """db: the GroupStore's SQLite connection; ask_model(chat_id, instructions, text) -> answer text."""
-        self.db, self.ask_model = db, ask_model
+        self.db = db
+        self.ask_model = ask_model
         self.games = {}
         with self.db:
-            self.db.execute("CREATE TABLE IF NOT EXISTS game_scores (chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
-                            "name TEXT NOT NULL, points INTEGER NOT NULL, wins INTEGER NOT NULL, games INTEGER NOT NULL, "
-                            "PRIMARY KEY (chat_id, user_id))")
-            self.db.execute("CREATE TABLE IF NOT EXISTS game_asked (id INTEGER PRIMARY KEY, chat_id INTEGER NOT NULL, "
-                            "question TEXT NOT NULL)")
-            self.db.execute("CREATE INDEX IF NOT EXISTS game_asked_chat ON game_asked(chat_id, id)")
+            self.db.execute(
+                "CREATE TABLE IF NOT EXISTS game_scores ("
+                "chat_id INTEGER NOT NULL, user_id INTEGER NOT NULL, "
+                "name TEXT NOT NULL, points INTEGER NOT NULL, wins INTEGER NOT NULL, games INTEGER NOT NULL, "
+                "PRIMARY KEY (chat_id, user_id))"
+            )
 
-    async def _edit_lobby(self, game, text, **kwargs):
-        edit = game.lobby_message.edit_text if getattr(game.lobby_message, "text", None) else game.lobby_message.edit_caption
-        await edit(text, **kwargs)
+    async def _edit(self, message, text, reply_markup=None):
+        if not message:
+            return
+        try:
+            if getattr(message, "text", None) is not None:
+                await message.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+            elif getattr(message, "caption", None) is not None:
+                await message.edit_caption(caption=text, parse_mode="HTML", reply_markup=reply_markup)
+            else:
+                await message.edit_text(text, parse_mode="HTML", reply_markup=reply_markup)
+        except Exception as exc:
+            LOG.debug("Bunker message edit skipped: %s", exc)
 
     # ---------- lobby ----------
 
     def lobby_text(self, game):
-        emoji, title = TOPICS[game.topic]
-        people = ", ".join(esc(name[:20]) for name in game.players.values())
-        return f"<b>Secret AI · Викторина</b> · {emoji} {esc(title)}\n{MODES[game.mode][0]} · {MODES[game.mode][3]}\n👥 {len(game.players)}/{MAX_PLAYERS}: {people}\nВедущий выбирает тему и режим. Остановить — /{STOP}"
+        icon, name, desc, bunker = CATASTROPHES[game.catastrophe]
+        people = ", ".join(esc(n[:20]) for n in game.players.values())
+        return (
+            f"<b>🛡️ AI-БУНКЕР: ВЫЖИВАНИЕ</b>\n"
+            f"{icon} <b>Угроза: {name}</b>\n\n"
+            f"<i>{desc}</i>\n\n"
+            f"🏰 <b>Убежище:</b> {bunker}\n"
+            f"👥 <b>Кандидаты ({len(game.players)}/{MAX_PLAYERS}):</b> {people}\n\n"
+            f"Ведущий выбирает сценарий и запускает спасение. Остановить — /{STOP}"
+        )
 
     def lobby_keyboard(self, game):
-        topics = [Button(f"{'✅ ' if key == game.topic else ''}{emoji} {title}", callback_data=f"g:t:{key}:{game.session}")
-                  for key, (emoji, title) in TOPICS.items()]
-        rows = [[Button("✋ Я играю", callback_data=f"g:j:{game.session}")]]
-        rows += [topics[i:i + 2] for i in range(0, len(topics), 2)]
-        rows.append([Button(("✓ " if mode == game.mode else "") + values[0], callback_data=f"g:m:{mode}:{game.session}")
-                     for mode, values in MODES.items()])
-        rows.append([Button("▶️ Начать", callback_data=f"g:s:{game.session}")])
+        cat_buttons = [
+            Button(f"{'✅ ' if key == game.catastrophe else ''}{data[0]} {data[1]}", callback_data=f"g:c:{key}:{game.session}")
+            for key, data in CATASTROPHES.items()
+        ]
+        rows = [[Button("✋ Войти в список выживших", callback_data=f"g:j:{game.session}")]]
+        rows += [cat_buttons[i : i + 2] for i in range(0, len(cat_buttons), 2)]
+        rows.append([Button("▶️ Запустить выживание", callback_data=f"g:s:{game.session}")])
         return Keyboard(rows)
 
     async def open_lobby(self, bot, message, user, name):
         chat_id = message.chat_id
         current = self.games.get(chat_id)
         if current and current.state != "done" and time.monotonic() - current.created < 1800:
-            await message.reply_text("Игра уже идёт — присоединяйтесь к ней 👆")
+            await message.reply_text("Игра в бункер уже идёт — присоединяйтесь к ней 👆")
             return
-        if current:
-            current.state = "done"
-            for task in (current.task, current.render):
-                if task:
-                    task.cancel()
+        if current and current.task:
+            current.task.cancel()
+
         game = self.games[chat_id] = Game(chat_id, user.id, name)
-        caption, keyboard = self.lobby_text(game), self.lobby_keyboard(game)
+        text, kb = self.lobby_text(game), self.lobby_keyboard(game)
         try:
-            clip, preview = await asyncio.to_thread(lambda: (quizart.banner_clip(), quizart.banner_thumb()))
-            game.lobby_message = await bot.send_animation(chat_id, mp4(clip, "lobby"), caption=caption, parse_mode="HTML",
-                                                          reply_markup=keyboard, width=800, height=400,
-                                                          thumbnail=jpg(preview))
+            game.lobby_message = await bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=kb)
         except Exception as exc:
-            LOG.warning("Quiz banner animation failed: %s", type(exc).__name__)
-            try:
-                banner = await asyncio.to_thread(quizart.banner)
-                game.lobby_message = await bot.send_photo(chat_id, jpg(banner), caption=caption, parse_mode="HTML", reply_markup=keyboard)
-            except Exception:
-                game.lobby_message = await bot.send_message(chat_id, caption, parse_mode="HTML", reply_markup=keyboard)
+            LOG.warning("Failed to open Bunker lobby: %s", exc)
         game.task = asyncio.create_task(self._expire(game))
 
     async def _expire(self, game):
         await asyncio.sleep(LOBBY_SECONDS)
         if game.state == "lobby" and self.games.get(game.chat_id) is game:
             game.state = "done"
-            try:
-                await self._edit_lobby(game, "⌛ Викторина не началась — ведущий не нажал «Начать».")
-            except Exception:
-                pass
+            await self._edit(game.lobby_message, "⌛ Сбор в бункер отменён — ведущий не нажал «Запустить выживание».")
 
     async def stop(self, bot, chat_id, user_id, is_admin):
-        """/sstop: end the game in this chat — its host or a group admin. Returns the reply text."""
         game = self.games.get(chat_id)
         if not game or game.state == "done":
-            return f"Сейчас игры нет. Начать: /{START}"
+            return f"Сейчас игра не идёт. Начать новый бункер: /{START}"
         if user_id != game.host_id and not is_admin:
-            return "Остановить игру может ведущий или админ группы"
-        started = game.state != "lobby"
+            return "Остановить выживание может только ведущий или админ группы"
         game.state = "done"
         if game.task:
             game.task.cancel()
-        if game.render:
-            game.render.cancel()
-        if not started:
-            try:
-                await self._edit_lobby(game, "Викторина отменена.")
-            except Exception:
-                pass
-        return "⏹ Викторина остановлена" + (" — очки этой игры не считаются." if started else ".")
+        await self._edit(game.lobby_message, "⏹ Игра в бункер остановлена.")
+        return "⏹ Выживание в бункере остановлено."
 
     # ---------- buttons ----------
 
@@ -222,50 +312,47 @@ class Quiz:
         parts = (query.data or "").split(":")
         game = self.games.get(query.message.chat_id if query.message else 0)
         if not game or game.state == "done":
-            await query.answer(f"Эта игра уже закончилась. Новая: /{START}")
+            await query.answer(f"Эта партия завершена. Новый бункер: /{START}")
             return
         if len(parts) < 3 or parts[-1] != game.session:
-            await query.answer("Это кнопка старой партии. Используй новое сообщение с игрой.")
+            await query.answer("Это кнопка от старой партии.")
             return
-        parts = parts[:-1]
-        action = parts[1] if len(parts) > 1 else ""
-        if action == "a":
-            await self._answer(query, game, user, parts)
+
+        action = parts[1]
+        if action == "v":
+            # vote against someone
+            await self._handle_vote(query, game, user, parts)
             return
+
         if game.state != "lobby":
-            await query.answer("Игра уже началась — жди следующую 🙂" if action == "j" else None)
+            await query.answer("Выживание уже началось — жди следующего набора 🙂" if action == "j" else None)
             return
+
         async with game.lock:
             if game.state != "lobby":
-                await query.answer("Игра уже началась")
+                await query.answer("Игра уже запущена")
                 return
             if action == "j":
                 if user.id in game.players:
-                    await query.answer("Ты уже в игре 👍")
+                    await query.answer("Ты уже в списке кандидатов 👍")
                     return
                 if len(game.players) >= MAX_PLAYERS:
-                    await query.answer("В этой партии уже 20 игроков. Присоединяйся к следующей.")
+                    await query.answer("Бункер переполнен желающими.")
                     return
                 game.players[user.id] = name
-                await query.answer("Ты в игре! ✋")
-            elif action == "t" and len(parts) > 2 and parts[2] in TOPICS:
+                await query.answer("Ты записан в кандидаты! ✋")
+            elif action == "c" and len(parts) > 2 and parts[2] in CATASTROPHES:
                 if user.id != game.host_id:
-                    await query.answer("Тему выбирает ведущий")
+                    await query.answer("Катастрофу выбирает ведущий")
                     return
-                game.topic = parts[2]
-                await query.answer(TOPICS[game.topic][1])
-            elif action == "m" and len(parts) > 2 and parts[2] in MODES:
-                if user.id != game.host_id:
-                    await query.answer("Режим выбирает ведущий")
-                    return
-                game.mode = parts[2]
-                await query.answer(MODES[game.mode][3])
+                game.catastrophe = parts[2]
+                await query.answer(f"Угроза: {CATASTROPHES[game.catastrophe][1]}")
             elif action == "s":
                 if user.id != game.host_id:
-                    await query.answer("Запускает ведущий")
+                    await query.answer("Запустить игру может только ведущий")
                     return
                 game.state = "starting"
-                await query.answer("Поехали!")
+                await query.answer("Внимание всем! Ворота бункера активированы! 🚨")
                 if game.task:
                     game.task.cancel()
                 game.task = asyncio.create_task(self._play(bot, game))
@@ -273,300 +360,257 @@ class Quiz:
             else:
                 await query.answer()
                 return
-            try:
-                await self._edit_lobby(game, self.lobby_text(game), parse_mode="HTML",
-                                                      reply_markup=self.lobby_keyboard(game))
-            except Exception as exc:  # "message is not modified" and the like
-                LOG.debug("Lobby update skipped: %s", exc)
 
-    async def _answer(self, query, game, user, parts):
+            await self._edit(game.lobby_message, self.lobby_text(game), self.lobby_keyboard(game))
+
+    async def _handle_vote(self, query, game, user, parts):
+        if game.state != "voting":
+            await query.answer("Сейчас не время для голосования")
+            return
+        if user.id not in game.characters or not game.characters[user.id].alive:
+            await query.answer("Голосовать могут только живые участники бункера!", show_alert=True)
+            return
         try:
-            number, choice = int(parts[2]), int(parts[3])
+            target_id = int(parts[2])
         except (IndexError, ValueError):
             await query.answer()
             return
-        if not 0 <= choice < 4 or not 0 <= number < len(game.questions):
-            await query.answer("Некорректный ответ")
-            return
-        if user.id not in game.players:
-            await query.answer("Ты не в этой игре 🙅 Нажми «Я играю», когда начнётся следующая.", show_alert=True)
-            return
-        if game.state != "question" or number != game.index or not game.asked_at or time.monotonic() - game.asked_at >= MODES[game.mode][2]:
-            await query.answer("Время на этот вопрос вышло ⏱")
-            return
-        if user.id in game.answers:
-            await query.answer("Ответ уже принят — ждём остальных")
-            return
-        game.answers[user.id] = (choice, time.monotonic() - game.asked_at)
-        await query.answer(f"Ответ {LETTERS[choice] if 0 <= choice < 4 else ''} принят ✅")
-        if len(game.answers) >= len(game.players):
-            game.answered.set()
 
-    # ---------- the game ----------
+        if target_id == user.id:
+            await query.answer("Нельзя голосовать против самого себя! Защищай свою жизнь!", show_alert=True)
+            return
+        if target_id not in game.characters or not game.characters[target_id].alive:
+            await query.answer("Этот кандидат уже выбыл!")
+            return
+
+        game.votes[user.id] = target_id
+        target_name = game.characters[target_id].name
+        alive_voters = [uid for uid, c in game.characters.items() if c.alive]
+        await query.answer(f"Твой голос принят: против {target_name} ❌")
+        if len(game.votes) >= len(alive_voters):
+            game.voted_event.set()
+
+    # ---------- gameplay loop ----------
 
     async def _play(self, bot, game):
         try:
-            emoji, title = TOPICS[game.topic]
-            await self._edit_lobby(game,
-                f"<b>🧠 Викторина</b> · {emoji} {esc(title)}\n⏳ Готовлю вопросы…",
-                parse_mode="HTML")
-            game.questions = await self._questions(game)
-            loop = asyncio.get_running_loop()
-            game.clips = [loop.create_future() for _ in game.questions]
-            game.render = asyncio.create_task(self._render(game))
-            game.state = "question"
-            for game.index in range(len(game.questions)):
-                await self._ask(bot, game)
-                if game.state == "done":
-                    return
+            # 1. Init characters and capacity
+            for uid, name in game.players.items():
+                game.characters[uid] = Character(uid, name)
+
+            # Capacity: roughly 50% survive (min 1)
+            game.capacity = max(1, len(game.players) // 2)
+            icon, cat_name, desc, bunker = CATASTROPHES[game.catastrophe]
+
+            intro = (
+                f"🚨 <b>ВНИМАНИЕ! КАТАСТРОФА: {icon} {cat_name.upper()}</b> 🚨\n\n"
+                f"{desc}\n\n"
+                f"🏰 <b>Бункер:</b> {bunker}\n"
+                f"⚠️ <b>ВМЕСТИМОСТЬ:</b> ровно <b>{game.capacity}</b> из {len(game.players)} участников спасутся!\n"
+                f"Остальные будут изгнаны на поверхность. Начинаем распределение досье выживших…"
+            )
+            await self._edit(game.lobby_message, intro)
+            await asyncio.sleep(4)
+
+            # 2. Round 1: Profession & Biology
+            game.state = "round1"
+            cards1 = "\n\n".join(f"{i+1}. {c.card_round_1()}" for i, c in enumerate(game.characters.values()))
+            r1_text = (
+                f"📋 <b>РАУНД 1: ПРОФЕССИИ И БИОЛОГИЯ</b>\n"
+                f"Выжившие впервые видят друг друга и зачитывают свои роли:\n\n"
+                f"{cards1}\n\n"
+                f"⏱ <i>У вас 30 секунд на дебаты в чате: почему именно ваша профессия спасёт команду?</i>"
+            )
+            msg1 = await bot.send_message(game.chat_id, r1_text, parse_mode="HTML")
+            await asyncio.sleep(25)
+
+            # 3. Round 2: Health & Hobby
+            game.state = "round2"
+            cards2 = "\n\n".join(
+                f"{i+1}. <b>{esc(c.name)}</b>: {c.profession} | ❤️ {c.health} | 🎯 {c.hobby}"
+                for i, c in enumerate(game.characters.values())
+            )
+            r2_text = (
+                f"🩺 <b>РАУНД 2: ЗДОРОВЬЕ И НАВЫКИ</b>\n"
+                f"Вскрываются медицинские карты и скрытые таланты:\n\n"
+                f"{cards2}\n\n"
+                f"⏱ <i>Оцените физическое состояние и полезные хобби. Обсуждение — 25 секунд!</i>"
+            )
+            msg2 = await bot.send_message(game.chat_id, r2_text, parse_mode="HTML")
+            await asyncio.sleep(20)
+
+            # 4. Round 3: Baggage & Phobias
+            game.state = "round3"
+            cards3 = "\n\n".join(
+                f"{i+1}. <b>{esc(c.name)}</b>: 🧠 {c.phobia} | 🎒 <b>{c.baggage}</b>"
+                for i, c in enumerate(game.characters.values())
+            )
+            r3_text = (
+                f"🎒 <b>РАУНД 3: ПСИХОЛОГИЯ И БАГАЖ</b>\n"
+                f"Последние козыри и скелеты в шкафу выложены на стол:\n\n"
+                f"{cards3}\n\n"
+                f"⚠️ <i>Через 20 секунд начинается голосование на изгнание!</i>"
+            )
+            msg3 = await bot.send_message(game.chat_id, r3_text, parse_mode="HTML")
+            await asyncio.sleep(15)
+
+            # 5. Elimination Voting Loop
+            game.state = "voting"
+            while True:
+                alive = [c for c in game.characters.values() if c.alive]
+                if len(alive) <= game.capacity:
+                    break
+
+                exile_count = len(alive) - game.capacity
+                exile_target = await self._run_voting_round(bot, game, alive, exile_count)
+                if not exile_target:
+                    # random expulsion if no votes
+                    exile_target = random.choice(alive)
+
+                exile_target.alive = False
+                await bot.send_message(
+                    game.chat_id,
+                    f"🚪 <b>ИЗГНАНИЕ ИЗ БУНКЕРА!</b>\n\n"
+                    f"Большинством голосов <b>{esc(exile_target.name)}</b> ({exile_target.profession}) "
+                    f"выталкивается наружу в бушующую катастрофу!\n"
+                    f"Двери захлопнулись. В живых осталось кандидатов: {len(alive) - 1} из {game.capacity} нужных.",
+                    parse_mode="HTML",
+                )
+                await asyncio.sleep(4)
+
+            # 6. Finale & AI Epilogue
             await self._finish(bot, game)
+
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            LOG.warning("Quiz failed: %s %s", type(exc).__name__, str(exc)[:200])
+            LOG.warning("Bunker game failed: %s", exc)
             game.state = "done"
-            try:
-                await bot.send_message(game.chat_id, f"Викторина сломалась на полпути 😵 Попробуйте ещё раз: /{START}")
-            except Exception:
-                pass
-        finally:
-            if game.render:
-                game.render.cancel()
+            await bot.send_message(game.chat_id, f"Выживание прервано непредвиденной аномалией 😵 Новый бункер: /{START}")
 
-    async def _render(self, game):
-        """Draw the clips ahead of the game: (question clip, its preview, reveal clip, its preview), or None where
-        drawing failed."""
-        title = TOPICS[game.topic][1] + " · " + MODES[game.mode][0]
-        for number, (question, options, correct, _) in enumerate(game.questions):
-            try:
-                art = quizart.QuestionArt(number + 1, len(game.questions), title, question, options, MODES[game.mode][2])
-                clips = await asyncio.to_thread(lambda: (art.question_clip(), art.question_thumb(),
-                                                         art.reveal_clip(correct), art.reveal_thumb(correct)))
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                LOG.warning("Quiz clip failed: %s %s", type(exc).__name__, str(exc)[:200])
-                clips = None
-            if not game.clips[number].done():
-                game.clips[number].set_result(clips)
+    async def _run_voting_round(self, bot, game, alive, needed_exiles):
+        game.votes = {}
+        game.voted_event.clear()
 
-    async def _ask(self, bot, game):
-        question, options, correct, fact = game.questions[game.index]
-        number, total = game.index + 1, len(game.questions)
-        seconds = MODES[game.mode][2]
-        game.answers, game.answered, game.asked_at = {}, asyncio.Event(), 0.0
-        self.mark_asked(game.chat_id, question)
-        head = f"<b>Вопрос {number}/{total}</b> · {TOPICS[game.topic][0]} {esc(TOPICS[game.topic][1])}\n\n<b>{esc(question)}</b>\n\n"
+        vote_buttons = [
+            [Button(f"❌ Изгнать: {c.name[:25]}", callback_data=f"g:v:{c.user_id}:{game.session}")]
+            for c in alive
+        ]
+        text = (
+            f"⚖️ <b>ГОЛОСОВАНИЕ ЗА ИЗГНАНИЕ</b>\n\n"
+            f"Мест в бункере: <b>{game.capacity}</b>. Претендентов: <b>{len(alive)}</b>.\n"
+            f"Нужно изгнать ещё человек: <b>{needed_exiles}</b>.\n\n"
+            f"Нажмите кнопку с именем кандидата, которого нужно оставить снаружи:\n"
+            f"⏱ <i>У всех выживших 30 секунд на голосование!</i>"
+        )
+        vote_msg = await bot.send_message(game.chat_id, text, parse_mode="HTML", reply_markup=Keyboard(vote_buttons))
 
-        def waiting(seconds_left=None):
-            count = f"ответили {len(game.answers)}/{len(game.players)}"
-            if seconds_left is None:  # the animation has the timer; the question stays here too, readable without playing
-                return f"<b>{number}/{total}. {esc(question)}</b>\n{count}"
-            filled = round(10 * seconds_left / seconds)
-            return head + f"⏱ {'▰' * filled}{'▱' * (10 - filled)} {seconds_left} с · {count}"
-
-        keyboard = Keyboard([[Button(f"{LETTERS[i]}. {opt}"[:60], callback_data=f"g:a:{game.index}:{i}:{game.session}")]
-                             for i, opt in enumerate(options)])
-        try:
-            clips = await asyncio.wait_for(asyncio.shield(game.clips[game.index]), 4)
-        except asyncio.TimeoutError:
-            clips = None
-        message = None
-        if clips:
+        # Wait for votes or timeout
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and not game.voted_event.is_set():
             try:
-                message = await bot.send_animation(game.chat_id, mp4(clips[0], "question"), caption=waiting(), parse_mode="HTML",
-                                                   reply_markup=keyboard, width=quizart.W, height=quizart.H,
-                                                   thumbnail=jpg(clips[1]))
-            except Exception as exc:
-                LOG.warning("Quiz animation failed: %s", type(exc).__name__)
-                clips = None
-        if not message:
-            message = await bot.send_message(game.chat_id, waiting(seconds), parse_mode="HTML", reply_markup=keyboard)
-        game.asked_at = time.monotonic()
-        game.state = "question"
-        deadline = game.asked_at + seconds
-        shown, step = 0, 3 if clips else 5
-        while time.monotonic() < deadline and not game.answered.is_set():
-            try:
-                await asyncio.wait_for(game.answered.wait(), min(step, max(0.1, deadline - time.monotonic())))
+                await asyncio.wait_for(game.voted_event.wait(), min(3.0, max(0.2, deadline - time.monotonic())))
             except asyncio.TimeoutError:
-                left = int(round(deadline - time.monotonic()))
-                if left <= 0 or (clips and len(game.answers) == shown):
-                    continue
-                shown = len(game.answers)
-                try:
-                    if clips:
-                        await message.edit_caption(waiting(), parse_mode="HTML", reply_markup=keyboard)
-                    else:
-                        await message.edit_text(waiting(left), parse_mode="HTML", reply_markup=keyboard)
-                except Exception:
-                    pass
-        game.state = "reveal"
-        gained, missed = [], []
-        for user_id, (choice, took) in sorted(game.answers.items(), key=lambda item: item[1][1]):
-            if choice == correct:
-                game.streak[user_id] = game.streak.get(user_id, 0) + 1
-                points = points_for(game.mode, seconds, took, game.streak[user_id])
-                game.scores[user_id] = game.scores.get(user_id, 0) + points
-                game.right[user_id] = game.right.get(user_id, 0) + 1
-                gained.append(f"{esc(game.players[user_id][:20])} +{points}" + (" 🔥" if game.streak[user_id] % 3 == 0 else ""))
-            else:
-                game.streak[user_id] = 0
-                missed.append(esc(game.players[user_id][:20]))
-        for user_id in game.players.keys() - game.answers.keys():
-            game.streak[user_id] = 0
-        result = f"<b>{number}/{total}. {esc(question)}</b>\n✅ <b>{esc(options[correct])}</b>" + (f"\n💡 {esc(fact[:180])}" if fact else "")
-        result += ("\n🏅 " + ", ".join(gained[:6]) + (f" · ещё {len(gained)-6}" if len(gained)>6 else "")) if gained else "\n😶 Никто не угадал"
-        if missed:
-            result += "\n❌ " + ", ".join(missed[:6]) + (f" · ещё {len(missed)-6}" if len(missed)>6 else "")
-        try:
-            if clips:
-                await message.edit_media(InputMediaAnimation(mp4(clips[2], "answer"), caption=result, parse_mode="HTML",
-                                                             width=quizart.W, height=quizart.H, thumbnail=jpg(clips[3])))
-            else:
-                await message.edit_text(result, parse_mode="HTML")
-        except Exception as exc:
-            LOG.warning("Quiz reveal failed: %s", type(exc).__name__)
-            try:
-                await bot.send_message(game.chat_id, result, parse_mode="HTML")
-            except Exception:
                 pass
-        await asyncio.sleep(3 if game.mode == "blitz" else REVEAL_PAUSE)
+
+        try:
+            await vote_msg.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+
+        # Tally votes
+        tally = {}
+        for target_id in game.votes.values():
+            tally[target_id] = tally.get(target_id, 0) + 1
+
+        if not tally:
+            return None
+
+        # Return target with most votes
+        most_voted_id = max(tally, key=lambda uid: tally[uid])
+        return game.characters.get(most_voted_id)
 
     async def _finish(self, bot, game):
         game.state = "done"
-        ranking = sorted(game.players, key=lambda uid: -game.scores.get(uid, 0))
-        rows = [(game.players[uid], game.scores.get(uid, 0), game.right.get(uid, 0)) for uid in ranking]
+        survivors = [c for c in game.characters.values() if c.alive]
+        survivor_names = ", ".join(f"<b>{esc(c.name)}</b> ({c.profession})" for c in survivors)
+
+        icon, cat_name, desc, bunker = CATASTROPHES[game.catastrophe]
+
+        # Generate AI story / verdict
+        epilogue = await self._generate_epilogue(game, survivors)
+
+        # Award points in DB
         with self.db:
-            for place, uid in enumerate(ranking):
-                self.db.execute("INSERT INTO game_scores(chat_id, user_id, name, points, wins, games) VALUES (?, ?, ?, ?, ?, 1) "
-                                "ON CONFLICT(chat_id, user_id) DO UPDATE SET name=excluded.name, points=points+excluded.points, "
-                                "wins=wins+excluded.wins, games=games+1",
-                                (game.chat_id, uid, game.players[uid], game.scores.get(uid, 0),
-                                 1 if game.scores.get(uid, 0) > 0 and game.scores.get(uid, 0) == game.scores.get(ranking[0], 0) else 0))
-        winner = rows[0] if rows and rows[0][1] > 0 else None
-        tied = winner and sum(row[1] == winner[1] for row in rows) > 1
-        caption = (f"🏆 Ничья на первом месте: {winner[1]} очков!" if tied else f"🏆 Победа: <b>{esc(winner[0])}</b> — {winner[1]} очков!" if winner else "Ничья по нулям 😅") + \
-                  f"\n\nЕщё раз — /{START} · рейтинг группы — /{RATING}"
-        topic = TOPICS[game.topic][1]
+            for c in game.characters.values():
+                is_win = 1 if c.alive else 0
+                points = 1500 if c.alive else 300
+                self.db.execute(
+                    "INSERT INTO game_scores(chat_id, user_id, name, points, wins, games) VALUES (?, ?, ?, ?, ?, 1) "
+                    "ON CONFLICT(chat_id, user_id) DO UPDATE SET name=excluded.name, points=points+excluded.points, "
+                    "wins=wins+excluded.wins, games=games+1",
+                    (game.chat_id, c.user_id, c.name, points, is_win),
+                )
+
+        final_message = (
+            f"🏆 <b>ГЕРМЕТИЗАЦИЯ БУНКЕРА: ФИНАЛ</b>\n\n"
+            f"Двери запечатаны титановыми замками. В бункер вошли:\n{survivor_names}\n\n"
+            f"📜 <b>ЛЕТОПИСЬ ВЫЖИВАНИЯ:</b>\n{epilogue}\n\n"
+            f"🎮 Сыграть ещё раз — /{START} · Таблица лидеров чата — /{RATING}"
+        )
+        await bot.send_message(game.chat_id, final_message, parse_mode="HTML")
+
+    async def _generate_epilogue(self, game, survivors):
+        icon, cat_name, desc, bunker = CATASTROPHES[game.catastrophe]
+        team_summary = "\n".join(
+            f"- {c.name}: {c.profession}, {c.biology}, здоровье: {c.health}, хобби: {c.hobby}, черта: {c.phobia}, багаж: {c.baggage}"
+            for c in survivors
+        )
+        prompt = (
+            f"Напиши яркий, кинематографичный художественный эпилог (3-5 небольших абзацев) на русском языке "
+            f"о судьбе команды выживших в бункере.\n"
+            f"Катастрофа: {cat_name} ({desc}). Убежище: {bunker}.\n"
+            f"Команда выживших, запертых в бункере:\n{team_summary}\n\n"
+            f"Требования: оцени их шансы реалистично с юмором и драмой. Как пригодились их профессии и багаж? "
+            f"Возникли ли конфликты из-за фобий? Смогли ли они дожить до открытия дверей и возродить цивилизацию? "
+            f"Пиши живо, увлекательно, без списков, в виде захватывающего рассказа."
+        )
         try:
-            clip, preview = await asyncio.to_thread(lambda: (quizart.podium_clip(rows, len(game.questions), topic),
-                                                             quizart.podium_thumb(rows, len(game.questions), topic)))
-            await bot.send_animation(game.chat_id, mp4(clip, "results"), caption=caption, parse_mode="HTML", width=720,
-                                     height=900, thumbnail=jpg(preview))
+            story = await asyncio.wait_for(
+                self.ask_model(game.chat_id, "Ты — ведущий культовой игры «Бункер». Пиши кинематографично.", prompt),
+                25,
+            )
+            if story and len(story.strip()) > 80:
+                return story.strip()
         except Exception as exc:
-            LOG.warning("Quiz podium animation failed: %s", type(exc).__name__)
-            try:
-                image = await asyncio.to_thread(quizart.podium, rows, len(game.questions), topic)
-                await bot.send_photo(game.chat_id, jpg(image), caption=caption, parse_mode="HTML")
-            except Exception:
-                text = caption + "\n\n" + "\n".join(f"{i+1}. {esc(name[:24])}: {points}" for i, (name, points, _) in enumerate(rows))
-                await bot.send_message(game.chat_id, text, parse_mode="HTML")
+            LOG.warning("Failed to generate AI Bunker epilogue: %s", exc)
+
+        # Built-in procedural epilogue if AI model is unreachable
+        professions = [c.profession for c in survivors]
+        return (
+            f"За герметичными шлюзами бункера остался пылающий мир, а внутри закипела борьба за завтрашний день. "
+            f"Благодаря слаженной работе таких специалистов, как {', '.join(professions[:3])}, убежище удалось "
+            f"стабилизировать уже к исходу первого месяца. Багаж команды оказался на вес золота, позволив починить "
+            f"очистители воздуха и наладить гидропонные фермы.\n\n"
+            f"Спустя годы изоляции тяжёлые створки бункера со скрежетом распахнулись навстречу новому миру. "
+            f"Выжившие шагнули в рассветные лучи солнца, став первыми строителями возрождённого человечества!"
+        )
 
     async def top(self, bot, chat_id, title):
-        rows = self.db.execute("SELECT name, points, wins, games FROM game_scores WHERE chat_id=? ORDER BY points DESC "
-                               "LIMIT 10", (chat_id,)).fetchall()
+        rows = self.db.execute(
+            "SELECT name, points, wins, games FROM game_scores WHERE chat_id=? ORDER BY points DESC LIMIT 10",
+            (chat_id,),
+        ).fetchall()
         if not rows:
-            await bot.send_message(chat_id, f"Тут ещё никто не играл. Начать: /{START}")
+            await bot.send_message(chat_id, f"В этом чате ещё никто не выживал в бункере. Начать: /{START}")
             return
-        await bot.send_photo(chat_id, jpg(quizart.leaderboard(rows, title)),
-                             caption=f"🏆 Рейтинг викторины за всё время · новая игра — /{START}")
+        lines = [f"<b>🏆 ТОП ВЫЖИВШИХ В БУНКЕРЕ · {esc(title)}</b>\n"]
+        for i, (name, points, wins, games) in enumerate(rows):
+            medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
+            lines.append(f"{medal} <b>{esc(name[:22])}</b> — {points} очков (побед: {wins}/{games})")
+        lines.append(f"\nНовое выживание: /{START}")
+        await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
 
-    # ---------- questions ----------
 
-    def asked(self, chat_id, limit=400):
-        rows = self.db.execute("SELECT question FROM game_asked WHERE chat_id=? ORDER BY id DESC LIMIT ?",
-                               (chat_id, limit)).fetchall()
-        return [row[0] for row in rows]
-
-    def mark_asked(self, chat_id, question):
-        with self.db:
-            self.db.execute("INSERT INTO game_asked(chat_id, question) VALUES (?, ?)", (chat_id, question))
-            self.db.execute("DELETE FROM game_asked WHERE chat_id=? AND id <= (SELECT id FROM game_asked WHERE chat_id=? "
-                            "ORDER BY id DESC LIMIT 1 OFFSET 1000)", (chat_id, chat_id))
-
-    async def _questions(self, game):
-        seen = {key(q) for q in self.asked(game.chat_id)}
-        try:
-            questions = await asyncio.wait_for(self._generate(game, seen), 20)
-        except Exception as exc:
-            LOG.warning("Quiz questions failed: %s %s", type(exc).__name__, str(exc)[:200])
-            questions = []
-        count = MODES[game.mode][1]
-        questions = questions[:count]
-        if len(questions) < count:
-            have = {key(q[0]) for q in questions}
-            fresh = [q for q in FALLBACK if key(q[0]) not in seen | have]
-            heard = [q for q in FALLBACK if key(q[0]) in seen - have]  # repeats only when the chat heard them all
-            random.shuffle(fresh)
-            random.shuffle(heard)
-            questions += (fresh + heard)[:count - len(questions)]
-        shuffled = []
-        for question, options, correct, fact in questions:  # the right answer must not always be A
-            order = list(range(len(options)))
-            random.shuffle(order)
-            shuffled.append((question, [options[i] for i in order], order.index(correct), fact))
-        return shuffled
-
-    async def _generate(self, game, seen):
-        wanted = MODES[game.mode][1] + 4  # some get filtered out
-        if game.topic == "chat":
-            lines = self.history(game.chat_id)
-            if len(lines) < 30:
-                game.topic = "mix"  # too little to ask about
-                return await self._generate(game, seen)
-            names = ", ".join(game.players.values())
-            subject = ("THIS group chat, from its messages below: who said a phrase, who talks about what, running jokes, "
-                       f"the chat's words and habits. Players now: {names}. Use members' names as options. Funny, never "
-                       "insulting, never revealing anything private. Messages:\n" + "\n".join(lines[-400:]))
-        else:
-            angles = random.sample(ANGLES[game.topic], min(5, len(ANGLES[game.topic])))
-            subject = f"{TOPICS[game.topic][1]}. This time cover these angles: {', '.join(angles)}"
-        recent = self.asked(game.chat_id, 120)
-        avoid = ("\nThis chat has already played these — never repeat them or ask the same thing in other words:\n- " +
-                 "\n- ".join(recent)) if recent else ""
-        instructions = f"""Write {wanted} quiz questions in Russian for a group chat of Russian-speaking friends, mostly 16–35 years old.
-Topic: {subject}
-
-Difficulty is the most important part: MEDIUM. Every question should split the players roughly 50/50 — not school
-trivia everyone answers instantly, and not obscure facts nobody could guess. Someone sharp should be able to recall it
-or reason their way to it.
-
-Rules:
-- Make them interesting, the kind that makes people say «о, не знал». Modern things are welcome (internet, games,
-  music, films, sport, technology of the last 15 years) mixed with timeless ones.
-- No clichés: no capitals of famous countries, no biggest/smallest ocean or planet, no «who wrote War and Peace», no
-  Berlin Wall year, Mickey Mouse, Gangnam Style, Doge and the like.
-- The question must never contain or give away its answer (bad: «Какой элемент назван в честь планеты Уран?» — Уран).
-- 4 options of the same kind, all plausible, short (max 40 characters). No joke options, no «все варианты».
-- Exactly one correct option, and you must be certain of it. If you are not sure about a fact, drop that question.
-- Vary the form: «что из этого…», «сколько примерно…», «что появилось раньше…», «кто…», «где…», «какой из…».
-- fact: one short surprising sentence that adds something new rather than restating the answer. It must be true.
-- No emoji anywhere.{avoid}
-
-Return only JSON: {{"questions": [{{"q": "...", "options": ["...", "...", "...", "..."], "answer": 0, "fact": "..."}}]}}
-where answer is the index of the correct option."""
-        text = await self.ask_model(game.chat_id, instructions,
-                                    f"Сделай {wanted} вопросов. Случайное зерно: {random.randint(1, 10 ** 6)}")
-        found = re.search(r"\{.*\}", text or "", re.S)
-        data = json.loads(found.group(0)) if found else {}
-        questions, keys = [], set(seen)
-        for item in data.get("questions", []):
-            question = str(item.get("q", "")).strip()[:300]
-            options = [str(o).strip()[:60] for o in item.get("options", []) if str(o).strip()]
-            answer = item.get("answer")
-            if not question or len(options) != 4 or type(answer) is not int or not 0 <= answer < 4:
-                continue
-            if len({o.lower() for o in options}) < 4 or key(question) in keys:
-                continue
-            right = options[answer].lower()
-            if len(right) >= 4 and right in question.lower():  # gives itself away
-                continue
-            keys.add(key(question))
-            questions.append((question, options, answer, str(item.get("fact") or "").strip()[:300]))
-        return questions
-
-    def history(self, chat_id):
-        rows = self.db.execute("SELECT line FROM group_messages WHERE chat_id=? AND line NOT LIKE 'Secret AI%' "
-                               "ORDER BY id DESC LIMIT 600", (chat_id,)).fetchall()
-        return [row[0] for row in reversed(rows)]
+# Alias for backwards compatibility with any old imports
+Quiz = BunkerGame

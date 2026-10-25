@@ -4061,19 +4061,19 @@ async def day_command(update, context):
 
 
 async def game_command(update, context):
-    """/sgame: a quiz for the whole group."""
+    """/bunker: AI Bunker survival game for the whole group."""
     message, user = update.effective_message, update.effective_user
     if not message or not user:
         return
     if message.chat.type == "private":
-        await reply(message, ui(update, f"Викторина — игра для групп 🎮 Добавь меня в группу и напиши там /{game.START}",
-                                f"The quiz is for groups 🎮 Add me to a group and send /{game.START} there"))
+        await reply(message, ui(update, f"AI-Бункер — ролевая игра на выживание для групп 🛡️ Добавь меня в группу и напиши там /{game.START}",
+                                f"AI Bunker is a survival role-play game for groups 🛡️ Add me to a group and send /{game.START} there"))
         return
     await quiz(context).open_lobby(context.bot, message, user, speaker(user))
 
 
 async def stop_game_command(update, context):
-    """/sstop: stop the group's quiz (its host or an admin)."""
+    """/bunker_stop: stop the group's bunker game (its host or an admin)."""
     message, user = update.effective_message, update.effective_user
     if not message or not user or message.chat.type == "private":
         return
@@ -4086,12 +4086,12 @@ async def stop_game_command(update, context):
 
 
 async def top_command(update, context):
-    """/top: the group's all-time quiz leaderboard."""
+    """/bunker_top: the group's bunker survivors leaderboard."""
     message = update.effective_message
     if not message:
         return
     if message.chat.type == "private":
-        await reply(message, ui(update, f"Рейтинг есть только в группах — там, где играют в /{game.START}.",
+        await reply(message, ui(update, f"Рейтинг выживших есть только в группах — там, где играют в /{game.START}.",
                                 f"The leaderboard lives in groups, where /{game.START} is played."))
         return
     await quiz(context).top(context.bot, message.chat_id, message.chat.title or "Группа")
@@ -5748,16 +5748,16 @@ async def post_init(app):
     try:
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["en"]])
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
-        group = [BotCommand(game.START, "🧠 Викторина Secret AI для всей группы"),
-                 BotCommand(game.RATING, "🏆 Рейтинг викторины"), BotCommand(game.STOP, "⏹ Остановить викторину"),
+        group = [BotCommand(game.START, "🛡️ AI-Бункер: ролевая игра на выживание"),
+                 BotCommand(game.RATING, "🏆 Топ выживших в бункере"), BotCommand(game.STOP, "⏹ Остановить игру в бункер"),
                  BotCommand(digest.COMMAND, "📊 Итоги дня"),
                  BotCommand("serial", "🎬 Сериал про ваш чат"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
         group += [BotCommand(*c) for c in COMMANDS["ru"][:6]]
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
-        await app.bot.set_my_commands([BotCommand(game.START, "🧠 Secret AI quiz for the whole group"),
-                                       BotCommand(game.RATING, "🏆 Quiz leaderboard"), BotCommand(game.STOP, "⏹ Stop the quiz"),
+        await app.bot.set_my_commands([BotCommand(game.START, "🛡️ AI Bunker: survival role-play game"),
+                                       BotCommand(game.RATING, "🏆 Bunker survivors leaderboard"), BotCommand(game.STOP, "⏹ Stop the bunker game"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
                                        BotCommand("serial", "🎬 Your group sitcom"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
@@ -6617,9 +6617,9 @@ def main():
     app.add_handler(CommandHandler(["dem", "demotivator"], demotivator_command))
     app.add_handler(CommandHandler(["meme", "mem"], meme_command))
     # Unusual names on purpose: other bots in a group react to /game, /quiz and /top too.
-    app.add_handler(CommandHandler([game.START, "svik"], game_command))
-    app.add_handler(CommandHandler([game.RATING, "stop10"], top_command))
-    app.add_handler(CommandHandler(game.STOP, stop_game_command))
+    app.add_handler(CommandHandler([game.START, "bunker", "game", "sgame", "svik"], game_command))
+    app.add_handler(CommandHandler([game.RATING, "bunker_top", "btop", "stop10", "srating"], top_command))
+    app.add_handler(CommandHandler([game.STOP, "bunker_stop", "bstop", "sstop"], stop_game_command))
     app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
     app.add_handler(CommandHandler("serial", serial_command))
     workbench_ui.Controls(SimpleNamespace(

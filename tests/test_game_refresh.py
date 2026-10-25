@@ -4,104 +4,198 @@ import time
 import unittest
 from types import SimpleNamespace as NS
 from unittest.mock import AsyncMock, patch
+
 import game
 
-class QuizRefreshTest(unittest.IsolatedAsyncioTestCase):
+
+class BunkerGameTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        self.db=sqlite3.connect(':memory:')
+        self.db = sqlite3.connect(":memory:")
         self.addCleanup(self.db.close)
-        self.quiz=game.Quiz(self.db,AsyncMock(side_effect=RuntimeError('offline')))
-        self.g=game.Game(-1,1,'Host')
-        self.quiz.games[-1]=self.g
-        self.g.lobby_message=NS(text=None,edit_caption=AsyncMock())
+        self.ask = AsyncMock(return_value="Герои смогли преодолеть все испытания и возродить мир!")
+        self.quiz = game.Quiz(self.db, self.ask)
+        self.g = game.Game(-1, 1, "Host")
+        self.quiz.games[-1] = self.g
+        self.g.lobby_message = NS(text="lobby", edit_text=AsyncMock(), edit_caption=AsyncMock())
 
-    def query(self,data):
-        return NS(data=data,message=NS(chat_id=-1),answer=AsyncMock())
+    def query(self, data):
+        return NS(data=data, message=NS(chat_id=-1), answer=AsyncMock())
 
-    async def button(self,action,uid=1):
-        q=self.query(f'g:{action}:{self.g.session}')
-        await self.quiz.on_button(q,NS(id=uid),'Player',NS())
+    async def button(self, action, uid=1, name="Host"):
+        q = self.query(f"g:{action}:{self.g.session}")
+        await self.quiz.on_button(q, NS(id=uid), name, NS())
         return q
 
-    async def test_old_party_buttons_cannot_join_reconfigure_or_answer(self):
-        for action in ('j','m:blitz','s','a:0:0'):
-            q=self.query(f'g:{action}:old-session')
-            await self.quiz.on_button(q,NS(id=2),'Other',NS())
-            self.assertIn('старой',q.answer.call_args.args[0])
-        self.assertEqual(self.g.players,{1:'Host'})
-        self.assertEqual(self.g.mode,'classic')
-        self.assertEqual(self.g.state,'lobby')
+    async def test_old_party_buttons_rejected(self):
+        for action in ("j", "c:zombie", "s", "v:1"):
+            q = self.query(f"g:{action}:old-session")
+            await self.quiz.on_button(q, NS(id=2), "Other", NS())
+            self.assertIn("старой", q.answer.call_args.args[0])
+        self.assertEqual(self.g.players, {1: "Host"})
+        self.assertEqual(self.g.catastrophe, "nuclear")
+        self.assertEqual(self.g.state, "lobby")
 
-    async def test_only_host_can_select_mode(self):
-        await self.button('m:blitz',2)
-        self.assertEqual(self.g.mode,'classic')
-        await self.button('m:blitz')
-        self.assertEqual(self.g.mode,'blitz')
-        keyboard=self.quiz.lobby_keyboard(self.g)
+    async def test_player_join_and_cap(self):
+        # Join player 2
+        q2 = await self.button("j", 2, "Player 2")
+        self.assertIn(2, self.g.players)
+        self.assertIn("кандидаты", q2.answer.call_args.args[0].lower())
+
+        # Joining again
+        q2_dup = await self.button("j", 2, "Player 2")
+        self.assertIn("уже в списке", q2_dup.answer.call_args.args[0])
+
+        # Test player cap
+        self.g.players = {i: f"P{i}" for i in range(game.MAX_PLAYERS)}
+        q_overflow = await self.button("j", 999, "Overflow")
+        self.assertNotIn(999, self.g.players)
+        self.assertIn("переполнен", q_overflow.answer.call_args.args[0])
+
+    async def test_only_host_can_select_catastrophe(self):
+        # Non-host attempt
+        await self.button("c:zombie", 2, "Player 2")
+        self.assertEqual(self.g.catastrophe, "nuclear")
+
+        # Host selects catastrophe
+        q = await self.button("c:zombie", 1, "Host")
+        self.assertEqual(self.g.catastrophe, "zombie")
+        self.assertIn("Кордицепс", q.answer.call_args.args[0])
+
+        # Check callback data lengths in keyboard
+        keyboard = self.quiz.lobby_keyboard(self.g)
         for row in keyboard.inline_keyboard:
             for b in row:
                 self.assertTrue(b.callback_data.endswith(self.g.session))
-                self.assertLess(len(b.callback_data.encode()),65)
+                self.assertLess(len(b.callback_data.encode("utf-8")), 65)
 
-    async def test_answers_reject_deadline_duplicates_and_invalid_options(self):
-        self.g.state='question';self.g.index=0
-        self.g.questions=[('Q',['a','b','c','d'],0,'')]
-        self.g.asked_at=time.monotonic()-game.MODES['classic'][2]-1
-        await self.button('a:0:0')
-        self.assertEqual(self.g.answers,{})
-        self.g.asked_at=time.monotonic()
-        for action in ('a:0:9','a:0:-1','a:-1:0','a:8:0','a:no:0'):
-            await self.button(action)
-        self.assertEqual(self.g.answers,{})
-        await self.button('a:0:2')
-        await self.button('a:0:1')
-        self.assertEqual(self.g.answers[1][0],2)
+    async def test_start_double_click_protection(self):
+        self.quiz._play = AsyncMock()
 
-    async def test_player_cap(self):
-        self.g.players={i:str(i) for i in range(game.MAX_PLAYERS)}
-        await self.button('j',999)
-        self.assertNotIn(999,self.g.players)
+        # Non-host cannot start
+        await self.button("s", 2, "Player 2")
+        self.quiz._play.assert_not_called()
 
-    async def test_modes_have_complete_fallback_and_distinct_rules(self):
-        for mode,(_,count,seconds,_) in game.MODES.items():
-            self.g.mode=mode
-            questions=await self.quiz._questions(self.g)
-            self.assertEqual(len(questions),count)
-            self.assertTrue(all(len(q[1])==4 and 0<=q[2]<4 for q in questions))
-        self.assertEqual(game.points_for('calm',35,0,3),game.points_for('calm',35,34,1))
-        self.assertGreater(game.points_for('blitz',10,1,1),game.points_for('blitz',10,9,1))
-        self.assertEqual(game.points_for('classic',20,1,3)-game.points_for('classic',20,1,2),200)
-
-    async def test_start_double_click_runs_one_game(self):
-        self.quiz._play=AsyncMock()
-        await asyncio.gather(self.button('s'),self.button('s'))
+        # Host double click
+        await asyncio.gather(self.button("s", 1, "Host"), self.button("s", 1, "Host"))
         await asyncio.sleep(0)
         self.quiz._play.assert_awaited_once()
 
-    async def test_tied_nonzero_scores_award_both_players(self):
-        self.g.players={1:'A',2:'B',3:'C'};self.g.scores={1:1000,2:1000,3:0}
-        bot=NS(send_animation=AsyncMock())
-        with patch('game.asyncio.to_thread',new=AsyncMock(return_value=(b'clip',b'preview'))):
-            await self.quiz._finish(bot,self.g)
-        rows=self.db.execute('SELECT user_id,wins FROM game_scores ORDER BY user_id').fetchall()
-        self.assertEqual(rows,[(1,1),(2,1),(3,0)])
-        self.assertIn('Ничья',bot.send_animation.call_args.kwargs['caption'])
+    async def test_character_generation_and_cards(self):
+        c = game.Character(10, "Tester")
+        self.assertEqual(c.user_id, 10)
+        self.assertEqual(c.name, "Tester")
+        self.assertTrue(c.alive)
 
-    async def test_missed_question_resets_streak_and_supports_text_cards(self):
-        self.g.state='question';self.g.index=0;self.g.streak={1:2}
-        self.g.questions=[('Q',['a','b','c','d'],0,'Fact')]
-        future=asyncio.get_running_loop().create_future();future.set_result(None)
-        self.g.clips=[future]
-        message=NS(edit_text=AsyncMock())
-        bot=NS(send_message=AsyncMock(return_value=message))
-        with patch.dict(game.MODES,classic=('Classic',1,.001,'')),patch('game.asyncio.sleep',new=AsyncMock()):
-            await self.quiz._ask(bot,self.g)
-        self.assertEqual(self.g.streak[1],0)
-        self.assertIn(self.g.session,str(bot.send_message.call_args.kwargs['reply_markup']))
-        message.edit_text.assert_awaited_once()
-        self.assertEqual(self.g.state,"reveal")
-        self.g.asked_at=time.monotonic()
-        await self.button("a:0:0")
-        self.assertEqual(self.g.answers,{})
+        # Check all fields exist
+        self.assertTrue(len(c.profession) > 0)
+        self.assertTrue(len(c.biology) > 0)
+        self.assertTrue(len(c.health) > 0)
+        self.assertTrue(len(c.hobby) > 0)
+        self.assertTrue(len(c.phobia) > 0)
+        self.assertTrue(len(c.baggage) > 0)
 
-if __name__=='__main__':unittest.main()
+        # Check card texts
+        r1 = c.card_round_1()
+        self.assertIn(c.profession, r1)
+        self.assertIn(c.biology, r1)
+
+        r2 = c.card_round_2()
+        self.assertIn(c.health, r2)
+        self.assertIn(c.hobby, r2)
+
+        full = c.full_card()
+        for field in (c.profession, c.biology, c.health, c.hobby, c.phobia, c.baggage):
+            self.assertIn(field, full)
+
+    async def test_voting_and_elimination(self):
+        c1 = game.Character(1, "Host")
+        c2 = game.Character(2, "Player 2")
+        c3 = game.Character(3, "Player 3")
+        self.g.characters = {1: c1, 2: c2, 3: c3}
+        self.g.state = "voting"
+        self.g.votes = {}
+
+        # Dead player cannot vote
+        c_dead = game.Character(4, "Dead")
+        c_dead.alive = False
+        self.g.characters[4] = c_dead
+        q_dead = await self.button("v:1", 4, "Dead")
+        self.assertIn("только живые", q_dead.answer.call_args.args[0].lower())
+        del self.g.characters[4]
+
+        # Self-voting is prohibited
+        q_self = self.query(f"g:v:1:{self.g.session}")
+        await self.quiz.on_button(q_self, NS(id=1), "Host", NS())
+        self.assertIn("против самого себя", q_self.answer.call_args.args[0].lower())
+
+        # Start voting round in background task
+        bot = NS(send_message=AsyncMock(return_value=NS(edit_text=AsyncMock(), edit_reply_markup=AsyncMock())))
+        alive = [c for c in self.g.characters.values() if c.alive]
+        vote_task = asyncio.create_task(self.quiz._run_voting_round(bot, self.g, alive, 1))
+        await asyncio.sleep(0.01)
+
+        # Player 1 votes to exile Player 2
+        q1 = self.query(f"g:v:2:{self.g.session}")
+        await self.quiz.on_button(q1, NS(id=1), "Host", NS())
+        self.assertEqual(self.g.votes[1], 2)
+        self.assertIn("голос принят", q1.answer.call_args.args[0].lower())
+
+        # Player 3 votes to exile Player 2
+        q3 = self.query(f"g:v:2:{self.g.session}")
+        await self.quiz.on_button(q3, NS(id=3), "Player 3", NS())
+        self.assertEqual(self.g.votes[3], 2)
+
+        # Player 2 votes to exile Player 1 (all alive players voted -> wakes up round)
+        q2 = self.query(f"g:v:1:{self.g.session}")
+        await self.quiz.on_button(q2, NS(id=2), "Player 2", NS())
+        self.assertTrue(self.g.voted_event.is_set())
+
+        # Target elimination calculation
+        exiled = await asyncio.wait_for(vote_task, timeout=2.0)
+        self.assertEqual(exiled.user_id, 2)
+        exiled.alive = False
+        self.assertFalse(c2.alive)
+
+    async def test_stop_game_permissions(self):
+        bot = NS(send_message=AsyncMock())
+        # Non-admin non-host cannot stop
+        res = await self.quiz.stop(bot, -1, 2, is_admin=False)
+        self.assertIn("только ведущий", res.lower())
+        self.assertNotEqual(self.g.state, "done")
+
+        # Host can stop
+        res_host = await self.quiz.stop(bot, -1, 1, is_admin=False)
+        self.assertIn("остановлен", res_host.lower())
+        self.assertEqual(self.g.state, "done")
+
+    async def test_epilogue_and_database_scoring(self):
+        c1 = game.Character(1, "Alice")
+        c2 = game.Character(2, "Bob")
+        c1.alive = True
+        c2.alive = False
+        self.g.characters = {1: c1, 2: c2}
+
+        bot = NS(send_message=AsyncMock())
+        await self.quiz._finish(bot, self.g)
+
+        # Check database scores
+        rows = self.db.execute(
+            "SELECT user_id, points, wins, games FROM game_scores ORDER BY user_id"
+        ).fetchall()
+        self.assertEqual(len(rows), 2)
+        # Alice won: 1500 points, 1 win, 1 game
+        self.assertEqual(rows[0], (1, 1500, 1, 1))
+        # Bob lost/exiled: 300 points, 0 wins, 1 game
+        self.assertEqual(rows[1], (2, 300, 0, 1))
+
+        # Check top leaderboard output
+        await self.quiz.top(bot, -1, "Test Chat")
+        bot.send_message.assert_awaited()
+        call_text = bot.send_message.call_args.args[1]
+        self.assertIn("ТОП ВЫЖИВШИХ", call_text)
+        self.assertIn("Alice", call_text)
+        self.assertIn("1500 очков", call_text)
+
+
+if __name__ == "__main__":
+    unittest.main()
