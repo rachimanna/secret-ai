@@ -31,6 +31,13 @@ def target(message):
     document = getattr(parent, 'document', None)
     if document and not (getattr(document, 'mime_type', '') or '').startswith('image/'):
         return None
+    # Media messages without an explicit quote are not text edit targets.
+    if (getattr(parent, 'photo', None) or getattr(parent, 'animation', None) or
+            getattr(parent, 'sticker', None) or getattr(parent, 'video', None) or
+            getattr(parent, 'video_note', None) or getattr(parent, 'voice', None) or
+            getattr(parent, 'audio', None) or
+            (document and (getattr(document, 'mime_type', '') or '').startswith('image/'))):
+        return None
     text = getattr(parent, 'text', None) or getattr(parent, 'caption', None)
     return (text if isinstance(text, str) and text.strip() else None), 'message'
 

@@ -2898,16 +2898,25 @@ async def read_question(update, context, daily_input=False):
         focused = reply_context.prepare(message, question)
         if focused:
             return focused
-    image = message.photo[-1] if message.photo else message.document
+    parent_photo = parent.photo[-1] if parent and getattr(parent, "photo", None) and len(parent.photo) else None
+    parent_doc = parent.document if parent and getattr(parent, "document", None) and (getattr(parent.document, "mime_type", "") or "").startswith("image/") else None
+    image = (message.photo[-1] if message.photo else message.document) or parent_photo or parent_doc
     if image:
-        if (image.file_size or 0) > 19_000_000:
-            raise ValueError("photo_limit")
-        mime = getattr(image, "mime_type", None) or "image/jpeg"
-        remote = await image.get_file()
-        raw = await remote.download_as_bytearray()
-        encoded = base64.b64encode(raw).decode("ascii")
-        content = [{"type": "input_text", "text": question}, {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}"}]
-        return question, content, PHOTO_MARKER + question
+        try:
+            if (image.file_size or 0) > 19_000_000:
+                raise ValueError("photo_limit")
+            mime = getattr(image, "mime_type", None) or "image/jpeg"
+            remote = await image.get_file()
+            raw = await remote.download_as_bytearray()
+            encoded = base64.b64encode(raw).decode("ascii")
+            caption_prefix = f"[Подпись к фото: {parent.caption}]\n" if parent and getattr(parent, "caption", None) and not message.photo and parent.caption not in question else ""
+            text_prompt = f"{caption_prefix}{question}".strip()
+            content = [{"type": "input_text", "text": text_prompt}, {"type": "input_image", "image_url": f"data:{mime};base64,{encoded}"}]
+            return question, content, PHOTO_MARKER + question
+        except Exception as exc:
+            if not parent_photo and not parent_doc:
+                raise
+            LOG.warning("Could not download parent image in reply: %s", exc)
     url = links.find(question)
     if url and not daily_input:  # a TikTok link: watch it first, then answer about it
         return await read_tiktok(update, context, question, url)

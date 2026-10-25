@@ -162,3 +162,19 @@ class ReplyContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(replies.prepare(msg, 'короче'))
         msg.reply_to_message = NS(text='x' * 16001, document=None)
         self.assertIsNone(json.loads(replies.prepare(msg, 'короче')[1])['target'])
+
+    def test_media_replies_do_not_produce_null_text_target(self):
+        msg = message(target=None)
+        msg.reply_to_message.photo = [NS(file_id='photo1')]
+        self.assertIsNone(replies.target(msg))
+
+        msg_gif = message(target=None)
+        msg_gif.reply_to_message.animation = NS(file_id='gif1')
+        self.assertIsNone(replies.target(msg_gif))
+
+        msg_stk = message(target=None)
+        msg_stk.reply_to_message.sticker = NS(file_id='stk1')
+        self.assertIsNone(replies.target(msg_stk))
+
+        msg.quote = NS(text='Цитата из подписи')
+        self.assertEqual(replies.target(msg)[0], 'Цитата из подписи')
