@@ -1233,9 +1233,9 @@ FAST_PROVIDERS = {"groq": "https://api.groq.com/openai/v1", "cerebras": "https:/
 
 
 def gateway_enabled(name):
-    """The Oxion trial is paused by default, even if its key remains on the server."""
+    """Oxion AI is active when its key is present, unless explicitly disabled with OXIONAI_ENABLED=0."""
     return bool(os.environ.get(f"{name.upper()}_API_KEY", "").strip()) and (
-        name != "oxionai" or os.environ.get("OXIONAI_ENABLED", "0").strip() == "1")
+        name != "oxionai" or os.environ.get("OXIONAI_ENABLED", "1").strip() != "0")
 
 FAST_PICK = (r"gpt-oss-120b", r"qwen-?3.*(235|480)", r"llama-?4.*maverick", r"llama-?3\.3-70b", r"gpt-oss-20b")
 OPUS = ANYMODEL_PREFIX + "cc/claude-opus-4-6"  # the default model when ANYMODEL_API_KEY is set (CHAT_MODEL env overrides)
