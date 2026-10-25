@@ -3256,10 +3256,13 @@ async def respond(update, context, target, content, saved_question, voice=False)
             await send(target, note)
         memory.append_turn(user_id, saved_question, (partial[:12000] + " [stopped by the user]").strip())
         return
-    except BaseException:
+    except BaseException as exc:
         if paid:
             memory.gen_refund(user_id, "credits", price)
-        await live.abort(ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted."))
+        is_maint = any(x in str(exc).lower() for x in ("service_upgrading", "maintenance", "503"))
+        msg = ui(update, "⚠️ На сервере модели сейчас идут технические работы. Пожалуйста, повторите запрос через пару минут.",
+                 "⚠️ The AI provider is currently undergoing maintenance. Please retry in a few minutes.") if is_maint else ui(update, "⚠️ Ответ прерван.", "⚠️ The answer was interrupted.")
+        await live.abort(msg)
         raise
     answer = keep_language(clean_chat_text(drop_accent(answer.strip())), saved_question)
     if not answer and toolbox and toolbox.proposals:
