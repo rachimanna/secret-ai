@@ -69,6 +69,7 @@ import message_guard
 import extensions
 import miniapp
 import persist
+import richtext
 import secretary as sec
 import speech
 import welcome
@@ -97,7 +98,10 @@ SYSTEM = (
     "just offered ideas, options or a list and the user answers «скучно», «не то», «фигня», «ну такое», «ещё», «другое», "
     "they are judging YOUR offer, so give fresher, bolder options on the same topic instead of starting a new one; "
     "only treat it as a new topic when it clearly is one, and if it could mean both, ask in a few words. "
-    "Reply in plain text, without Markdown formatting (no **bold**, no # headings). "
+    "Small talk and short answers stay plain conversational text. Structure longer answers so they read well in "
+    "Telegram, sparingly: **bold** for the key point or a short heading line, '- ' bullets for steps and options, "
+    "`code` for commands and names, '> ' for a quote, [words](link) instead of bare long links. No tables, no '#' "
+    "headings, never bold whole sentences. "
     "For ordinary replies, use no emoji by default. If one adds meaning, use at most one per reply, "
     "never in every sentence or between words. Do not copy emoji density from conversation history or emoji catalogs. "
     "When the user explicitly requests emoji content, provide it as requested. "
@@ -245,8 +249,9 @@ def counted(handler):
     return run
 
 TYPING_INTERVAL = 4.5
-# Native drafts (sendMessageDraft) animate smoothly and are not limited like edits.
-DRAFT_INTERVAL = 0.3
+# Native drafts (sendMessageDraft) animate smoothly and are not limited like edits: small, frequent steps read as
+# smooth typing (a RetryAfter just pauses the loop).
+DRAFT_INTERVAL = 0.2
 # A draft disappears after 30 seconds without updates.
 DRAFT_KEEPALIVE = 10
 MAX_TOOL_ROUNDS = 12
@@ -675,6 +680,28 @@ async def send(message, text, reply_markup=None):
         await reply(message, part, reply_markup if index == len(parts) - 1 else None)
 
 
+def formatted(text, partial=False):
+    """The model's Markdown as (text, entities): bold, lists, quotes, code, links, plus the owner's premium emoji
+    outside code (Telegram shows code as it is)."""
+    plain, entities = richtext.render(text, partial)
+    code = [(e.offset, e.offset + e.length) for e in entities if e.type in (MessageEntity.CODE, MessageEntity.PRE)]
+    entities += [e for e in premium_entities(plain) if not any(start <= e.offset < end for start, end in code)]
+    return plain, entities or None
+
+
+async def rich_reply(message, text, reply_markup=None):
+    plain, entities = formatted(text)
+    if not plain.strip():
+        plain, entities = text, None
+    return await reply(message, plain, reply_markup, entities=entities)
+
+
+async def rich_send(message, text, reply_markup=None):
+    parts = list(chunks(text))
+    for index, part in enumerate(parts):
+        await rich_reply(message, part, reply_markup if index == len(parts) - 1 else None)
+
+
 def lang(update):
     return "ru" if (update.effective_user.language_code or "ru").startswith("ru") else "en"
 
@@ -826,12 +853,12 @@ class LiveReply:
                 return
             for index, part in enumerate(parts):
                 last = index == len(parts) - 1
-                shown = part if final or not last else part + CURSOR
+                shown, entities = formatted(part if final or not last else part + CURSOR, partial=not final)
                 markup = reply_markup if final and last else None
                 if index < len(self.messages):
-                    await self._edit(index, shown, markup, retries=2 if final else 0)
+                    await self._edit(index, shown, markup, retries=2 if final else 0, entities=entities)
                 else:
-                    self.messages.append(await reply(self.target, shown, markup))
+                    self.messages.append(await reply(self.target, shown, markup, entities=entities))
                     self.shown.append(shown)
             if final and len(self.messages) > len(parts):
                 # The final text can be shorter than the streamed one (code went to files): remove the leftovers.
@@ -903,6 +930,15 @@ class DraftReply:
                                           api_kwargs=STOP_BUTTON)
         self.shown, self.pushed = text, time.monotonic()
 
+    async def _push_formatted(self, text):
+        """The answer so far already formatted (bold, lists, code…), so nothing jumps when the message lands."""
+        plain, entities = formatted(text, partial=True)
+        if not plain.strip():
+            return
+        await self.bot.send_message_draft(self.chat_id, self.draft_id, plain, entities=entities,
+                                          api_kwargs=STOP_BUTTON)
+        self.shown, self.pushed = text, time.monotonic()
+
     def frame(self):
         """"✨ Думаю · 5с" with the steps done; a plain emoji: custom emoji can make Telegram refuse the draft."""
         return thinking_frame(self.language, self.config["logo"], self.started, note=self.note, done=self.done)
@@ -961,7 +997,7 @@ class DraftReply:
         # Commit full Telegram-sized parts as real messages and keep drafting the rest.
         while (cut := split_point(pending)) < len(pending):
             if pending[:cut].strip():
-                self.sent.append(await reply(self.target, pending[:cut]))
+                self.sent.append(await rich_reply(self.target, pending[:cut]))
             self.offset += cut
             self.revealed = 0
             pending = self.text[self.offset:]
@@ -971,7 +1007,7 @@ class DraftReply:
         if self.note and self.revealed == len(pending):
             shown = shown.rstrip() + f"\n\n{self.config['logo']} {self.note}…"
         if shown.strip() and (shown != self.shown or time.monotonic() - self.pushed > DRAFT_KEEPALIVE):
-            await self._push(shown)
+            await self._push_formatted(shown)
 
     async def _loop(self):
         while not self.closed:
@@ -1007,7 +1043,7 @@ class DraftReply:
             return self.sent[-1]
         await self._clear()
         for index, part in enumerate(parts):
-            self.sent.append(await reply(self.target, part, reply_markup if index == len(parts) - 1 else None))
+            self.sent.append(await rich_reply(self.target, part, reply_markup if index == len(parts) - 1 else None))
         return self.sent[-1]
 
     async def _clear(self):
@@ -1027,7 +1063,7 @@ class DraftReply:
             rest = self.text[self.offset:].rstrip()
             await self._clear()
             if rest:
-                await send(self.target, rest + "\n\n" + note)
+                await rich_send(self.target, rest + "\n\n" + note)
         except TelegramError:
             LOG.warning("Could not clean up an interrupted reply")
 
@@ -1102,7 +1138,7 @@ class SilentReply:
         parts = list(chunks(text)) or ["…"]
         last = None
         for index, part in enumerate(parts):
-            last = await reply(self.target, part, reply_markup if index == len(parts) - 1 else None)
+            last = await rich_reply(self.target, part, reply_markup if index == len(parts) - 1 else None)
         return last
 
     async def abort(self, note):
