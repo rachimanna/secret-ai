@@ -3324,7 +3324,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
         except Exception as exc:  # no voice: the answer still arrives, as text
             LOG.warning("Voice answer failed: %s", type(exc).__name__)
         voice = False
-    last = await live.finish(text or ui(update, "📎 Готово — файлы ниже.", "📎 Done — the files are below."))
+    buttons = None if files or (toolbox and toolbox.proposals) else answer_keyboard(context.bot_data, user_id, lang(update), text)
+    last = await live.finish(text or ui(update, "📎 Готово — файлы ниже.", "📎 Done — the files are below."), reply_markup=buttons)
     context.bot_data["last_answer"][user_id] = last.message_id
     await send_files(update, context, target, files)
     answer = text
@@ -3336,6 +3337,66 @@ async def respond(update, context, target, content, saved_question, voice=False)
         task.add_done_callback(tasks.discard)
     if toolbox:
         await show_proposals(update, context, toolbox, target)
+
+
+# ----- buttons under a longer answer: shorter, more detail, translated, read aloud -----
+ANSWER_BUTTONS_MIN = 280  # characters: a short reply needs no "shorter"
+ANSWER_ACTIONS_KEPT = 200
+ANSWER_ASKS = {
+    "s": ("Короче", "Shorter", "Перескажи этот свой ответ намного короче: только главное, 2–5 предложений.",
+          "Rewrite this answer of yours much shorter: only the essentials, 2-5 sentences."),
+    "m": ("Подробнее", "More detail", "Раскрой этот свой ответ подробнее: объяснения, примеры, конкретные шаги.",
+          "Expand this answer of yours: explanations, examples, concrete steps."),
+    "t": ("Перевести", "Translate", "Переведи этот свой ответ на английский язык, сохранив оформление.",
+          "Translate this answer of yours into Russian, keeping its formatting."),
+}
+
+
+def answer_keyboard(data, user_id, language, text):
+    if len(text or "") < ANSWER_BUTTONS_MIN:
+        return None
+    kept = data.setdefault("answer_actions", {})
+    token = secrets.token_hex(4)
+    kept[token] = {"user_id": user_id, "text": text, "language": language}
+    for old in list(kept)[:-ANSWER_ACTIONS_KEPT]:
+        del kept[old]
+    ru = language == "ru"
+    row = [InlineKeyboardButton(("✂️ " if key == "s" else "➕ " if key == "m" else "🌐 ") + (labels[0] if ru else labels[1]),
+                                callback_data=f"ans:{key}:{token}") for key, labels in ANSWER_ASKS.items()]
+    rows = [row[:2], row[2:]]
+    if data.get("tts_model"):
+        rows[1].append(InlineKeyboardButton("🔊 Озвучить" if ru else "🔊 Read aloud", callback_data=f"ans:v:{token}"))
+    return InlineKeyboardMarkup(rows)
+
+
+async def answer_button(update, context, query):
+    data = context.bot_data
+    _, action, token = (query.data.split(":") + ["", ""])[:3]
+    item = data.get("answer_actions", {}).get(token)
+    ru = lang(update) == "ru"
+    if not item or item["user_id"] != update.effective_user.id:
+        await query.answer("Этот ответ уже старый — спросите заново." if ru else "This answer is too old — ask again.")
+        return
+    target = query.message
+    if action == "v":
+        if not data.get("tts_model"):
+            await query.answer("Озвучка сейчас не настроена." if ru else "Voice isn't set up right now.")
+            return
+        await query.answer("Записываю голосовое…" if ru else "Recording…")
+        task = asyncio.create_task(voice_reply(update, context, target, item["text"]))
+        tasks = data.setdefault("voice_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        return
+    if action not in ANSWER_ASKS:
+        await query.answer()
+        return
+    label_ru, label_en, ask_ru, ask_en = ANSWER_ASKS[action]
+    await query.answer(label_ru + "…" if ru else label_en + "…")
+    ask = ask_ru if item["language"] == "ru" else ask_en
+    content = f"{ask}\n\n---\n{item['text'][:12000]}"
+    async with user_lock(context, update.effective_user.id):
+        await respond(update, context, target, content, f"[{label_ru if ru else label_en}]")
 
 
 async def send_files(update, context, target, files):
@@ -5525,6 +5586,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if (query.data or "").startswith(music.PREFIX):
         await music.handle_callback(update, context)
+        return
+    if (query.data or "").startswith("ans:") and await authorized(update, context):
+        await answer_button(update, context, query)
         return
     if (query.data or "").startswith("ph:"):  # a picture's buttons: only its owner, also in groups
         await photo_button(update, context, query)
