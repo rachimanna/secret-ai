@@ -5194,15 +5194,17 @@ async def generation_job(app, job):
                 if images:
                     raise  # an edit can't fall back to drawing from scratch
                 image = await free_image(data["http"], await english_prompt(data, job["prompt"]), job["fmt"], data.get("cloudflare"))
-            await bot.send_photo(chat, InputFile(image, filename="secret-ai.jpg"), caption=caption, **answer)
+            await bot.send_photo(chat, InputFile(image, filename="secret-ai.jpg"), caption=caption,
+                                 reply_markup=photo_keyboard(data, job, image=image), **answer)
         elif kind == "photo":
             prompt = await english_prompt(data, job["prompt"])
             if job["model"] == "free":
                 image = await free_image(data["http"], prompt, job["fmt"], data.get("cloudflare"))
-                await bot.send_photo(chat, InputFile(image, filename="secret-ai.jpg"), caption=caption, **answer)
+                await bot.send_photo(chat, InputFile(image, filename="secret-ai.jpg"), caption=caption,
+                                     reply_markup=photo_keyboard(data, job, image=image), **answer)
             else:
                 url = await fal_generate(data["http"], job["key"], job["model"], "photo", prompt, job["fmt"])
-                await send_media(bot, data["http"], chat, "photo", url, caption)
+                await send_media(bot, data["http"], chat, "photo", url, caption, photo_keyboard(data, job, url=url))
         else:
             provider = video_provider(job["model"])
             video = await (make_free_video(data, job) if provider == "free" else make_video(data, job) if provider == "fal"
@@ -5236,19 +5238,103 @@ async def generation_job(app, job):
                 pass
 
 
-async def send_media(bot, http, chat_id, kind, url, caption):
+async def send_media(bot, http, chat_id, kind, url, caption, reply_markup=None):
     """Send by URL; if Telegram can't fetch it, download and upload the file."""
     send = bot.send_photo if kind == "photo" else bot.send_video
     field = "photo" if kind == "photo" else "video"
     try:
-        await send(chat_id, **{field: url}, caption=caption)
+        await send(chat_id, **{field: url}, caption=caption, reply_markup=reply_markup)
         return
     except BadRequest:
         pass
     response = await http.get(url, timeout=120)
     response.raise_for_status()
     name = "secret-ai.png" if kind == "photo" else "secret-ai.mp4"
-    await send(chat_id, **{field: InputFile(response.content, filename=name)}, caption=caption)
+    await send(chat_id, **{field: InputFile(response.content, filename=name)}, caption=caption, reply_markup=reply_markup)
+
+
+# ----- buttons under a finished picture: another take, the original file, a living picture -----
+PHOTO_ACTIONS_KEPT = 40  # the latest pictures whose buttons still work (their bytes stay in memory)
+LIVING_SECONDS = 6
+
+
+def photo_keyboard(data, job, image=None, url=None):
+    """Remember the picture and give it its buttons; the person who asked for it is the one who can press them."""
+    kept = data.setdefault("photo_actions", {})
+    token = secrets.token_hex(4)
+    kept[token] = {"user_id": job["user_id"], "language": job["language"], "prompt": job["prompt"], "fmt": job["fmt"],
+                   "images": job.get("images") or [], "chat_id": job.get("chat_id") or job["user_id"],
+                   "image": image, "url": url, "busy": False}
+    for old in list(kept)[:-PHOTO_ACTIONS_KEPT]:
+        del kept[old]
+    ru = job["language"] == "ru"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔁 Ещё вариант" if ru else "🔁 Another take", callback_data=f"ph:a:{token}"),
+         InlineKeyboardButton("📎 Оригинал" if ru else "📎 Original", callback_data=f"ph:f:{token}")],
+        [InlineKeyboardButton("🎬 Оживить" if ru else "🎬 Bring to life", callback_data=f"ph:l:{token}")]])
+
+
+async def picture_bytes(data, item):
+    if not item["image"] and item["url"]:
+        response = await data["http"].get(item["url"], timeout=120)
+        response.raise_for_status()
+        item["image"] = response.content
+    return item["image"]
+
+
+async def photo_button(update, context, query):
+    data = context.bot_data
+    _, action, token = (query.data.split(":") + ["", ""])[:3]
+    item = data.get("photo_actions", {}).get(token)
+    ru = (item or {}).get("language", lang(update)) == "ru"
+    if not item:
+        await query.answer("Эта картинка уже старая — попросите новую." if ru else "This picture is too old — ask for a new one.")
+        return
+    if update.effective_user.id != item["user_id"]:
+        await query.answer("Кнопки работают у того, кто заказал картинку." if ru else "Only the person who asked can use these.")
+        return
+    chat, reply_id = item["chat_id"], query.message.message_id if query.message else None
+    if action == "a":
+        error = await start_generation(context.application, item["user_id"], item["language"], "photo", item["prompt"],
+                                       item["fmt"], images=item["images"], chat_id=chat, reply_id=reply_id)
+        texts = {None: ("Рисую ещё вариант…", "Drawing another take…"),
+                 "no_credits": ("Генерации закончились — пополнить можно в Mini App.", "No generations left — top up in the Mini App."),
+                 "duplicate": ("Этот вариант уже рисуется.", "That one is already being drawn.")}
+        shown = texts.get(error, ("Сейчас не получилось, попробуйте позже.", "Couldn't start it now, try later."))
+        await query.answer(shown[0 if ru else 1], show_alert=error not in (None, "duplicate"))
+        return
+    if item["busy"]:
+        await query.answer("Уже делаю…" if ru else "On it already…")
+        return
+    item["busy"] = True
+    await query.answer(("Отправляю файл…" if action == "f" else "Оживляю картинку, это ~30 секунд…") if ru
+                       else ("Sending the file…" if action == "f" else "Bringing it to life, ~30 seconds…"))
+    task = asyncio.create_task(photo_extra(context.bot, data, item, action, chat, reply_id))
+    jobs = data.setdefault("gen_tasks", set())
+    jobs.add(task)
+    task.add_done_callback(jobs.discard)
+
+
+async def photo_extra(bot, data, item, action, chat, reply_id):
+    """The original as a file (no Telegram compression) or a short living picture: slow zoom and pan, free."""
+    ru, answer = item["language"] == "ru", {"reply_parameters": reply_to(reply_id)}
+    try:
+        image = await picture_bytes(data, item)
+        if action == "f":
+            await bot.send_document(chat, InputFile(image, filename="secret-ai.png"), **answer)
+        else:
+            await bot.send_chat_action(chat, ChatAction.RECORD_VIDEO)
+            video = await living_picture(image, LIVING_SECONDS, item["fmt"], random.randint(0, 3))
+            await bot.send_video(chat, InputFile(video, filename="secret-ai.mp4"), supports_streaming=True, **answer)
+    except Exception as exc:
+        LOG.warning("Picture button failed: %s", type(exc).__name__)
+        try:
+            await bot.send_message(chat, "⚠️ " + ("Не получилось, попробуйте ещё раз." if ru else "That didn't work, please try again."),
+                                   **answer)
+        except TelegramError:
+            pass
+    finally:
+        item["busy"] = False
 
 
 async def voice_reply(update, context, target, answer):
@@ -5439,6 +5525,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     if (query.data or "").startswith(music.PREFIX):
         await music.handle_callback(update, context)
+        return
+    if (query.data or "").startswith("ph:"):  # a picture's buttons: only its owner, also in groups
+        await photo_button(update, context, query)
         return
     if (query.data or "").startswith("g:"):  # the group quiz: anyone in the group may press
         user, allowed = update.effective_user, context.bot_data["allowed"]
