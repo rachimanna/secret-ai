@@ -69,6 +69,7 @@ import mcpbridge
 import message_guard
 import extensions
 import miniapp
+import partygames
 import persist
 import richtext
 import secretary as sec
@@ -3714,6 +3715,9 @@ async def group_chat(update, context):
     chat_id, store, name = message.chat_id, data["groups"], speaker(user)
     store.touch(chat_id, message.chat.title, user.id)
     lock = data["locks"][chat_id]
+    if message.text and data.get("party") and await data["party"].check_guess(context.bot, message, user.id, name):
+        remember_group_message(store, message, name)  # a crocodile guess: the game answers, nothing else
+        return
     if message.sticker and data.get("vision_model"):
         # Looked at once (updates run in parallel, so nobody waits): the answer and the chat's history know what it is.
         await see_sticker(context, message.sticker)
@@ -4125,6 +4129,46 @@ def quiz(context):
             return await quick_answer(data, group_model(data, chat_id), instructions, text, max_tokens=4000)
         data["quiz"] = game.Quiz(data["groups"].db, ask)
     return data["quiz"]
+
+
+def party(context):
+    """«Шпион» and «Крокодил», created on first use (they share the groups' database)."""
+    data = context.bot_data
+    if "party" not in data:
+        async def draw(prompt):
+            return await free_image(data["http"], prompt, "square", data.get("cloudflare"))
+        data["party"] = partygames.PartyGames(data["groups"].db, draw)
+    return data["party"]
+
+
+async def party_command(update, context):
+    """/spy, /croc and /games_top: party games for groups."""
+    message, user = update.effective_message, update.effective_user
+    if not message or not user or (context.bot_data["allowed"] and user.id not in context.bot_data["allowed"]):
+        return
+    command = (message.text or "").split()[0].lstrip("/").split("@")[0].lower()
+    if message.chat.type == "private":
+        await reply(message, ui(update, "Игры «Шпион» и «Крокодил» — для групп 🎲 Добавь меня в группу и напиши там "
+                                        f"/{partygames.SPY} или /{partygames.CROC}",
+                                f"«Spy» and «Crocodile» are group games 🎲 Add me to a group and send /{partygames.SPY} "
+                                f"or /{partygames.CROC} there"))
+        return
+    games = party(context)
+    if command == partygames.CROC:
+        await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
+        if not await games.open_croc(context.bot, message.chat_id):
+            await message.reply_text("🐊 Картинка уже на экране — угадывайте!")
+    elif command == partygames.TOP:
+        await games.top(context.bot, message.chat_id, message.chat.title or "Группа")
+    elif command == partygames.SPY_STOP:
+        try:
+            member = await context.bot.get_chat_member(message.chat_id, user.id)
+            is_admin = member.status in ("administrator", "creator")
+        except TelegramError:
+            is_admin = False
+        await message.reply_text(games.stop_spy(message.chat_id, user.id, is_admin))
+    else:
+        await games.open_spy(context.bot, message, user.id, speaker(user))
 
 
 def day_digest(data):
@@ -5782,6 +5826,17 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (query.data or "").startswith("ph:"):  # a picture's buttons: only its owner, also in groups
         await photo_button(update, context, query)
         return
+    if (query.data or "").startswith(("s:", "c:")):  # «Шпион» and «Крокодил»: anyone in the group may press
+        user, allowed = update.effective_user, context.bot_data["allowed"]
+        if allowed and user.id not in allowed:
+            await query.answer()
+            return
+        if query.data.startswith("s:"):
+            await party(context).on_spy_button(query, user, speaker(user), context.bot)
+        else:
+            await query.answer("Рисую новую картинку…")
+            await party(context).open_croc(context.bot, query.message.chat_id)
+        return
     if (query.data or "").startswith("g:"):  # the group quiz: anyone in the group may press
         user, allowed = update.effective_user, context.bot_data["allowed"]
         if allowed and user.id not in allowed:  # the same people the bot answers in groups
@@ -6131,6 +6186,8 @@ async def post_init(app):
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
         group = [BotCommand(game.START, "🛡️ AI-Бункер: ролевая игра на выживание"),
                  BotCommand(game.RATING, "🏆 Топ выживших в бункере"), BotCommand(game.STOP, "⏹ Остановить игру в бункер"),
+                 BotCommand(partygames.SPY, "🕵️ Шпион: найдите чужака"), BotCommand(partygames.CROC, "🐊 Крокодил: угадай рисунок"),
+                 BotCommand(partygames.TOP, "🏆 Рейтинг игр"),
                  BotCommand(digest.COMMAND, "📊 Итоги дня"),
                  BotCommand("serial", "🎬 Сериал про ваш чат"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
@@ -6139,6 +6196,8 @@ async def post_init(app):
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
         await app.bot.set_my_commands([BotCommand(game.START, "🛡️ AI Bunker: survival role-play game"),
                                        BotCommand(game.RATING, "🏆 Bunker survivors leaderboard"), BotCommand(game.STOP, "⏹ Stop the bunker game"),
+                                       BotCommand(partygames.SPY, "🕵️ Spy: find the outsider"), BotCommand(partygames.CROC, "🐊 Crocodile: guess the drawing"),
+                                       BotCommand(partygames.TOP, "🏆 Games leaderboard"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
                                        BotCommand("serial", "🎬 Your group sitcom"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
@@ -7009,6 +7068,7 @@ def main():
     # Unusual names on purpose: other bots in a group react to /game, /quiz and /top too.
     app.add_handler(CommandHandler([game.START, "bunker", "game", "sgame", "svik"], game_command))
     app.add_handler(CommandHandler([game.RATING, "bunker_top", "btop", "stop10", "srating"], top_command))
+    app.add_handler(CommandHandler([partygames.SPY, partygames.SPY_STOP, partygames.CROC, partygames.TOP], party_command))
     app.add_handler(CommandHandler([game.STOP, "bunker_stop", "bstop", "sstop"], stop_game_command))
     app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
     app.add_handler(CommandHandler("serial", serial_command))
