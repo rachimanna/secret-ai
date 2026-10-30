@@ -14,6 +14,7 @@ import sqlite3
 import tempfile
 import time
 import traceback
+import urllib.parse
 from types import SimpleNamespace
 from collections import defaultdict
 from http.server import ThreadingHTTPServer
@@ -300,6 +301,10 @@ class Memory:
                         "max_uses INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, expires INTEGER, created INTEGER NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS promo_uses (code TEXT NOT NULL, user_id INTEGER NOT NULL, at INTEGER NOT NULL, "
                         "PRIMARY KEY (code, user_id))")
+        # Invited friends: each person can be brought once, by one referrer.
+        self.db.execute("CREATE TABLE IF NOT EXISTS referrals (user_id INTEGER PRIMARY KEY, referrer INTEGER NOT NULL, "
+                        "at INTEGER NOT NULL)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS referrals_by_referrer ON referrals(referrer, at)")
         self.db.commit()
         self.workbench = workbench.Store(self.db)
         self.daily = daily.Store(self.db)
@@ -477,6 +482,26 @@ class Memory:
                 self.db.execute("UPDATE gen_credits SET credits=credits-? WHERE user_id=?", (cost, user_id))
                 return "credits"
         return None
+
+    def add_referral(self, user_id, referrer, credits):
+        """Count a new person brought by referrer and give both of them credits; False if it doesn't count (oneself,
+        someone who already talked to the bot or was already brought, or the referrer's daily limit)."""
+        now = int(time.time())
+        with self.db:
+            if user_id == referrer or self.db.execute(
+                    "SELECT 1 FROM messages WHERE user_id=? UNION SELECT 1 FROM referrals WHERE user_id=?",
+                    (user_id, user_id)).fetchone():
+                return False
+            today = self.db.execute("SELECT COUNT(*) FROM referrals WHERE referrer=? AND at>?", (referrer, now - 86400)).fetchone()[0]
+            if today >= REFERRALS_PER_DAY:
+                return False
+            self.db.execute("INSERT INTO referrals(user_id, referrer, at) VALUES (?, ?, ?)", (user_id, referrer, now))
+            self._add_credits(user_id, credits)
+            self._add_credits(referrer, credits)
+        return True
+
+    def referral_count(self, referrer):
+        return self.db.execute("SELECT COUNT(*) FROM referrals WHERE referrer=?", (referrer,)).fetchone()[0]
 
     def gen_refund(self, user_id, how, cost):
         with self.db:
@@ -2113,11 +2138,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await inline_help(update, context)
         return
     store, user_id = context.bot_data["connections"], update.effective_user.id
+    invited = re.fullmatch(r"ref_([0-9]{1,15})", context.args[0]) if context.args else None
+    if invited and not store.get_meta(f"welcomed:{user_id}"):
+        await accept_invite(update, context, int(invited.group(1)))
     if not store.get_meta(f"welcomed:{user_id}"):
         await send_welcome(context, update.effective_message, user_id)
     # The video note already says hi; the full list of features is one command away.
     await send(update.effective_message, ui(update, "Если хотите ознакомиться с моими функциями, напишите /help",
                                             "To see what I can do, send /help"))
+
+
+# ----- invite friends: a personal link, credits for both when a new person comes -----
+REFERRAL_CREDITS = 3  # each side; a picture costs 1
+REFERRALS_PER_DAY = 20  # per referrer: a farm of fake accounts stops quickly
+
+
+def invite_link(data, user_id):
+    return f"https://t.me/{data.get('bot_name') or 'bot'}?start=ref_{user_id}"
+
+
+async def accept_invite(update, context, referrer):
+    user_id, memory = update.effective_user.id, context.bot_data["memory"]
+    if not memory.add_referral(user_id, referrer, REFERRAL_CREDITS):
+        return
+    await send(update.effective_message, ui(update, f"🎁 Вас пригласил друг — держите +{REFERRAL_CREDITS} кредита на картинки и видео.",
+                                            f"🎁 A friend invited you — here are +{REFERRAL_CREDITS} credits for pictures and videos."))
+    try:
+        await context.bot.send_message(referrer, f"🎉 По вашей ссылке пришёл новый человек! +{REFERRAL_CREDITS} кредита. "
+                                                 f"Всего приглашено: {memory.referral_count(referrer)}. Ссылка — /invite")
+    except TelegramError:
+        pass
+
+
+async def invite_command(update, context):
+    """/invite: the personal link, a share button and how many came."""
+    if not await authorized(update, context):
+        return
+    data, user_id = context.bot_data, update.effective_user.id
+    link, count = invite_link(data, user_id), data["memory"].referral_count(user_id)
+    share = "https://t.me/share/url?" + urllib.parse.urlencode(
+        {"url": link, "text": ui(update, "Попробуй Secret AI — умный бот в Telegram", "Try Secret AI — a smart Telegram bot")})
+    text = ui(update, f"🎁 Приглашайте друзей\n\nЗа каждого нового человека по вашей ссылке вы оба получите "
+                      f"+{REFERRAL_CREDITS} кредита на картинки и видео.\n\nВаша ссылка:\n{link}\n\nУже пришло: {count}",
+              f"🎁 Invite friends\n\nFor every new person who comes by your link you both get +{REFERRAL_CREDITS} credits "
+              f"for pictures and videos.\n\nYour link:\n{link}\n\nJoined so far: {count}")
+    await reply(update.effective_message, text, InlineKeyboardMarkup(
+        [[InlineKeyboardButton(ui(update, "📤 Поделиться", "📤 Share"), url=share)]]))
 
 
 async def prepare_welcome(app):
@@ -5903,9 +5969,9 @@ def error_text(error):
 
 COMMANDS = {
     "ru": [("life", "Мой день: дела из сообщений"), ("tasks", "Мои задачи"), ("plan", "План дня"), ("review", "Итоги дня"), ("inbox", "Собрать входящие"), ("project", "Проекты и файлы"), ("files", "Мои документы"), ("find", "Поиск по документам"), ("compare", "Сравнить файлы"), ("report", "Отчёт в Word"), ("diagnose", "Разобрать ошибки"), ("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
-           ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
+           ("export", "Скачать историю"), ("invite", "Пригласить друзей"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
     "en": [("life", "My day assistant"), ("tasks", "My tasks"), ("plan", "Daily plan"), ("review", "Daily review"), ("inbox", "Collect inbox"), ("project", "Projects and files"), ("files", "My documents"), ("find", "Search documents"), ("compare", "Compare files"), ("report", "Word report"), ("diagnose", "Diagnose errors"), ("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
-           ("export", "Download history"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
+           ("export", "Download history"), ("invite", "Invite friends"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
 
@@ -6868,6 +6934,7 @@ def main():
     app.add_handler(CommandHandler("mode", mode))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
+    app.add_handler(CommandHandler("invite", invite_command))
     app.add_handler(CommandHandler("myid", myid))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("emoji", emoji_command))
