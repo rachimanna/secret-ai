@@ -79,7 +79,7 @@ from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, ANYMODEL_FISH, fish_speech, fish_voice_id, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, voice_message, abacus_image, openai_image, free_image, join_with_voice, living_picture, upscale, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
+                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, voice_message, abacus_image, openai_image, free_image, join_with_voice, living_picture, upscale, cut_out, sticker_png, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (GITHUB_TOOLS, Connections, GitHub, GitHubError, Toolbox, apply_change, delete_repos, describe,
                           describe_deletion, prune_pending)
 
@@ -3342,6 +3342,7 @@ async def respond(update, context, target, content, saved_question, voice=False)
         toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                           apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
                                                          edit_tool(context, user_id, lang(update)), upscale_tool(context, user_id, lang(update)),
+                                                         sticker_tool(context, update.effective_user, lang(update)),
                                                          cancel_tool(context, user_id)] + skill_tools)
         if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
             toolbox.mcp = []
@@ -5561,6 +5562,86 @@ async def upscale_job(bot, data, user_id, language, photo):
         try:
             await bot.send_message(user_id, "⚠️ " + ("Не получилось сделать 4K, попробуйте ещё раз." if language == "ru"
                                                     else "Couldn't make it 4K, please try again."))
+        except TelegramError:
+            pass
+
+
+STICKER_TOOL = {"type": "function", "name": "make_sticker",
+                "description": ("Turn the user's latest photo into a Telegram sticker and add it to their own sticker pack "
+                                "(background cut out when possible). Use it when they ask for a sticker from a photo. The sticker "
+                                "and the pack link arrive in the chat by themselves."),
+                "parameters": {"type": "object", "properties": {
+                    "emoji": {"type": "string", "description": "one emoji that fits the photo's mood, e.g. 😂"}},
+                    "additionalProperties": False}}
+STICKERS_PER_PACK = 120
+
+
+def sticker_pack_name(user_id, bot_name):
+    return f"u{user_id}_by_{bot_name}"
+
+
+def sticker_tool(context, user, language):
+    data = context.bot_data
+
+    async def run(args):
+        fresh = [photo for photo, at in data.get("recent_photos", {}).get(user.id, []) if time.time() - at < RECENT_PHOTOS_SECONDS]
+        if not fresh:
+            return "No recent photo. Ask the user to send the photo first, then repeat the request."
+        emoji = (args.get("emoji") or "").strip()
+        emoji = emoji if emoji and emoji_lib.is_emoji(emoji) else "😀"
+        task = asyncio.create_task(sticker_job(context.application.bot, data, user, language, fresh[-1], emoji))
+        jobs = data.setdefault("gen_tasks", set())
+        jobs.add(task)
+        task.add_done_callback(jobs.discard)
+        return "Started. The sticker and the pack link arrive in the chat by themselves in about 20 seconds; tell the user briefly."
+
+    return {"definition": STICKER_TOOL, "run": run, "status": ("Делаю стикер", "Making a sticker"),
+            "hint": "make_sticker turns the user's photo into a sticker in their own pack."}
+
+
+async def sticker_job(bot, data, user, language, photo, emoji):
+    """Cut the photo out (one generation on the fal key, refunded if the cut fails), add it to the person's pack
+    (created on the first sticker) and send it with the pack link."""
+    ru, user_id = language == "ru", user.id
+    key = gen_settings(data)[0]
+    owner = data["connections"].get_meta("owner") == user_id
+    how = "owner" if owner or not key else data["memory"].gen_charge(user_id, "photo", COST["photo"])
+    if not how:
+        key, how = "", "owner"  # nothing left to pay with: a sticker from the whole photo is still free
+    try:
+        await bot.send_chat_action(user_id, ChatAction.CHOOSE_STICKER)
+        image = (await photo_bytes(bot, [photo]))[0]
+        cut_image, cut = await cut_out(data["http"], key, image)
+        if not cut and how != "owner":
+            data["memory"].gen_refund(user_id, how, COST["photo"])
+            how = "owner"
+        png = await asyncio.to_thread(sticker_png, cut_image, cut)
+        name = sticker_pack_name(user_id, data.get("bot_name") or (await bot.get_me()).username)
+        sticker = InputSticker(InputFile(png, filename="sticker.png"), [emoji], format="static")
+        try:
+            await bot.add_sticker_to_set(user_id, name, sticker)
+        except BadRequest as exc:
+            if "invalid" not in str(exc).lower() and "not found" not in str(exc).lower():
+                raise
+            title = (f"Стикеры {user.first_name or ''}" if ru else f"{user.first_name or 'My'} stickers").strip()[:50] + " · Secret AI"
+            await bot.create_new_sticker_set(user_id, name, title, [sticker])
+        pack = await bot.get_sticker_set(name)
+        await bot.send_sticker(user_id, pack.stickers[-1].file_id)
+        link = f"https://t.me/addstickers/{name}"
+        await bot.send_message(user_id, (f"✨ Стикер готов и лежит в вашем паке ({len(pack.stickers)} шт.)" if ru
+                                         else f"✨ The sticker is in your pack ({len(pack.stickers)} so far)"),
+                               reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                                   "➕ Добавить пак в Telegram" if ru else "➕ Add the pack to Telegram", url=link)]]))
+    except Exception as exc:
+        if how != "owner":
+            data["memory"].gen_refund(user_id, how, COST["photo"])
+        full = isinstance(exc, BadRequest) and "too much" in str(exc).lower().replace("_", " ")
+        LOG.warning("Sticker failed: %s", type(exc).__name__)
+        try:
+            await bot.send_message(user_id, "⚠️ " + (
+                (f"В паке уже {STICKERS_PER_PACK} стикеров — это максимум Telegram." if full else "Не получилось сделать стикер, попробуйте ещё раз.")
+                if ru else (f"The pack already has {STICKERS_PER_PACK} stickers, Telegram's maximum." if full
+                            else "Couldn't make the sticker, please try again.")))
         except TelegramError:
             pass
 
