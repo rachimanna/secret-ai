@@ -903,3 +903,63 @@ async def abacus_image(client, http, model, prompt, fmt, images=None):
     if picture.status_code >= 400:
         raise MediaError("failed", f"download {picture.status_code}")
     return picture.content
+
+
+# ---------- 4K: a photo made bigger, with AI-drawn detail on a fal key or a careful resize without one ----------
+
+UPSCALE_MODEL = "fal-ai/aura-sr"  # 4x super-resolution, a fraction of a cent per picture
+UPSCALE_SIDE = 3840  # the long side of a 4K picture
+UPSCALE_MAX_PIXELS = 40_000_000  # what a phone can still open
+
+
+def _resize_4k(image):
+    """Blocking: Lanczos up to 4K (at most 4x) with gentle sharpening; JPEG so Telegram takes the file quickly."""
+    import io
+
+    from PIL import Image, ImageFilter, ImageOps
+
+    with Image.open(io.BytesIO(image)) as source:
+        picture = ImageOps.exif_transpose(source).convert("RGB")
+    picture = _fit_4k(picture, Image.LANCZOS)
+    picture = picture.filter(ImageFilter.UnsharpMask(radius=1.6, percent=70, threshold=2))
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=93, subsampling=0, optimize=True)
+    return out.getvalue()
+
+
+def _fit_4k(picture, method):
+    longest = max(picture.size)
+    scale = min(4.0, UPSCALE_SIDE / longest) if longest else 1.0
+    size = (max(1, round(picture.width * scale)), max(1, round(picture.height * scale)))
+    while size[0] * size[1] > UPSCALE_MAX_PIXELS:
+        size = (size[0] * 9 // 10, size[1] * 9 // 10)
+    return picture.resize(size, method) if size != picture.size else picture
+
+
+def _normalize(image):
+    """Blocking: the AI result brought to the 4K long side (AuraSR always makes 4x) as a high-quality JPEG."""
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(image)) as source:
+        picture = _fit_4k(source.convert("RGB"), Image.LANCZOS)
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=94, subsampling=0, optimize=True)
+    return out.getvalue()
+
+
+async def upscale(http, key, image):
+    """(bytes, "ai" or "resize"): the picture at 4K. With a fal key AuraSR draws real detail; any failure there (or no
+    key) falls back to the careful resize, so the person always gets a bigger picture."""
+    if key:
+        try:
+            data_uri = "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii")
+            url = await fal_run(http, key, UPSCALE_MODEL, {"image_url": data_uri, "upscaling_factor": 4}, TIMEOUTS["photo"])
+            result = await http.get(url, timeout=180, follow_redirects=True)
+            if result.status_code < 400:
+                return await asyncio.to_thread(_normalize, result.content), "ai"
+            LOG.warning("4K: downloading the result failed (%s); resizing instead", result.status_code)
+        except MediaError as exc:
+            LOG.warning("4K with %s failed (%s); resizing instead", UPSCALE_MODEL, exc.code)
+    return await asyncio.to_thread(_resize_4k, image), "resize"

@@ -77,7 +77,7 @@ from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, ANYMODEL_FISH, fish_speech, fish_voice_id, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, voice_message, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
+                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, voice_message, abacus_image, openai_image, free_image, join_with_voice, living_picture, upscale, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (GITHUB_TOOLS, Connections, GitHub, GitHubError, Toolbox, apply_change, delete_repos, describe,
                           describe_deletion, prune_pending)
 
@@ -3225,7 +3225,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
     if not scoped_reply:
         toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                           apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
-                                                         edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)] + skill_tools)
+                                                         edit_tool(context, user_id, lang(update)), upscale_tool(context, user_id, lang(update)),
+                                                         cancel_tool(context, user_id)] + skill_tools)
         if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
             toolbox.mcp = []
     greeting = not scoped_reply and persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
@@ -5332,7 +5333,77 @@ def photo_keyboard(data, job, image=None, url=None):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔁 Ещё вариант" if ru else "🔁 Another take", callback_data=f"ph:a:{token}"),
          InlineKeyboardButton("📎 Оригинал" if ru else "📎 Original", callback_data=f"ph:f:{token}")],
-        [InlineKeyboardButton("🎬 Оживить" if ru else "🎬 Bring to life", callback_data=f"ph:l:{token}")]])
+        [InlineKeyboardButton("🔍 4K", callback_data=f"ph:u:{token}"),
+         InlineKeyboardButton("🎬 Оживить" if ru else "🎬 Bring to life", callback_data=f"ph:l:{token}")]])
+
+
+async def deliver_4k(bot, data, user_id, language, image, chat, reply_id=None):
+    """The picture at 4K as a file (a photo would be squeezed back by Telegram). AI detail with the fal key costs one
+    generation like a picture (refunded if it falls back to the plain resize); the plain resize is free."""
+    ru, answer = language == "ru", {"reply_parameters": reply_to(reply_id)}
+    key = gen_settings(data)[0]
+    owner = data["connections"].get_meta("owner") == user_id
+    how = "owner" if owner or not key else data["memory"].gen_charge(user_id, "photo", COST["photo"])
+    if not how:
+        key, how = "", "owner"  # nothing left to pay with: the free resize still gives a bigger picture
+    await bot.send_chat_action(chat, ChatAction.UPLOAD_DOCUMENT)
+    try:
+        bigger, way = await upscale(data["http"], key, image)
+    except Exception:
+        if how not in ("owner",):
+            data["memory"].gen_refund(user_id, how, COST["photo"])
+        raise
+    if way != "ai" and how != "owner":
+        data["memory"].gen_refund(user_id, how, COST["photo"])
+    width, height = await asyncio.to_thread(image_size, bigger)
+    note = ("ИИ дорисовал детали" if way == "ai" else "увеличено с сохранением резкости") if ru else (
+        "AI-enhanced detail" if way == "ai" else "carefully enlarged")
+    await bot.send_document(chat, InputFile(bigger, filename=f"secret-ai-4k-{width}x{height}.jpg"),
+                            caption=f"🔍 4K · {width}×{height} · {note}", **answer)
+
+
+def image_size(image):
+    from PIL import Image
+    with Image.open(io.BytesIO(image)) as picture:
+        return picture.size
+
+
+UPSCALE_TOOL = {"type": "function", "name": "upscale_photo",
+                "description": ("Make the user's latest photo bigger and sharper, up to 4K, and send it as a file. Use it when "
+                                "they ask to upscale, enlarge, improve the quality or resolution, make it 4K/HD/sharper — not "
+                                "to change what is in the photo (that is edit_photos). The file arrives in the chat by itself."),
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}
+
+
+def upscale_tool(context, user_id, language):
+    data = context.bot_data
+
+    async def run(args):
+        fresh = [photo for photo, at in data.get("recent_photos", {}).get(user_id, []) if time.time() - at < RECENT_PHOTOS_SECONDS]
+        if not fresh:
+            return "No recent photo. Ask the user to send the photo first, then repeat the request."
+        bot = context.application.bot
+        task = asyncio.create_task(upscale_job(bot, data, user_id, language, fresh[-1]))
+        jobs = data.setdefault("gen_tasks", set())
+        jobs.add(task)
+        task.add_done_callback(jobs.discard)
+        return "Started. The 4K file arrives in the chat by itself within a minute; tell the user briefly."
+
+    return {"definition": UPSCALE_TOOL, "run": run, "status": ("Делаю 4K", "Making it 4K"),
+            "hint": "upscale_photo makes the user's photo 4K (bigger and sharper)."}
+
+
+async def upscale_job(bot, data, user_id, language, photo):
+    try:
+        image = (await photo_bytes(bot, [photo]))[0]
+        await deliver_4k(bot, data, user_id, language, image, user_id)
+    except Exception as exc:
+        LOG.warning("4K failed: %s", type(exc).__name__)
+        try:
+            await bot.send_message(user_id, "⚠️ " + ("Не получилось сделать 4K, попробуйте ещё раз." if language == "ru"
+                                                    else "Couldn't make it 4K, please try again."))
+        except TelegramError:
+            pass
 
 
 async def picture_bytes(data, item):
@@ -5368,8 +5439,9 @@ async def photo_button(update, context, query):
         await query.answer("Уже делаю…" if ru else "On it already…")
         return
     item["busy"] = True
-    await query.answer(("Отправляю файл…" if action == "f" else "Оживляю картинку, это ~30 секунд…") if ru
-                       else ("Sending the file…" if action == "f" else "Bringing it to life, ~30 seconds…"))
+    notes = {"f": ("Отправляю файл…", "Sending the file…"), "u": ("Делаю 4K, это до минуты…", "Making it 4K, up to a minute…"),
+             "l": ("Оживляю картинку, это ~30 секунд…", "Bringing it to life, ~30 seconds…")}
+    await query.answer(notes.get(action, notes["l"])[0 if ru else 1])
     task = asyncio.create_task(photo_extra(context.bot, data, item, action, chat, reply_id))
     jobs = data.setdefault("gen_tasks", set())
     jobs.add(task)
@@ -5383,6 +5455,8 @@ async def photo_extra(bot, data, item, action, chat, reply_id):
         image = await picture_bytes(data, item)
         if action == "f":
             await bot.send_document(chat, InputFile(image, filename="secret-ai.png"), **answer)
+        elif action == "u":
+            await deliver_4k(bot, data, item["user_id"], item["language"], image, chat, reply_id)
         else:
             await bot.send_chat_action(chat, ChatAction.RECORD_VIDEO)
             video = await living_picture(image, LIVING_SECONDS, item["fmt"], random.randint(0, 3))
