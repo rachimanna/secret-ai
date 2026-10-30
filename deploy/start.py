@@ -6,6 +6,7 @@ import urllib.parse;exec(urllib.request.urlopen("https://raw.githubusercontent.c
 It brings the bot's code from GitHub (git when available, else a zip), installs requirements, makes a .env template
 on the first run and starts bot.py — which then keeps itself updated (hosting.py).
 """
+import base64
 import io
 import os
 import shutil
@@ -24,23 +25,35 @@ def say(text):
 
 
 def git(*args):
-    return subprocess.run(["git", *args], cwd=HOME, capture_output=True, text=True)
+    header = ["-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {auth()}"] if auth() else []
+    return subprocess.run(["git", *header, *args], cwd=HOME, capture_output=True, text=True)
 
 
-def branch():
-    """UPDATE_BRANCH from .env: the main bot can run "stable" while a test bot tries "main"."""
-    configured = os.environ.get("UPDATE_BRANCH", "").strip()
+def setting(name):
+    """A setting from the environment or, on the panel, from .env (the bot itself is not running yet)."""
+    configured = os.environ.get(name, "").strip()
     if configured:
         return configured
     try:
         with open(os.path.join(HOME, ".env"), encoding="utf-8") as env:
             for line in env:
-                name, _, value = line.strip().partition("=")
-                if name.strip() == "UPDATE_BRANCH" and value.strip().strip("\"'"):
+                key, _, value = line.strip().partition("=")
+                if key.strip().removeprefix("export ").strip() == name and value.strip().strip("\"'"):
                     return value.strip().strip("\"'")
     except OSError:
         pass
-    return "main"
+    return ""
+
+
+def branch():
+    """UPDATE_BRANCH from .env: the main bot can run "stable" while a test bot tries "main"."""
+    return setting("UPDATE_BRANCH") or "main"
+
+
+def auth():
+    """GITHUB_REPO_TOKEN from .env for a private repo: sent as a header, never written into .git/config."""
+    token = setting("GITHUB_REPO_TOKEN")
+    return base64.b64encode(f"x-access-token:{token}".encode()).decode() if token else ""
 
 
 def fetch_code():
@@ -57,7 +70,12 @@ def fetch_code():
             return
         say("git fetch failed, downloading a zip instead")
     wanted = branch()
-    data = urllib.request.urlopen(REPO + "/archive/refs/heads/" + urllib.parse.quote(wanted, safe="") + ".zip", timeout=120).read()
+    if auth():  # a private repo: its archive comes from the API, with the token
+        url = "https://api.github.com/repos/" + REPO.split("github.com/")[1] + "/zipball/" + urllib.parse.quote(wanted, safe="")
+        request = urllib.request.Request(url, headers={"Authorization": "Basic " + auth()})
+    else:
+        request = REPO + "/archive/refs/heads/" + urllib.parse.quote(wanted, safe="") + ".zip"
+    data = urllib.request.urlopen(request, timeout=120).read()
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         prefix = archive.namelist()[0].split("/")[0] + "/"
         for name in archive.namelist():

@@ -4,9 +4,11 @@
 - the HTTP port is the one the panel gives (SERVER_PORT);
 - the Mini App needs HTTPS, which such hosts don't give: a free Cloudflare tunnel provides it (a random
   *.trycloudflare.com address on each start, or your own domain with TUNNEL_TOKEN + PUBLIC_URL);
-- the bot updates itself from GitHub: every few minutes it checks main, pulls and restarts in place.
+- the bot updates itself from GitHub: every few minutes it checks main, pulls and restarts in place
+  (a private repo needs GITHUB_REPO_TOKEN: a fine-grained token with Contents read-only).
 """
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -199,8 +201,18 @@ def stop_tunnel():
             _tunnel.kill()
 
 
+def _git_auth():
+    """With GITHUB_REPO_TOKEN in .env (a read-only token for a private repo), git sends it to github.com as a header:
+    it never lands in .git/config or in the remote's address."""
+    token = os.environ.get("GITHUB_REPO_TOKEN", "").strip()
+    if not token:
+        return []
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return ["-c", f"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic}"]
+
+
 def _git(*args, timeout=120):
-    return subprocess.run(["git", *args], cwd=HERE, capture_output=True, text=True, timeout=timeout)
+    return subprocess.run(["git", *_git_auth(), *args], cwd=HERE, capture_output=True, text=True, timeout=timeout)
 
 
 STARTED = time.time()

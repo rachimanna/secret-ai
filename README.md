@@ -416,7 +416,7 @@ SQLite хранит последние 300 сообщений (примерно 
 
 ## Хостинг для ботов (h1cloud и другие панели Pterodactyl)
 
-Без Docker и root. Настройки бот берёт из файла `.env` рядом с `bot.py` (образец — `deploy/env.example`). Порт — тот, что даёт панель (`SERVER_PORT`). HTTPS для Mini App делает бесплатный туннель Cloudflare: `cloudflared` скачивается сам, адрес `*.trycloudflare.com` меняется при каждом запуске, бот сам ставит его в кнопку меню. Для постоянного адреса задайте `TUNNEL_TOKEN` и `PUBLIC_URL` своего туннеля. Обновления: раз в 5 минут бот проверяет `main` на GitHub, подтягивает изменения, при необходимости ставит новые зависимости и перезапускается сам (`SELF_UPDATE=0` — выключить).
+Без Docker и root. Настройки бот берёт из файла `.env` рядом с `bot.py` (образец — `deploy/env.example`). Порт — тот, что даёт панель (`SERVER_PORT`). HTTPS для Mini App делает бесплатный туннель Cloudflare: `cloudflared` скачивается сам, адрес `*.trycloudflare.com` меняется при каждом запуске, бот сам ставит его в кнопку меню. Для постоянного адреса задайте `TUNNEL_TOKEN` и `PUBLIC_URL` своего туннеля. Обновления: раз в 5 минут бот проверяет `main` на GitHub, подтягивает изменения, при необходимости ставит новые зависимости и перезапускается сам (`SELF_UPDATE=0` — выключить). Если репозиторий приватный, впишите в `.env` `GITHUB_REPO_TOKEN` — fine-grained токен только на этот репозиторий с правом Contents: Read-only; git передаёт его в заголовке и не сохраняет в `.git/config`.
 
 В панели: Startup → Git Repo `https://github.com/rachimanna/secret-ai.git`, ветка `main`, Auto Update `1`, файл `bot.py`, requirements `requirements.txt`; затем Reinstall (папка сервера должна быть пустой) и `.env` во вкладке «Файлы».
 
