@@ -14,6 +14,7 @@ import sqlite3
 import tempfile
 import time
 import traceback
+import urllib.parse
 from types import SimpleNamespace
 from collections import defaultdict
 from http.server import ThreadingHTTPServer
@@ -68,6 +69,7 @@ import mcpbridge
 import message_guard
 import extensions
 import miniapp
+import partygames
 import persist
 import richtext
 import secretary as sec
@@ -77,7 +79,7 @@ from apps import Pipedream, PipedreamError
 from github_app import GitHubApps
 from mcp_oauth import DirectApps, MCPAuthError
 from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLING_API, KLING_DIRECT, KLING_SECONDS, kling_generate, ANYMODEL_API, ANYMODEL_PREFIX, ANYMODEL_SECONDS, ANYMODEL_VIDEO, anymodel_generate, anymodel_speech, anymodel_voice_id, anymodel_voices, ANYMODEL_VOICE, ANYMODEL_FISH, fish_speech, fish_voice_id, HF_SPACES, space_video, fit_clip, FREE_PHOTOS_PER_DAY, MAX_PROMPT, OLD_PHOTO_DEFAULTS, OLD_VIDEO_DEFAULTS, PACKS, SCENE_SECONDS,
-                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, voice_message, abacus_image, openai_image, free_image, join_with_voice, living_picture, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
+                   VIDEO_PRICES, MediaError, OPENAI_IMAGE, voice_message, abacus_image, openai_image, free_image, join_with_voice, living_picture, upscale, cut_out, sticker_png, fal_generate, fal_sound, hf_generate, montage, price, veo_generate, video_provider)
 from integrations import (GITHUB_TOOLS, Connections, GitHub, GitHubError, Toolbox, apply_change, delete_repos, describe,
                           describe_deletion, prune_pending)
 
@@ -300,6 +302,10 @@ class Memory:
                         "max_uses INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, expires INTEGER, created INTEGER NOT NULL)")
         self.db.execute("CREATE TABLE IF NOT EXISTS promo_uses (code TEXT NOT NULL, user_id INTEGER NOT NULL, at INTEGER NOT NULL, "
                         "PRIMARY KEY (code, user_id))")
+        # Invited friends: each person can be brought once, by one referrer.
+        self.db.execute("CREATE TABLE IF NOT EXISTS referrals (user_id INTEGER PRIMARY KEY, referrer INTEGER NOT NULL, "
+                        "at INTEGER NOT NULL)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS referrals_by_referrer ON referrals(referrer, at)")
         self.db.commit()
         self.workbench = workbench.Store(self.db)
         self.daily = daily.Store(self.db)
@@ -477,6 +483,26 @@ class Memory:
                 self.db.execute("UPDATE gen_credits SET credits=credits-? WHERE user_id=?", (cost, user_id))
                 return "credits"
         return None
+
+    def add_referral(self, user_id, referrer, credits):
+        """Count a new person brought by referrer and give both of them credits; False if it doesn't count (oneself,
+        someone who already talked to the bot or was already brought, or the referrer's daily limit)."""
+        now = int(time.time())
+        with self.db:
+            if user_id == referrer or self.db.execute(
+                    "SELECT 1 FROM messages WHERE user_id=? UNION SELECT 1 FROM referrals WHERE user_id=?",
+                    (user_id, user_id)).fetchone():
+                return False
+            today = self.db.execute("SELECT COUNT(*) FROM referrals WHERE referrer=? AND at>?", (referrer, now - 86400)).fetchone()[0]
+            if today >= REFERRALS_PER_DAY:
+                return False
+            self.db.execute("INSERT INTO referrals(user_id, referrer, at) VALUES (?, ?, ?)", (user_id, referrer, now))
+            self._add_credits(user_id, credits)
+            self._add_credits(referrer, credits)
+        return True
+
+    def referral_count(self, referrer):
+        return self.db.execute("SELECT COUNT(*) FROM referrals WHERE referrer=?", (referrer,)).fetchone()[0]
 
     def gen_refund(self, user_id, how, cost):
         with self.db:
@@ -2059,6 +2085,10 @@ HELP_RU = (
     "Добавьте меня в группу: отвечаю на reply и на @упоминание, помню чат, иногда сам кидаю мемы, цитаты и демотиваторы. "
     "В группе: /q — цитата (ответом на сообщение), /dem — демотиватор, /meme — мем из TikTok.\n\n"
     "Музыка: напиши «найди песню название и исполнитель» в личке или группе — выбери вариант и получи полный аудиофайл.\n\n"
+    "Фото: пришли снимок и напиши «сделай 4K» — получишь файл в высоком качестве, или «сделай стикер» — он попадёт "
+    "в твой личный стикерпак. Под нарисованными картинками есть кнопки: ещё вариант, оригинал, 4K и «оживить».\n\n"
+    "Игры в группе: /spy — «Шпион», /croc — «Крокодил» по картинке, /bunker — AI-Бункер, /games_top — рейтинг.\n\n"
+    "/invite — пригласить друзей: вам обоим бонусные кредиты\n"
     "/mode — режим: ассистент, программист, переводчик, креатив\n"
     "/reset — очистить память\n"
     "/export — скачать историю диалога\n"
@@ -2082,6 +2112,10 @@ HELP_EN = (
     "Add me to a group: I answer replies and @mentions, remember the chat and sometimes post memes, quotes and demotivators. "
     "In a group: /q — quote (reply to a message), /dem — demotivator, /meme — a TikTok meme.\n\n"
     "Music: write “find song title and artist” privately or in a group, then select a result to receive the full audio.\n\n"
+    "Photos: send a photo and write “make it 4K” for a high-quality file, or “make a sticker” to add it to your own "
+    "sticker pack. Drawn pictures have buttons: another take, original, 4K and “bring to life”.\n\n"
+    "Group games: /spy — Spy, /croc — Crocodile with pictures, /bunker — AI Bunker, /games_top — leaderboard.\n\n"
+    "/invite — invite friends: bonus credits for both of you\n"
     "/mode — mode: assistant, coder, translator, creative\n"
     "/reset — clear memory\n"
     "/export — download the conversation\n"
@@ -2113,11 +2147,52 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await inline_help(update, context)
         return
     store, user_id = context.bot_data["connections"], update.effective_user.id
+    invited = re.fullmatch(r"ref_([0-9]{1,15})", context.args[0]) if context.args else None
+    if invited and not store.get_meta(f"welcomed:{user_id}"):
+        await accept_invite(update, context, int(invited.group(1)))
     if not store.get_meta(f"welcomed:{user_id}"):
         await send_welcome(context, update.effective_message, user_id)
     # The video note already says hi; the full list of features is one command away.
     await send(update.effective_message, ui(update, "Если хотите ознакомиться с моими функциями, напишите /help",
                                             "To see what I can do, send /help"))
+
+
+# ----- invite friends: a personal link, credits for both when a new person comes -----
+REFERRAL_CREDITS = 3  # each side; a picture costs 1
+REFERRALS_PER_DAY = 20  # per referrer: a farm of fake accounts stops quickly
+
+
+def invite_link(data, user_id):
+    return f"https://t.me/{data.get('bot_name') or 'bot'}?start=ref_{user_id}"
+
+
+async def accept_invite(update, context, referrer):
+    user_id, memory = update.effective_user.id, context.bot_data["memory"]
+    if not memory.add_referral(user_id, referrer, REFERRAL_CREDITS):
+        return
+    await send(update.effective_message, ui(update, f"🎁 Вас пригласил друг — держите +{REFERRAL_CREDITS} кредита на картинки и видео.",
+                                            f"🎁 A friend invited you — here are +{REFERRAL_CREDITS} credits for pictures and videos."))
+    try:
+        await context.bot.send_message(referrer, f"🎉 По вашей ссылке пришёл новый человек! +{REFERRAL_CREDITS} кредита. "
+                                                 f"Всего приглашено: {memory.referral_count(referrer)}. Ссылка — /invite")
+    except TelegramError:
+        pass
+
+
+async def invite_command(update, context):
+    """/invite: the personal link, a share button and how many came."""
+    if not await authorized(update, context):
+        return
+    data, user_id = context.bot_data, update.effective_user.id
+    link, count = invite_link(data, user_id), data["memory"].referral_count(user_id)
+    share = "https://t.me/share/url?" + urllib.parse.urlencode(
+        {"url": link, "text": ui(update, "Попробуй Secret AI — умный бот в Telegram", "Try Secret AI — a smart Telegram bot")})
+    text = ui(update, f"🎁 Приглашайте друзей\n\nЗа каждого нового человека по вашей ссылке вы оба получите "
+                      f"+{REFERRAL_CREDITS} кредита на картинки и видео.\n\nВаша ссылка:\n{link}\n\nУже пришло: {count}",
+              f"🎁 Invite friends\n\nFor every new person who comes by your link you both get +{REFERRAL_CREDITS} credits "
+              f"for pictures and videos.\n\nYour link:\n{link}\n\nJoined so far: {count}")
+    await reply(update.effective_message, text, InlineKeyboardMarkup(
+        [[InlineKeyboardButton(ui(update, "📤 Поделиться", "📤 Share"), url=share)]]))
 
 
 async def prepare_welcome(app):
@@ -2723,6 +2798,55 @@ async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                "своих сообщениях и на кнопках.\n\nУже знаю: " + known + "\n\n/emoji reset — вернуть обычные.")
 
 
+# ----- the owner's numbers: people, activity, groups, money; counts only, nobody's messages -----
+
+def owner_stats(data, now=None):
+    now = int(now or time.time())
+    day, week = now - 86400, now - 7 * 86400
+    db, groups = data["memory"].db, data["groups"].db
+    one = lambda sql, args=(): db.execute(sql, args).fetchone()[0] or 0
+    firsts = "SELECT user_id, MIN(created) AS first FROM messages WHERE role='user' AND created IS NOT NULL GROUP BY user_id"
+    top = groups.execute(
+        "SELECT COALESCE(NULLIF(i.title, ''), 'группа ' || m.chat_id), COUNT(*) FROM group_messages m "
+        "LEFT JOIN group_info i USING(chat_id) WHERE m.created>? GROUP BY m.chat_id ORDER BY 2 DESC LIMIT 5", (week,)).fetchall()
+    return {
+        "users": one("SELECT COUNT(*) FROM (SELECT user_id FROM messages UNION SELECT user_id FROM settings)"),
+        "new_week": one(f"SELECT COUNT(*) FROM ({firsts}) WHERE first>?", (week,)),
+        "active_day": one("SELECT COUNT(DISTINCT user_id) FROM messages WHERE role='user' AND created>?", (day,)),
+        "active_week": one("SELECT COUNT(DISTINCT user_id) FROM messages WHERE role='user' AND created>?", (week,)),
+        "messages_week": one("SELECT COUNT(*) FROM messages WHERE role='user' AND created>?", (week,)),
+        "groups": groups.execute("SELECT COUNT(*) FROM group_info").fetchone()[0] or 0,
+        "groups_active": groups.execute("SELECT COUNT(DISTINCT chat_id) FROM group_messages WHERE created>?", (week,)).fetchone()[0] or 0,
+        "top_groups": [{"title": title, "messages": count} for title, count in top],
+        "pictures_today": one("SELECT SUM(photos) FROM gen_daily WHERE day=?", (time.strftime("%Y-%m-%d", time.gmtime(now)),)),
+        "stars": one("SELECT SUM(stars) FROM gen_payments"),
+        "payments": one("SELECT COUNT(*) FROM gen_payments"),
+        "invited": one("SELECT COUNT(*) FROM referrals"),
+    }
+
+
+def stats_text(stats):
+    groups = "\n".join(f"{i}. {item['title'][:40]} · {item['messages']}" for i, item in enumerate(stats["top_groups"], 1))
+    return (f"📊 **Статистика Secret AI**\n\n"
+            f"**Люди**\n- всего: {stats['users']}\n- новых за неделю: {stats['new_week']}\n"
+            f"- активных за сутки: {stats['active_day']} · за неделю: {stats['active_week']}\n"
+            f"- сообщений за неделю: {stats['messages_week']}\n- пришли по приглашению: {stats['invited']}\n\n"
+            f"**Группы**\n- всего: {stats['groups']} · активных за неделю: {stats['groups_active']}\n"
+            + (f"\nСамые живые за неделю:\n{groups}\n" if groups else "") +
+            f"\n**Генерации и оплаты**\n- бесплатных картинок сегодня: {stats['pictures_today']}\n"
+            f"- оплат: {stats['payments']} · звёзд: {stats['stars']} ⭐")
+
+
+async def stats_command(update, context):
+    """/stats: only for the owner."""
+    if not await authorized(update, context):
+        return
+    if context.bot_data["connections"].get_meta("owner") != update.effective_user.id:
+        await send(update.effective_message, ui(update, "Статистика доступна только владельцу бота.", "Only the bot owner can see stats."))
+        return
+    await rich_reply(update.effective_message, stats_text(owner_stats(context.bot_data)))
+
+
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await authorized(update, context):
         await send(update.effective_message, f"Telegram ID: {update.effective_user.id}")
@@ -3225,7 +3349,9 @@ async def respond(update, context, target, content, saved_question, voice=False)
     if not scoped_reply:
         toolbox = Toolbox(context.bot_data["http"], context.bot_data["connections"], context.bot_data["pending"], user_id, lang(update),
                           apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
-                                                         edit_tool(context, user_id, lang(update)), cancel_tool(context, user_id)] + skill_tools)
+                                                         edit_tool(context, user_id, lang(update)), upscale_tool(context, user_id, lang(update)),
+                                                         sticker_tool(context, update.effective_user, lang(update)),
+                                                         cancel_tool(context, user_id)] + skill_tools)
         if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
             toolbox.mcp = []
     greeting = not scoped_reply and persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
@@ -3324,7 +3450,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
         except Exception as exc:  # no voice: the answer still arrives, as text
             LOG.warning("Voice answer failed: %s", type(exc).__name__)
         voice = False
-    last = await live.finish(text or ui(update, "📎 Готово — файлы ниже.", "📎 Done — the files are below."))
+    buttons = None if files or (toolbox and toolbox.proposals) else answer_keyboard(context.bot_data, user_id, lang(update), text)
+    last = await live.finish(text or ui(update, "📎 Готово — файлы ниже.", "📎 Done — the files are below."), reply_markup=buttons)
     context.bot_data["last_answer"][user_id] = last.message_id
     await send_files(update, context, target, files)
     answer = text
@@ -3336,6 +3463,66 @@ async def respond(update, context, target, content, saved_question, voice=False)
         task.add_done_callback(tasks.discard)
     if toolbox:
         await show_proposals(update, context, toolbox, target)
+
+
+# ----- buttons under a longer answer: shorter, more detail, translated, read aloud -----
+ANSWER_BUTTONS_MIN = 280  # characters: a short reply needs no "shorter"
+ANSWER_ACTIONS_KEPT = 200
+ANSWER_ASKS = {
+    "s": ("Короче", "Shorter", "Перескажи этот свой ответ намного короче: только главное, 2–5 предложений.",
+          "Rewrite this answer of yours much shorter: only the essentials, 2-5 sentences."),
+    "m": ("Подробнее", "More detail", "Раскрой этот свой ответ подробнее: объяснения, примеры, конкретные шаги.",
+          "Expand this answer of yours: explanations, examples, concrete steps."),
+    "t": ("Перевести", "Translate", "Переведи этот свой ответ на английский язык, сохранив оформление.",
+          "Translate this answer of yours into Russian, keeping its formatting."),
+}
+
+
+def answer_keyboard(data, user_id, language, text):
+    if len(text or "") < ANSWER_BUTTONS_MIN:
+        return None
+    kept = data.setdefault("answer_actions", {})
+    token = secrets.token_hex(4)
+    kept[token] = {"user_id": user_id, "text": text, "language": language}
+    for old in list(kept)[:-ANSWER_ACTIONS_KEPT]:
+        del kept[old]
+    ru = language == "ru"
+    row = [InlineKeyboardButton(("✂️ " if key == "s" else "➕ " if key == "m" else "🌐 ") + (labels[0] if ru else labels[1]),
+                                callback_data=f"ans:{key}:{token}") for key, labels in ANSWER_ASKS.items()]
+    rows = [row[:2], row[2:]]
+    if data.get("tts_model"):
+        rows[1].append(InlineKeyboardButton("🔊 Озвучить" if ru else "🔊 Read aloud", callback_data=f"ans:v:{token}"))
+    return InlineKeyboardMarkup(rows)
+
+
+async def answer_button(update, context, query):
+    data = context.bot_data
+    _, action, token = (query.data.split(":") + ["", ""])[:3]
+    item = data.get("answer_actions", {}).get(token)
+    ru = lang(update) == "ru"
+    if not item or item["user_id"] != update.effective_user.id:
+        await query.answer("Этот ответ уже старый — спросите заново." if ru else "This answer is too old — ask again.")
+        return
+    target = query.message
+    if action == "v":
+        if not data.get("tts_model"):
+            await query.answer("Озвучка сейчас не настроена." if ru else "Voice isn't set up right now.")
+            return
+        await query.answer("Записываю голосовое…" if ru else "Recording…")
+        task = asyncio.create_task(voice_reply(update, context, target, item["text"]))
+        tasks = data.setdefault("voice_tasks", set())
+        tasks.add(task)
+        task.add_done_callback(tasks.discard)
+        return
+    if action not in ANSWER_ASKS:
+        await query.answer()
+        return
+    label_ru, label_en, ask_ru, ask_en = ANSWER_ASKS[action]
+    await query.answer(label_ru + "…" if ru else label_en + "…")
+    ask = ask_ru if item["language"] == "ru" else ask_en
+    content = f"{ask}\n\n---\n{item['text'][:12000]}"
+    async with user_lock(context, update.effective_user.id):
+        await respond(update, context, target, content, f"[{label_ru if ru else label_en}]")
 
 
 async def send_files(update, context, target, files):
@@ -3537,6 +3724,9 @@ async def group_chat(update, context):
     chat_id, store, name = message.chat_id, data["groups"], speaker(user)
     store.touch(chat_id, message.chat.title, user.id)
     lock = data["locks"][chat_id]
+    if message.text and data.get("party") and await data["party"].check_guess(context.bot, message, user.id, name):
+        remember_group_message(store, message, name)  # a crocodile guess: the game answers, nothing else
+        return
     if message.sticker and data.get("vision_model"):
         # Looked at once (updates run in parallel, so nobody waits): the answer and the chat's history know what it is.
         await see_sticker(context, message.sticker)
@@ -3948,6 +4138,46 @@ def quiz(context):
             return await quick_answer(data, group_model(data, chat_id), instructions, text, max_tokens=4000)
         data["quiz"] = game.Quiz(data["groups"].db, ask)
     return data["quiz"]
+
+
+def party(context):
+    """«Шпион» and «Крокодил», created on first use (they share the groups' database)."""
+    data = context.bot_data
+    if "party" not in data:
+        async def draw(prompt):
+            return await free_image(data["http"], prompt, "square", data.get("cloudflare"))
+        data["party"] = partygames.PartyGames(data["groups"].db, draw)
+    return data["party"]
+
+
+async def party_command(update, context):
+    """/spy, /croc and /games_top: party games for groups."""
+    message, user = update.effective_message, update.effective_user
+    if not message or not user or (context.bot_data["allowed"] and user.id not in context.bot_data["allowed"]):
+        return
+    command = (message.text or "").split()[0].lstrip("/").split("@")[0].lower()
+    if message.chat.type == "private":
+        await reply(message, ui(update, "Игры «Шпион» и «Крокодил» — для групп 🎲 Добавь меня в группу и напиши там "
+                                        f"/{partygames.SPY} или /{partygames.CROC}",
+                                f"«Spy» and «Crocodile» are group games 🎲 Add me to a group and send /{partygames.SPY} "
+                                f"or /{partygames.CROC} there"))
+        return
+    games = party(context)
+    if command == partygames.CROC:
+        await context.bot.send_chat_action(message.chat_id, ChatAction.UPLOAD_PHOTO)
+        if not await games.open_croc(context.bot, message.chat_id):
+            await message.reply_text("🐊 Картинка уже на экране — угадывайте!")
+    elif command == partygames.TOP:
+        await games.top(context.bot, message.chat_id, message.chat.title or "Группа")
+    elif command == partygames.SPY_STOP:
+        try:
+            member = await context.bot.get_chat_member(message.chat_id, user.id)
+            is_admin = member.status in ("administrator", "creator")
+        except TelegramError:
+            is_admin = False
+        await message.reply_text(games.stop_spy(message.chat_id, user.id, is_admin))
+    else:
+        await games.open_spy(context.bot, message, user.id, speaker(user))
 
 
 def day_digest(data):
@@ -5271,7 +5501,157 @@ def photo_keyboard(data, job, image=None, url=None):
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔁 Ещё вариант" if ru else "🔁 Another take", callback_data=f"ph:a:{token}"),
          InlineKeyboardButton("📎 Оригинал" if ru else "📎 Original", callback_data=f"ph:f:{token}")],
-        [InlineKeyboardButton("🎬 Оживить" if ru else "🎬 Bring to life", callback_data=f"ph:l:{token}")]])
+        [InlineKeyboardButton("🔍 4K", callback_data=f"ph:u:{token}"),
+         InlineKeyboardButton("🎬 Оживить" if ru else "🎬 Bring to life", callback_data=f"ph:l:{token}")]])
+
+
+async def deliver_4k(bot, data, user_id, language, image, chat, reply_id=None):
+    """The picture at 4K as a file (a photo would be squeezed back by Telegram). AI detail with the fal key costs one
+    generation like a picture (refunded if it falls back to the plain resize); the plain resize is free."""
+    ru, answer = language == "ru", {"reply_parameters": reply_to(reply_id)}
+    key = gen_settings(data)[0]
+    owner = data["connections"].get_meta("owner") == user_id
+    how = "owner" if owner or not key else data["memory"].gen_charge(user_id, "photo", COST["photo"])
+    if not how:
+        key, how = "", "owner"  # nothing left to pay with: the free resize still gives a bigger picture
+    await bot.send_chat_action(chat, ChatAction.UPLOAD_DOCUMENT)
+    try:
+        bigger, way = await upscale(data["http"], key, image)
+    except Exception:
+        if how not in ("owner",):
+            data["memory"].gen_refund(user_id, how, COST["photo"])
+        raise
+    if way != "ai" and how != "owner":
+        data["memory"].gen_refund(user_id, how, COST["photo"])
+    width, height = await asyncio.to_thread(image_size, bigger)
+    note = ("ИИ дорисовал детали" if way == "ai" else "увеличено с сохранением резкости") if ru else (
+        "AI-enhanced detail" if way == "ai" else "carefully enlarged")
+    await bot.send_document(chat, InputFile(bigger, filename=f"secret-ai-4k-{width}x{height}.jpg"),
+                            caption=f"🔍 4K · {width}×{height} · {note}", **answer)
+
+
+def image_size(image):
+    from PIL import Image
+    with Image.open(io.BytesIO(image)) as picture:
+        return picture.size
+
+
+UPSCALE_TOOL = {"type": "function", "name": "upscale_photo",
+                "description": ("Make the user's latest photo bigger and sharper, up to 4K, and send it as a file. Use it when "
+                                "they ask to upscale, enlarge, improve the quality or resolution, make it 4K/HD/sharper — not "
+                                "to change what is in the photo (that is edit_photos). The file arrives in the chat by itself."),
+                "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}
+
+
+def upscale_tool(context, user_id, language):
+    data = context.bot_data
+
+    async def run(args):
+        fresh = [photo for photo, at in data.get("recent_photos", {}).get(user_id, []) if time.time() - at < RECENT_PHOTOS_SECONDS]
+        if not fresh:
+            return "No recent photo. Ask the user to send the photo first, then repeat the request."
+        bot = context.application.bot
+        task = asyncio.create_task(upscale_job(bot, data, user_id, language, fresh[-1]))
+        jobs = data.setdefault("gen_tasks", set())
+        jobs.add(task)
+        task.add_done_callback(jobs.discard)
+        return "Started. The 4K file arrives in the chat by itself within a minute; tell the user briefly."
+
+    return {"definition": UPSCALE_TOOL, "run": run, "status": ("Делаю 4K", "Making it 4K"),
+            "hint": "upscale_photo makes the user's photo 4K (bigger and sharper)."}
+
+
+async def upscale_job(bot, data, user_id, language, photo):
+    try:
+        image = (await photo_bytes(bot, [photo]))[0]
+        await deliver_4k(bot, data, user_id, language, image, user_id)
+    except Exception as exc:
+        LOG.warning("4K failed: %s", type(exc).__name__)
+        try:
+            await bot.send_message(user_id, "⚠️ " + ("Не получилось сделать 4K, попробуйте ещё раз." if language == "ru"
+                                                    else "Couldn't make it 4K, please try again."))
+        except TelegramError:
+            pass
+
+
+STICKER_TOOL = {"type": "function", "name": "make_sticker",
+                "description": ("Turn the user's latest photo into a Telegram sticker and add it to their own sticker pack "
+                                "(background cut out when possible). Use it when they ask for a sticker from a photo. The sticker "
+                                "and the pack link arrive in the chat by themselves."),
+                "parameters": {"type": "object", "properties": {
+                    "emoji": {"type": "string", "description": "one emoji that fits the photo's mood, e.g. 😂"}},
+                    "additionalProperties": False}}
+STICKERS_PER_PACK = 120
+
+
+def sticker_pack_name(user_id, bot_name):
+    return f"u{user_id}_by_{bot_name}"
+
+
+def sticker_tool(context, user, language):
+    data = context.bot_data
+
+    async def run(args):
+        fresh = [photo for photo, at in data.get("recent_photos", {}).get(user.id, []) if time.time() - at < RECENT_PHOTOS_SECONDS]
+        if not fresh:
+            return "No recent photo. Ask the user to send the photo first, then repeat the request."
+        emoji = (args.get("emoji") or "").strip()
+        emoji = emoji if emoji and emoji_lib.is_emoji(emoji) else "😀"
+        task = asyncio.create_task(sticker_job(context.application.bot, data, user, language, fresh[-1], emoji))
+        jobs = data.setdefault("gen_tasks", set())
+        jobs.add(task)
+        task.add_done_callback(jobs.discard)
+        return "Started. The sticker and the pack link arrive in the chat by themselves in about 20 seconds; tell the user briefly."
+
+    return {"definition": STICKER_TOOL, "run": run, "status": ("Делаю стикер", "Making a sticker"),
+            "hint": "make_sticker turns the user's photo into a sticker in their own pack."}
+
+
+async def sticker_job(bot, data, user, language, photo, emoji):
+    """Cut the photo out (one generation on the fal key, refunded if the cut fails), add it to the person's pack
+    (created on the first sticker) and send it with the pack link."""
+    ru, user_id = language == "ru", user.id
+    key = gen_settings(data)[0]
+    owner = data["connections"].get_meta("owner") == user_id
+    how = "owner" if owner or not key else data["memory"].gen_charge(user_id, "photo", COST["photo"])
+    if not how:
+        key, how = "", "owner"  # nothing left to pay with: a sticker from the whole photo is still free
+    try:
+        await bot.send_chat_action(user_id, ChatAction.CHOOSE_STICKER)
+        image = (await photo_bytes(bot, [photo]))[0]
+        cut_image, cut = await cut_out(data["http"], key, image)
+        if not cut and how != "owner":
+            data["memory"].gen_refund(user_id, how, COST["photo"])
+            how = "owner"
+        png = await asyncio.to_thread(sticker_png, cut_image, cut)
+        name = sticker_pack_name(user_id, data.get("bot_name") or (await bot.get_me()).username)
+        sticker = InputSticker(InputFile(png, filename="sticker.png"), [emoji], format="static")
+        try:
+            await bot.add_sticker_to_set(user_id, name, sticker)
+        except BadRequest as exc:
+            if "invalid" not in str(exc).lower() and "not found" not in str(exc).lower():
+                raise
+            title = (f"Стикеры {user.first_name or ''}" if ru else f"{user.first_name or 'My'} stickers").strip()[:50] + " · Secret AI"
+            await bot.create_new_sticker_set(user_id, name, title, [sticker])
+        pack = await bot.get_sticker_set(name)
+        await bot.send_sticker(user_id, pack.stickers[-1].file_id)
+        link = f"https://t.me/addstickers/{name}"
+        await bot.send_message(user_id, (f"✨ Стикер готов и лежит в вашем паке ({len(pack.stickers)} шт.)" if ru
+                                         else f"✨ The sticker is in your pack ({len(pack.stickers)} so far)"),
+                               reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                                   "➕ Добавить пак в Telegram" if ru else "➕ Add the pack to Telegram", url=link)]]))
+    except Exception as exc:
+        if how != "owner":
+            data["memory"].gen_refund(user_id, how, COST["photo"])
+        full = isinstance(exc, BadRequest) and "too much" in str(exc).lower().replace("_", " ")
+        LOG.warning("Sticker failed: %s", type(exc).__name__)
+        try:
+            await bot.send_message(user_id, "⚠️ " + (
+                (f"В паке уже {STICKERS_PER_PACK} стикеров — это максимум Telegram." if full else "Не получилось сделать стикер, попробуйте ещё раз.")
+                if ru else (f"The pack already has {STICKERS_PER_PACK} stickers, Telegram's maximum." if full
+                            else "Couldn't make the sticker, please try again.")))
+        except TelegramError:
+            pass
 
 
 async def picture_bytes(data, item):
@@ -5307,8 +5687,9 @@ async def photo_button(update, context, query):
         await query.answer("Уже делаю…" if ru else "On it already…")
         return
     item["busy"] = True
-    await query.answer(("Отправляю файл…" if action == "f" else "Оживляю картинку, это ~30 секунд…") if ru
-                       else ("Sending the file…" if action == "f" else "Bringing it to life, ~30 seconds…"))
+    notes = {"f": ("Отправляю файл…", "Sending the file…"), "u": ("Делаю 4K, это до минуты…", "Making it 4K, up to a minute…"),
+             "l": ("Оживляю картинку, это ~30 секунд…", "Bringing it to life, ~30 seconds…")}
+    await query.answer(notes.get(action, notes["l"])[0 if ru else 1])
     task = asyncio.create_task(photo_extra(context.bot, data, item, action, chat, reply_id))
     jobs = data.setdefault("gen_tasks", set())
     jobs.add(task)
@@ -5322,6 +5703,8 @@ async def photo_extra(bot, data, item, action, chat, reply_id):
         image = await picture_bytes(data, item)
         if action == "f":
             await bot.send_document(chat, InputFile(image, filename="secret-ai.png"), **answer)
+        elif action == "u":
+            await deliver_4k(bot, data, item["user_id"], item["language"], image, chat, reply_id)
         else:
             await bot.send_chat_action(chat, ChatAction.RECORD_VIDEO)
             video = await living_picture(image, LIVING_SECONDS, item["fmt"], random.randint(0, 3))
@@ -5526,8 +5909,22 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if (query.data or "").startswith(music.PREFIX):
         await music.handle_callback(update, context)
         return
+    if (query.data or "").startswith("ans:") and await authorized(update, context):
+        await answer_button(update, context, query)
+        return
     if (query.data or "").startswith("ph:"):  # a picture's buttons: only its owner, also in groups
         await photo_button(update, context, query)
+        return
+    if (query.data or "").startswith(("s:", "c:")):  # «Шпион» and «Крокодил»: anyone in the group may press
+        user, allowed = update.effective_user, context.bot_data["allowed"]
+        if allowed and user.id not in allowed:
+            await query.answer()
+            return
+        if query.data.startswith("s:"):
+            await party(context).on_spy_button(query, user, speaker(user), context.bot)
+        else:
+            await query.answer("Рисую новую картинку…")
+            await party(context).open_croc(context.bot, query.message.chat_id)
         return
     if (query.data or "").startswith("g:"):  # the group quiz: anyone in the group may press
         user, allowed = update.effective_user, context.bot_data["allowed"]
@@ -5765,9 +6162,9 @@ def error_text(error):
 
 COMMANDS = {
     "ru": [("life", "Мой день: дела из сообщений"), ("tasks", "Мои задачи"), ("plan", "План дня"), ("review", "Итоги дня"), ("inbox", "Собрать входящие"), ("project", "Проекты и файлы"), ("files", "Мои документы"), ("find", "Поиск по документам"), ("compare", "Сравнить файлы"), ("report", "Отчёт в Word"), ("diagnose", "Разобрать ошибки"), ("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
-           ("export", "Скачать историю"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
+           ("export", "Скачать историю"), ("invite", "Пригласить друзей"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
     "en": [("life", "My day assistant"), ("tasks", "My tasks"), ("plan", "Daily plan"), ("review", "Daily review"), ("inbox", "Collect inbox"), ("project", "Projects and files"), ("files", "My documents"), ("find", "Search documents"), ("compare", "Compare files"), ("report", "Word report"), ("diagnose", "Diagnose errors"), ("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
-           ("export", "Download history"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
+           ("export", "Download history"), ("invite", "Invite friends"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
 }
 
 
@@ -5878,6 +6275,8 @@ async def post_init(app):
         await app.bot.set_my_commands([BotCommand(*c) for c in COMMANDS["ru"]], language_code="ru")
         group = [BotCommand(game.START, "🛡️ AI-Бункер: ролевая игра на выживание"),
                  BotCommand(game.RATING, "🏆 Топ выживших в бункере"), BotCommand(game.STOP, "⏹ Остановить игру в бункер"),
+                 BotCommand(partygames.SPY, "🕵️ Шпион: найдите чужака"), BotCommand(partygames.CROC, "🐊 Крокодил: угадай рисунок"),
+                 BotCommand(partygames.TOP, "🏆 Рейтинг игр"),
                  BotCommand(digest.COMMAND, "📊 Итоги дня"),
                  BotCommand("serial", "🎬 Сериал про ваш чат"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
@@ -5886,6 +6285,8 @@ async def post_init(app):
         await app.bot.set_my_commands(group, scope=BotCommandScopeAllGroupChats(), language_code="ru")
         await app.bot.set_my_commands([BotCommand(game.START, "🛡️ AI Bunker: survival role-play game"),
                                        BotCommand(game.RATING, "🏆 Bunker survivors leaderboard"), BotCommand(game.STOP, "⏹ Stop the bunker game"),
+                                       BotCommand(partygames.SPY, "🕵️ Spy: find the outsider"), BotCommand(partygames.CROC, "🐊 Crocodile: guess the drawing"),
+                                       BotCommand(partygames.TOP, "🏆 Games leaderboard"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
                                        BotCommand("serial", "🎬 Your group sitcom"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
@@ -6247,6 +6648,13 @@ class Bridge:
     def gen_state(self, user_id):
         async def read():
             return gen_state(self.app.bot_data, user_id)
+        return self._run(read())
+
+    def stats(self, user_id):
+        """The owner's numbers for the Mini App, or None for anyone else."""
+        async def read():
+            data = self.app.bot_data
+            return owner_stats(data) if data["connections"].get_meta("owner") == user_id else None
         return self._run(read())
 
     def generate(self, tg_user, kind, prompt, fmt, seconds=5, voice=True):
@@ -6730,7 +7138,9 @@ def main():
     app.add_handler(CommandHandler("mode", mode))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("export", export))
+    app.add_handler(CommandHandler("invite", invite_command))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("emoji", emoji_command))
     app.add_handler(CommandHandler("promo", promo_command))
@@ -6747,6 +7157,7 @@ def main():
     # Unusual names on purpose: other bots in a group react to /game, /quiz and /top too.
     app.add_handler(CommandHandler([game.START, "bunker", "game", "sgame", "svik"], game_command))
     app.add_handler(CommandHandler([game.RATING, "bunker_top", "btop", "stop10", "srating"], top_command))
+    app.add_handler(CommandHandler([partygames.SPY, partygames.SPY_STOP, partygames.CROC, partygames.TOP], party_command))
     app.add_handler(CommandHandler([game.STOP, "bunker_stop", "bstop", "sstop"], stop_game_command))
     app.add_handler(CommandHandler([digest.COMMAND, "sitogi"], day_command))
     app.add_handler(CommandHandler("serial", serial_command))

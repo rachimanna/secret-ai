@@ -34,7 +34,7 @@ class PhotoButtonsTest(unittest.IsolatedAsyncioTestCase):
     async def test_buttons_and_old_pictures_are_forgotten(self):
         markup = bot.photo_keyboard(self.data, job(), image=b"img")
         labels = [b.text for row in markup.inline_keyboard for b in row]
-        self.assertEqual(labels, ["🔁 Ещё вариант", "📎 Оригинал", "🎬 Оживить"])
+        self.assertEqual(labels, ["🔁 Ещё вариант", "📎 Оригинал", "🔍 4K", "🎬 Оживить"])
         for _ in range(bot.PHOTO_ACTIONS_KEPT + 5):
             bot.photo_keyboard(self.data, job(), image=b"img")
         self.assertEqual(len(self.data["photo_actions"]), bot.PHOTO_ACTIONS_KEPT)
