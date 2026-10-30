@@ -798,8 +798,30 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
 @media(max-width:600px) { .game-grid { grid-template-columns:1fr; }.game-card.featured { grid-column:auto; }.game-card .game-art { height:55px; }.game-card h2 { font-size:20px; }.game-card button { white-space:nowrap; } }
 
 .paid { background:var(--brand-soft);color:var(--accent); }
+/* ---------- motion polish: smooth screens, tactile cards and buttons (off with reduced motion) ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .view.active { animation: page-glide .32s var(--ease) both; }
+  @keyframes page-glide { from { opacity: 0; transform: translate3d(0, 10px, 0) scale(.992); } to { opacity: 1; transform: none; } }
+  .action-card, .day-card, .list, .btn, .pill, .icon-button, .row {
+    transition: transform .38s var(--spring), border-color .25s, background-color .25s, box-shadow .3s; }
+  .action-card:active, .day-card:active, .btn:active, .pill:active, .icon-button:active { transform: scale(.965); }
+  .row:active { transform: scale(.985); }
+  .action-card .action-icon { transition: transform .45s var(--spring); }
+  .action-card:active .action-icon { transform: scale(1.12) rotate(-6deg); }
+  .action-card.primary { position: relative; overflow: hidden; isolation: isolate; }
+  .action-card.primary::after { content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+    background: linear-gradient(115deg, transparent 30%, color-mix(in srgb, var(--accent) 18%, transparent) 50%, transparent 70%);
+    background-size: 250% 100%; animation: card-sheen 5.5s ease-in-out infinite; }
+  @keyframes card-sheen { 0%, 55% { background-position: 130% 0; } 100% { background-position: -130% 0; } }
+  .toast.show { animation: toast-pop .45s var(--spring) both; }
+  @keyframes toast-pop { from { transform: translate(-50%, -30%) scale(.92); opacity: 0; } }
+}
+@media (prefers-reduced-motion: no-preference) and (hover: hover) {
+  .action-card:hover, .day-card:hover { transform: translateY(-2px);
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--accent) 12%, transparent); }
+}
 </style>
-<link rel="stylesheet" href="/play.css?v=1">
+<link rel="stylesheet" href="/play.css?v=2">
 </head>
 <body data-tab="agent">
 <header class="app-header"><button class="app-brand" id="brand-home" aria-label="Secret AI — главная"><span class="brand-mark" id="brand-mark"></span><span>Secret AI<small>Твоё пространство</small></span></button><div class="header-actions"><button class="icon-button" id="appearance-button" aria-label="Тема оформления"></button><button class="account-button" id="account-button" aria-label="Профиль">S</button></div></header>
