@@ -247,7 +247,7 @@ class BunkerGameTest(unittest.IsolatedAsyncioTestCase):
         await self.quiz.top(bot, -1, "Test Chat")
         bot.send_message.assert_awaited()
         call_text = bot.send_message.call_args.args[1]
-        self.assertIn("ТОП ВЫЖИВШИХ", call_text)
+        self.assertIn("Рейтинг бункера", call_text)
         self.assertIn("Alice", call_text)
         self.assertIn("1500 очков", call_text)
 

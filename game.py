@@ -170,6 +170,33 @@ def esc(text):
     return html.escape(str(text or ""), quote=False)
 
 
+def progress(done, total, width=10):
+    """▰▰▰▱▱▱ — a small bar for players gathered or seats left."""
+    filled = 0 if total <= 0 else min(width, round(width * done / total))
+    return "▰" * filled + "▱" * (width - filled)
+
+
+ROUND_ICONS = {1: "📋", 2: "🩺", 3: "🎒"}
+
+
+def round_text(number, title, characters, footer):
+    cards = "\n\n".join(c.card(number) for c in characters)
+    return (f"{ROUND_ICONS[number]} <b>Раунд {number} из 3</b> · {title}\n"
+            f"{progress(number, 3, 3)}\n\n{cards}\n\n⏱ <i>{footer}</i>")
+
+
+def pieces(text, limit=MESSAGE_LIMIT):
+    """A long round split between whole cards (blank lines), so each message stays valid HTML and fits."""
+    parts, current = [], ""
+    for block in text.split("\n\n"):
+        joined = f"{current}\n\n{block}" if current else block
+        if len(joined) > limit and current:
+            parts.append(current)
+            joined = block
+        current = joined
+    return parts + [current] if current else parts
+
+
 def fit(text, limit):
     """Escape the model's free text for HTML and cut it to fit `limit` characters."""
     text = str(text or "").strip()
@@ -192,27 +219,25 @@ class Character:
         self.baggage, self.baggage_score = random.choice(BAGGAGE)
         self.alive = True
 
+    def card(self, opened, mark=True):
+        """The dossier as a quote card: the first `opened` pairs of traits shown, the rest still locked."""
+        rows = [("💼", "Профессия", f"<b>{self.profession}</b>"), ("🧬", "Биология", self.biology),
+                ("❤️", "Здоровье", self.health), ("🎯", "Навык", self.hobby),
+                ("🧠", "Психология", self.phobia), ("🎒", "Багаж", f"<b>{self.baggage}</b>")]
+        lines = [f"{icon} {label}: {value}" if index < opened * 2 else f"🔒 <i>{label.lower()}: скрыто</i>"
+                 for index, (icon, label, value) in enumerate(rows)]
+        new = range((opened - 1) * 2, opened * 2)  # this round's cards are marked
+        lines = [line + (" ✦" if index in new and mark else "") for index, line in enumerate(lines)]
+        return f"👤 <b>{esc(self.name)}</b>\n<blockquote>" + "\n".join(lines) + "</blockquote>"
+
     def card_round_1(self):
-        return f"<b>{esc(self.name)}</b>\n💼 Профессия: <b>{self.profession}</b>\n🧬 Биология: {self.biology}"
+        return self.card(1)
 
     def card_round_2(self):
-        return (
-            f"<b>{esc(self.name)}</b>\n"
-            f"💼 Профессия: <b>{self.profession}</b> | 🧬 {self.biology}\n"
-            f"❤️ Здоровье: {self.health}\n"
-            f"🎯 Навык: {self.hobby}"
-        )
+        return self.card(2)
 
     def full_card(self):
-        return (
-            f"👤 <b>{esc(self.name)}</b>\n"
-            f"💼 Профессия: <b>{self.profession}</b>\n"
-            f"🧬 Биология: {self.biology}\n"
-            f"❤️ Здоровье: {self.health}\n"
-            f"🎯 Навык: {self.hobby}\n"
-            f"🧠 Психология: {self.phobia}\n"
-            f"🎒 Багаж: {self.baggage}"
-        )
+        return self.card(3, mark=False)
 
 
 class Game:
@@ -263,14 +288,18 @@ class BunkerGame:
 
     def lobby_text(self, game):
         icon, name, desc, bunker = CATASTROPHES[game.catastrophe]
-        people = ", ".join(esc(n[:20]) for n in game.players.values())
+        people = "\n".join(f"{i}. {esc(n[:20])}" + (" · ведущий" if uid == game.host_id else "")
+                            for i, (uid, n) in enumerate(game.players.items(), 1))
+        ready = len(game.players) >= MIN_PLAYERS
+        need = "можно начинать" if ready else f"нужно ещё {MIN_PLAYERS - len(game.players)}"
         return (
-            f"<b>🛡️ AI-БУНКЕР: ВЫЖИВАНИЕ</b>\n"
-            f"{icon} <b>Угроза: {name}</b>\n\n"
-            f"<i>{desc}</i>\n\n"
-            f"🏰 <b>Убежище:</b> {bunker}\n"
-            f"👥 <b>Кандидаты ({len(game.players)}/{MAX_PLAYERS}):</b> {people}\n\n"
-            f"Нужно минимум {MIN_PLAYERS} участника. Ведущий выбирает сценарий и запускает спасение. Остановить — /{STOP}"
+            f"🛡 <b>AI-Бункер</b> · выживание\n\n"
+            f"{icon} <b>{name}</b>\n"
+            f"<blockquote><i>{desc}</i>\n\n🏰 {bunker}</blockquote>\n"
+            f"👥 <b>Кандидаты</b> · {len(game.players)}/{MAX_PLAYERS} · {need}\n"
+            f"{progress(len(game.players), MIN_PLAYERS)}\n"
+            f"{people}\n\n"
+            f"<i>Ведущий выбирает катастрофу и запускает игру. Остановить: /{STOP}</i>"
         )
 
     def lobby_keyboard(self, game):
@@ -418,55 +447,36 @@ class BunkerGame:
             icon, cat_name, desc, bunker = CATASTROPHES[game.catastrophe]
 
             intro = (
-                f"🚨 <b>ВНИМАНИЕ! КАТАСТРОФА: {icon} {cat_name.upper()}</b> 🚨\n\n"
-                f"{desc}\n\n"
-                f"🏰 <b>Бункер:</b> {bunker}\n"
-                f"⚠️ <b>ВМЕСТИМОСТЬ:</b> ровно <b>{game.capacity}</b> из {len(game.players)} участников спасутся!\n"
-                f"Остальные будут изгнаны на поверхность. Начинаем распределение досье выживших…"
+                f"🚨 <b>Катастрофа началась</b> · {icon} {cat_name}\n\n"
+                f"<blockquote>{desc}\n\n🏰 {bunker}</blockquote>\n"
+                f"🚪 Мест в бункере: <b>{game.capacity}</b> из {len(game.players)}\n"
+                f"<i>Остальные останутся снаружи. Раздаём досье…</i>"
             )
             await self._edit(game.lobby_message, intro)
             await asyncio.sleep(4)
 
             # 2. Round 1: Profession & Biology
             game.state = "round1"
-            cards1 = "\n\n".join(f"{i+1}. {c.card_round_1()}" for i, c in enumerate(game.characters.values()))
-            r1_text = (
-                f"📋 <b>РАУНД 1: ПРОФЕССИИ И БИОЛОГИЯ</b>\n"
-                f"Выжившие впервые видят друг друга и зачитывают свои роли:\n\n"
-                f"{cards1}\n\n"
-                f"⏱ <i>У вас {ROUND_SECONDS[0]} секунд на дебаты в чате: почему именно ваша профессия спасёт команду?</i>"
-            )
-            await bot.send_message(game.chat_id, r1_text, parse_mode="HTML")
+            r1_text = round_text(1, "Профессии и биология", game.characters.values(),
+                                 f"{ROUND_SECONDS[0]} секунд на спор в чате: почему ваша профессия спасёт команду?")
+            for part in pieces(r1_text):
+                await bot.send_message(game.chat_id, part, parse_mode="HTML")
             await asyncio.sleep(ROUND_SECONDS[0])
 
             # 3. Round 2: Health & Hobby
             game.state = "round2"
-            cards2 = "\n\n".join(
-                f"{i+1}. <b>{esc(c.name)}</b>: {c.profession} | ❤️ {c.health} | 🎯 {c.hobby}"
-                for i, c in enumerate(game.characters.values())
-            )
-            r2_text = (
-                f"🩺 <b>РАУНД 2: ЗДОРОВЬЕ И НАВЫКИ</b>\n"
-                f"Вскрываются медицинские карты и скрытые таланты:\n\n"
-                f"{cards2}\n\n"
-                f"⏱ <i>Оцените физическое состояние и полезные хобби. Обсуждение — {ROUND_SECONDS[1]} секунд!</i>"
-            )
-            await bot.send_message(game.chat_id, r2_text, parse_mode="HTML")
+            r2_text = round_text(2, "Здоровье и навыки", game.characters.values(),
+                                 f"{ROUND_SECONDS[1]} секунд: кто выдержит годы под землёй и кто чем полезен?")
+            for part in pieces(r2_text):
+                await bot.send_message(game.chat_id, part, parse_mode="HTML")
             await asyncio.sleep(ROUND_SECONDS[1])
 
             # 4. Round 3: Baggage & Phobias
             game.state = "round3"
-            cards3 = "\n\n".join(
-                f"{i+1}. <b>{esc(c.name)}</b>: 🧠 {c.phobia} | 🎒 <b>{c.baggage}</b>"
-                for i, c in enumerate(game.characters.values())
-            )
-            r3_text = (
-                f"🎒 <b>РАУНД 3: ПСИХОЛОГИЯ И БАГАЖ</b>\n"
-                f"Последние козыри и скелеты в шкафу выложены на стол:\n\n"
-                f"{cards3}\n\n"
-                f"⚠️ <i>Через {ROUND_SECONDS[2]} секунд начинается голосование на изгнание!</i>"
-            )
-            await bot.send_message(game.chat_id, r3_text, parse_mode="HTML")
+            r3_text = round_text(3, "Психология и багаж", game.characters.values(),
+                                 f"Через {ROUND_SECONDS[2]} секунд голосование: кто останется снаружи?")
+            for part in pieces(r3_text):
+                await bot.send_message(game.chat_id, part, parse_mode="HTML")
             await asyncio.sleep(ROUND_SECONDS[2])
 
             # 5. Elimination Voting Loop
@@ -481,10 +491,10 @@ class BunkerGame:
                 exile_target.alive = False
                 await bot.send_message(
                     game.chat_id,
-                    f"🚪 <b>ИЗГНАНИЕ ИЗ БУНКЕРА!</b>\n\n"
-                    f"{verdict} <b>{esc(exile_target.name)}</b> ({exile_target.profession}) "
-                    f"выталкивается наружу в бушующую катастрофу!\n"
-                    f"Двери захлопнулись. В живых осталось кандидатов: {len(alive) - 1} из {game.capacity} нужных.",
+                    f"🚪 <b>Изгнание</b>\n\n"
+                    f"<blockquote>{verdict} <b>{esc(exile_target.name)}</b> ({exile_target.profession}) "
+                    f"остаётся снаружи.</blockquote>\n"
+                    f"Претендентов: {len(alive) - 1} · мест: {game.capacity}",
                     parse_mode="HTML",
                 )
                 await asyncio.sleep(4)
@@ -508,11 +518,11 @@ class BunkerGame:
             for c in alive
         ]
         text = (
-            f"⚖️ <b>ГОЛОСОВАНИЕ ЗА ИЗГНАНИЕ</b>\n\n"
-            f"Мест в бункере: <b>{game.capacity}</b>. Претендентов: <b>{len(alive)}</b>.\n"
-            f"Нужно изгнать ещё человек: <b>{needed_exiles}</b>.\n\n"
-            f"Нажмите кнопку с именем кандидата, которого нужно оставить снаружи:\n"
-            f"⏱ <i>У всех выживших 30 секунд на голосование!</i>"
+            f"⚖️ <b>Голосование</b>\n\n"
+            f"Мест: <b>{game.capacity}</b> · претендентов: <b>{len(alive)}</b> · выбывают ещё: <b>{needed_exiles}</b>\n"
+            f"{progress(game.capacity, len(alive))}\n\n"
+            f"Нажмите на того, кто останется снаружи.\n"
+            f"<i>30 секунд, голос можно поменять</i>"
         )
         vote_msg = await bot.send_message(game.chat_id, text, parse_mode="HTML", reply_markup=Keyboard(vote_buttons))
 
@@ -546,7 +556,7 @@ class BunkerGame:
     async def _finish(self, bot, game):
         game.state = "done"
         survivors = [c for c in game.characters.values() if c.alive]
-        survivor_names = ", ".join(f"<b>{esc(c.name)}</b> ({c.profession})" for c in survivors)
+        survivor_names = "\n".join(f"• <b>{esc(c.name)}</b> · {c.profession}" for c in survivors)
 
         icon, cat_name, desc, bunker = CATASTROPHES[game.catastrophe]
 
@@ -566,11 +576,11 @@ class BunkerGame:
                 )
 
         head = (
-            f"🏆 <b>ГЕРМЕТИЗАЦИЯ БУНКЕРА: ФИНАЛ</b>\n\n"
-            f"Двери запечатаны титановыми замками. В бункер вошли:\n{survivor_names}\n\n"
-            f"📜 <b>ЛЕТОПИСЬ ВЫЖИВАНИЯ:</b>\n"
+            f"🏆 <b>Финал</b> · {icon} {cat_name}\n\n"
+            f"Двери бункера закрылись. Внутри:\n{survivor_names}\n\n"
+            f"📜 <b>Что было дальше</b>\n<blockquote expandable>"
         )
-        tail = f"\n\n🎮 Сыграть ещё раз — /{START} · Таблица лидеров чата — /{RATING}"
+        tail = f"</blockquote>\n\n🎮 Ещё раз: /{START} · 🏆 Рейтинг: /{RATING}"
         # The model's story is plain text: escaped, so its "<" or "&" cannot break the HTML, and cut to one message
         final_message = head + fit(epilogue, MESSAGE_LIMIT - len(head) - len(tail)) + tail
         await bot.send_message(game.chat_id, final_message, parse_mode="HTML")
@@ -619,11 +629,11 @@ class BunkerGame:
         if not rows:
             await bot.send_message(chat_id, f"В этом чате ещё никто не выживал в бункере. Начать: /{START}")
             return
-        lines = [f"<b>🏆 ТОП ВЫЖИВШИХ В БУНКЕРЕ · {esc(title)}</b>\n"]
+        lines = [f"🏆 <b>Рейтинг бункера</b> · {esc(title)}\n"]
         for i, (name, points, wins, games) in enumerate(rows):
             medal = "🥇" if i == 0 else "🥈" if i == 1 else "🥉" if i == 2 else f"{i+1}."
-            lines.append(f"{medal} <b>{esc(name[:22])}</b> — {points} очков (побед: {wins}/{games})")
-        lines.append(f"\nНовое выживание: /{START}")
+            lines.append(f"{medal} <b>{esc(name[:22])}</b> · {points} очков · выжил {wins} из {games}")
+        lines.append(f"\n<i>Новая игра: /{START}</i>")
         await bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
 
 
