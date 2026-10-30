@@ -798,6 +798,19 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
 @media(max-width:600px) { .game-grid { grid-template-columns:1fr; }.game-card.featured { grid-column:auto; }.game-card .game-art { height:55px; }.game-card h2 { font-size:20px; }.game-card button { white-space:nowrap; } }
 
 .paid { background:var(--brand-soft);color:var(--accent); }
+/* ---------- owner stats ---------- */
+.stat-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 6px 0 4px; }
+.stat-tile { padding: 14px; border-radius: 16px; background: var(--bg-2); border: 1px solid var(--line); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.stat-tile b { font-size: 24px; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.stat-tile span { color: var(--hint); font-size: 12px; }
+.stat-note { color: var(--hint-2); font-size: 12px; text-align: center; margin: 16px 0 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .stat-tile { animation: rise .5s var(--ease) both; }
+  .stat-tile:nth-child(2) { animation-delay: 40ms; } .stat-tile:nth-child(3) { animation-delay: 80ms; } .stat-tile:nth-child(4) { animation-delay: 120ms; }
+  .stat-tile:nth-child(5) { animation-delay: 160ms; } .stat-tile:nth-child(6) { animation-delay: 200ms; } .stat-tile:nth-child(7) { animation-delay: 240ms; }
+  .stat-tile:nth-child(8) { animation-delay: 280ms; }
+}
+
 /* ---------- motion polish: smooth screens, tactile cards and buttons (off with reduced motion) ---------- */
 @media (prefers-reduced-motion: no-preference) {
   .view.active { animation: page-glide .32s var(--ease) both; }
@@ -2590,6 +2603,7 @@ function renderSettings() {
       row("set-apps", '<svg class="i" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><path d="M17 13.5v7M13.5 17h7"/></svg>', T.apps, String((state.apps.connected || []).length)),
       row("set-mcp", SYM.mcp, T.mcp, state.mcp.length ? String(state.mcp.length) : ""),
       ...(state.gen.owner ? [row("set-gen", SYM.model, T.genKey, state.gen.ready ? T.keySet : "")] : []),
+      ...(state.gen.owner ? [row("set-stats", SYM.model, lang === "ru" ? "Статистика бота" : "Bot stats")] : []),
     ], 3),
     `<div class="section" style="--i:4;margin-top:30px"><div class="list">${row("set-clear", SYM.trash, T.clear, "", "danger")}</div></div>`,
   ].join("");
@@ -2602,9 +2616,31 @@ function renderSettings() {
   $("set-apps").onclick = () => switchTab("apps");
   $("set-mcp").onclick = openMcpSheet;
   if ($("set-gen")) $("set-gen").onclick = openGenKeySheet;
+  if ($("set-stats")) $("set-stats").onclick = openStatsSheet;
   $("set-id").onclick = () => { navigator.clipboard?.writeText(String(state.user.id)); toast(T.copied); haptic("light"); };
   $("set-mem").onclick = () => confirmAction(T.clearAsk, clearMemory);
   $("set-clear").onclick = () => confirmAction(T.clearAsk, clearMemory);
+}
+async function openStatsSheet() {
+  const ru = lang === "ru";
+  const title = ru ? "Статистика бота" : "Bot stats";
+  openSheet(`<div class="head"><h3>${title}</h3></div><div class="list skeleton">${'<div class="row"><div class="ic"></div><div class="body"><div class="bar"></div></div></div>'.repeat(4)}</div>`);
+  let s;
+  try { s = (await api("/api/stats")).stats; }
+  catch (e) { toast(errorText(e)); closeSheet(); return; }
+  const tile = (value, label) => `<div class="stat-tile"><b>${Number(value || 0).toLocaleString(ru ? "ru-RU" : "en-US")}</b><span>${label}</span></div>`;
+  const groups = (s.top_groups || []).map(g => `<div class="row compact"><div class="body"><div class="t">${esc(g.title)}</div></div><span class="val">${g.messages}</span></div>`).join("");
+  $("sheet").querySelector(".list.skeleton")?.remove();
+  $("sheet").insertAdjacentHTML("beforeend", `
+    <div class="stat-grid">
+      ${tile(s.users, ru ? "всего людей" : "people")}${tile(s.new_week, ru ? "новых за неделю" : "new this week")}
+      ${tile(s.active_day, ru ? "активны сегодня" : "active today")}${tile(s.active_week, ru ? "активны за неделю" : "active this week")}
+      ${tile(s.messages_week, ru ? "сообщений за неделю" : "messages this week")}${tile(s.invited, ru ? "по приглашению" : "invited")}
+      ${tile(s.groups_active, ru ? `групп активны (из ${s.groups})` : `groups active (of ${s.groups})`)}${tile(s.stars, ru ? `звёзд · оплат ${s.payments}` : `stars · ${s.payments} payments`)}
+    </div>
+    ${groups ? `<div class="section"><h2 class="cap">${ru ? "Самые живые группы за неделю" : "Liveliest groups this week"}</h2><div class="list">${groups}</div></div>` : ""}
+    <p class="stat-note">${ru ? "Только цифры — чужие переписки здесь не показываются." : "Numbers only — nobody's messages are shown here."}</p>`);
+  haptic("light");
 }
 async function clearMemory() {
   try { state.settings = (await api("/api/reset")).settings; renderSettings(); toast(T.cleared); haptic("success"); }

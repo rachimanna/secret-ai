@@ -2789,6 +2789,55 @@ async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                "своих сообщениях и на кнопках.\n\nУже знаю: " + known + "\n\n/emoji reset — вернуть обычные.")
 
 
+# ----- the owner's numbers: people, activity, groups, money; counts only, nobody's messages -----
+
+def owner_stats(data, now=None):
+    now = int(now or time.time())
+    day, week = now - 86400, now - 7 * 86400
+    db, groups = data["memory"].db, data["groups"].db
+    one = lambda sql, args=(): db.execute(sql, args).fetchone()[0] or 0
+    firsts = "SELECT user_id, MIN(created) AS first FROM messages WHERE role='user' AND created IS NOT NULL GROUP BY user_id"
+    top = groups.execute(
+        "SELECT COALESCE(NULLIF(i.title, ''), 'группа ' || m.chat_id), COUNT(*) FROM group_messages m "
+        "LEFT JOIN group_info i USING(chat_id) WHERE m.created>? GROUP BY m.chat_id ORDER BY 2 DESC LIMIT 5", (week,)).fetchall()
+    return {
+        "users": one("SELECT COUNT(*) FROM (SELECT user_id FROM messages UNION SELECT user_id FROM settings)"),
+        "new_week": one(f"SELECT COUNT(*) FROM ({firsts}) WHERE first>?", (week,)),
+        "active_day": one("SELECT COUNT(DISTINCT user_id) FROM messages WHERE role='user' AND created>?", (day,)),
+        "active_week": one("SELECT COUNT(DISTINCT user_id) FROM messages WHERE role='user' AND created>?", (week,)),
+        "messages_week": one("SELECT COUNT(*) FROM messages WHERE role='user' AND created>?", (week,)),
+        "groups": groups.execute("SELECT COUNT(*) FROM group_info").fetchone()[0] or 0,
+        "groups_active": groups.execute("SELECT COUNT(DISTINCT chat_id) FROM group_messages WHERE created>?", (week,)).fetchone()[0] or 0,
+        "top_groups": [{"title": title, "messages": count} for title, count in top],
+        "pictures_today": one("SELECT SUM(photos) FROM gen_daily WHERE day=?", (time.strftime("%Y-%m-%d", time.gmtime(now)),)),
+        "stars": one("SELECT SUM(stars) FROM gen_payments"),
+        "payments": one("SELECT COUNT(*) FROM gen_payments"),
+        "invited": one("SELECT COUNT(*) FROM referrals"),
+    }
+
+
+def stats_text(stats):
+    groups = "\n".join(f"{i}. {item['title'][:40]} · {item['messages']}" for i, item in enumerate(stats["top_groups"], 1))
+    return (f"📊 **Статистика Secret AI**\n\n"
+            f"**Люди**\n- всего: {stats['users']}\n- новых за неделю: {stats['new_week']}\n"
+            f"- активных за сутки: {stats['active_day']} · за неделю: {stats['active_week']}\n"
+            f"- сообщений за неделю: {stats['messages_week']}\n- пришли по приглашению: {stats['invited']}\n\n"
+            f"**Группы**\n- всего: {stats['groups']} · активных за неделю: {stats['groups_active']}\n"
+            + (f"\nСамые живые за неделю:\n{groups}\n" if groups else "") +
+            f"\n**Генерации и оплаты**\n- бесплатных картинок сегодня: {stats['pictures_today']}\n"
+            f"- оплат: {stats['payments']} · звёзд: {stats['stars']} ⭐")
+
+
+async def stats_command(update, context):
+    """/stats: only for the owner."""
+    if not await authorized(update, context):
+        return
+    if context.bot_data["connections"].get_meta("owner") != update.effective_user.id:
+        await send(update.effective_message, ui(update, "Статистика доступна только владельцу бота.", "Only the bot owner can see stats."))
+        return
+    await rich_reply(update.effective_message, stats_text(owner_stats(context.bot_data)))
+
+
 async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await authorized(update, context):
         await send(update.effective_message, f"Telegram ID: {update.effective_user.id}")
@@ -6453,6 +6502,13 @@ class Bridge:
             return gen_state(self.app.bot_data, user_id)
         return self._run(read())
 
+    def stats(self, user_id):
+        """The owner's numbers for the Mini App, or None for anyone else."""
+        async def read():
+            data = self.app.bot_data
+            return owner_stats(data) if data["connections"].get_meta("owner") == user_id else None
+        return self._run(read())
+
     def generate(self, tg_user, kind, prompt, fmt, seconds=5, voice=True):
         language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
         return self._run(start_generation(self.app, tg_user["id"], language, kind, prompt, fmt, seconds, voice))
@@ -6936,6 +6992,7 @@ def main():
     app.add_handler(CommandHandler("export", export))
     app.add_handler(CommandHandler("invite", invite_command))
     app.add_handler(CommandHandler("myid", myid))
+    app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("emoji", emoji_command))
     app.add_handler(CommandHandler("promo", promo_command))

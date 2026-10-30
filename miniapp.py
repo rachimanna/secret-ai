@@ -359,6 +359,9 @@ def make_handler(config):
                 self._send(200, result)
             elif path == "/api/state":
                 self._send(200, self._state(user, fresh=bool(data.get("fresh"))))
+            elif path == "/api/stats":
+                stats = bridge.stats(uid)
+                self._send(200, {"stats": stats}) if stats is not None else self._send(403, {"error": "owner only"})
             elif path == "/api/catalog":
                 query, after = str(data.get("q") or "").strip().lower(), str(data.get("after") or "")
                 # Apps that connect without any keys always come first.
