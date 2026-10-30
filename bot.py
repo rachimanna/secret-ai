@@ -5405,7 +5405,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await music.handle_callback(update, context)
         return
     if (query.data or "").startswith("g:"):  # the group quiz: anyone in the group may press
-        user = update.effective_user
+        user, allowed = update.effective_user, context.bot_data["allowed"]
+        if allowed and user.id not in allowed:  # the same people the bot answers in groups
+            await query.answer()
+            return
         await quiz(context).on_button(query, user, speaker(user), context.bot)
         return
     if not await authorized(update, context):

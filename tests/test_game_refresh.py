@@ -70,6 +70,7 @@ class BunkerGameTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_double_click_protection(self):
         self.quiz._play = AsyncMock()
+        self.g.players.update({2: "Player 2", 3: "Player 3"})
 
         # Non-host cannot start
         await self.button("s", 2, "Player 2")
@@ -151,10 +152,64 @@ class BunkerGameTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.g.voted_event.is_set())
 
         # Target elimination calculation
-        exiled = await asyncio.wait_for(vote_task, timeout=2.0)
+        exiled, verdict = await asyncio.wait_for(vote_task, timeout=2.0)
         self.assertEqual(exiled.user_id, 2)
+        self.assertIn("Большинством", verdict)
         exiled.alive = False
         self.assertFalse(c2.alive)
+
+    async def test_tie_is_settled_by_lot_not_by_first_vote(self):
+        c1, c2 = game.Character(1, "Host"), game.Character(2, "Player 2")
+        self.g.characters = {1: c1, 2: c2}
+        self.g.state = "voting"
+        bot = NS(send_message=AsyncMock(return_value=NS(edit_reply_markup=AsyncMock())))
+        exiled = set()
+        for _ in range(40):
+            task = asyncio.create_task(self.quiz._run_voting_round(bot, self.g, [c1, c2], 1))
+            await asyncio.sleep(0)
+            await self.quiz.on_button(self.query(f"g:v:2:{self.g.session}"), NS(id=1), "Host", NS())
+            await self.quiz.on_button(self.query(f"g:v:1:{self.g.session}"), NS(id=2), "Player 2", NS())
+            target, verdict = await asyncio.wait_for(task, timeout=2.0)
+            self.assertIn("поровну", verdict)
+            exiled.add(target.user_id)
+        self.assertEqual(exiled, {1, 2})
+
+    async def test_start_needs_minimum_players(self):
+        self.quiz._play = AsyncMock()
+        q = await self.button("s", 1, "Host")
+        self.assertIn(str(game.MIN_PLAYERS), q.answer.call_args.args[0])
+        self.assertEqual(self.g.state, "lobby")
+        self.quiz._play.assert_not_called()
+        self.g.players.update({2: "P2", 3: "P3"})
+        await self.button("s", 1, "Host")
+        await asyncio.sleep(0)
+        self.quiz._play.assert_awaited_once()
+
+    async def test_new_lobby_does_not_cancel_a_finishing_game(self):
+        self.g.state = "done"
+        finale = asyncio.create_task(asyncio.sleep(10))
+        self.g.task = finale
+        bot = NS(send_message=AsyncMock(return_value=NS(text="lobby")))
+        message = NS(chat_id=-1, reply_text=AsyncMock())
+        await self.quiz.open_lobby(bot, message, NS(id=5), "New host")
+        await asyncio.sleep(0)
+        self.assertFalse(finale.cancelled())
+        self.assertIsNot(self.quiz.games[-1], self.g)
+        finale.cancel()
+        self.quiz.games[-1].task.cancel()
+
+    async def test_model_epilogue_is_escaped_and_fits_one_message(self):
+        self.g.characters = {1: game.Character(1, "<Alice>"), 2: game.Character(2, "Bob")}
+        self.g.characters[2].alive = False
+        self.ask.return_value = "Эпилог <b>не закрыт & сломан " + "история " * 2000
+        bot = NS(send_message=AsyncMock())
+        await self.quiz._finish(bot, self.g)
+        text = bot.send_message.call_args.args[1]
+        self.assertLessEqual(len(text), game.MESSAGE_LIMIT)
+        self.assertIn("&lt;b&gt;не закрыт &amp; сломан", text)
+        self.assertIn("&lt;Alice&gt;", text)
+        self.assertNotIn("<Alice>", text)
+        self.assertTrue(text.rstrip().endswith(f"/{game.RATING}"))
 
     async def test_stop_game_permissions(self):
         bot = NS(send_message=AsyncMock())

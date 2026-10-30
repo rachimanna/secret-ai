@@ -15,6 +15,7 @@ HAIKU = 'anymodel:claude-haiku-5-5'
 OPUS = 'anymodel:claude-opus-5-5'
 OPUS46 = 'anymodel:claude-opus-4-6'
 IDS = [m.split(':', 1)[1] for m in (OPUS46, SONNET, HAIKU, OPUS)]
+UNREQUESTED = IDS[1:]  # a catalog without any model the bot offers
 
 
 class Store:
@@ -39,7 +40,7 @@ def bad_request(message):
 
 class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
     async def test_missing_requested_model_clears_old_routes_and_selections(self):
-        clients = {name: gateway(IDS) for name in ('anymodel_chat', 'abacus', 'experiential', 'reformboss')}
+        clients = {name: gateway(UNREQUESTED) for name in ('anymodel_chat', 'abacus', 'experiential', 'reformboss')}
         data = dict(**clients, connections=Store(default_model=OPUS46),
                     models=[OPUS46], model=OPUS46, chat_default=OPUS46,
                     fallbacks=[SONNET], cursor_models=['cursor:grok-4.7'], premium={OPUS: 5},
@@ -64,7 +65,7 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
                 client = gateway([model_id, 'deepseek-v4.1-flash', 'grok-4.7', 'grok-4.6-fast', 'grok-4.70-fast', 'deepseek-v4.1-pro', 'deepseek-v4-flash',
                                   'deepseek-v4.10-flash', 'claude-sonnet-4-6', 'grok-4.7-fast-vision'])
                 store = Store(default_model=OPUS46, default_pick='old')
-                data = dict(reformboss=client, anymodel_chat=gateway(IDS), connections=store,
+                data = dict(reformboss=client, anymodel_chat=gateway(UNREQUESTED), connections=store,
                             memory=NS(model=lambda uid: OPUS46))
                 await bot.discover_models(NS(bot_data=data))
                 expected = 'reformboss:' + model_id
@@ -74,6 +75,16 @@ class ChatModelsTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(store.get_meta('default_model'), expected)
                 self.assertEqual(bot.user_model(data, 1), expected)
                 data['anymodel_chat'].models.list.assert_awaited_once()
+
+    async def test_opus_46_is_default_and_grok_is_backup(self):
+        store = Store(default_model='reformboss:grok-4.7-fast', default_pick='old')
+        data = dict(anymodel_chat=gateway(IDS), reformboss=gateway(['grok-4.7-fast']), connections=store,
+                    memory=NS(model=lambda uid: None))
+        await bot.discover_models(NS(bot_data=data))
+        self.assertEqual(data['models'], [OPUS46, 'reformboss:grok-4.7-fast'])
+        self.assertEqual(data['chat_default'], OPUS46)
+        self.assertEqual(store.get_meta('default_model'), OPUS46)
+        self.assertEqual(bot.user_model(data, 1), OPUS46)
 
     async def test_failed_gateway_catalog_does_not_guess_an_id(self):
         client = gateway([])

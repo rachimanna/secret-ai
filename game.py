@@ -18,8 +18,10 @@ from telegram import InlineKeyboardButton as Button, InlineKeyboardMarkup as Key
 LOG = logging.getLogger(__name__)
 
 START, RATING, STOP = "bunker", "bunker_top", "bunker_stop"
-MAX_PLAYERS = 20
+MIN_PLAYERS, MAX_PLAYERS = 3, 20
 LOBBY_SECONDS = 180
+ROUND_SECONDS = (30, 25, 20)  # debate time after each round's cards, as announced in the chat
+MESSAGE_LIMIT = 4096  # Telegram's limit for one message
 GAME_ASK = re.compile(
     r"(поигра|сыграем|давай\s+(?:в\s+)?игр|бункер|\bbunker\b|выживан|викторин|квиз|\bquiz\b|let'?s play)",
     re.I,
@@ -168,6 +170,16 @@ def esc(text):
     return html.escape(str(text or ""), quote=False)
 
 
+def fit(text, limit):
+    """Escape the model's free text for HTML and cut it to fit `limit` characters."""
+    text = str(text or "").strip()
+    shown = esc(text)
+    while len(shown) > limit:
+        text = text[: max(0, len(text) - (len(shown) - limit) - 1)].rstrip()
+        shown = esc(text) + "…"
+    return shown
+
+
 class Character:
     def __init__(self, user_id, name):
         self.user_id = user_id
@@ -258,7 +270,7 @@ class BunkerGame:
             f"<i>{desc}</i>\n\n"
             f"🏰 <b>Убежище:</b> {bunker}\n"
             f"👥 <b>Кандидаты ({len(game.players)}/{MAX_PLAYERS}):</b> {people}\n\n"
-            f"Ведущий выбирает сценарий и запускает спасение. Остановить — /{STOP}"
+            f"Нужно минимум {MIN_PLAYERS} участника. Ведущий выбирает сценарий и запускает спасение. Остановить — /{STOP}"
         )
 
     def lobby_keyboard(self, game):
@@ -277,7 +289,7 @@ class BunkerGame:
         if current and current.state != "done" and time.monotonic() - current.created < 1800:
             await message.reply_text("Игра в бункер уже идёт — присоединяйтесь к ней 👆")
             return
-        if current and current.task:
+        if current and current.state != "done" and current.task:  # a stale game; a finished one may still be writing its finale
             current.task.cancel()
 
         game = self.games[chat_id] = Game(chat_id, user.id, name)
@@ -351,6 +363,9 @@ class BunkerGame:
                 if user.id != game.host_id:
                     await query.answer("Запустить игру может только ведущий")
                     return
+                if len(game.players) < MIN_PLAYERS:
+                    await query.answer(f"Для бункера нужно минимум {MIN_PLAYERS} участника — позови друзей ✋", show_alert=True)
+                    return
                 game.state = "starting"
                 await query.answer("Внимание всем! Ворота бункера активированы! 🚨")
                 if game.task:
@@ -419,10 +434,10 @@ class BunkerGame:
                 f"📋 <b>РАУНД 1: ПРОФЕССИИ И БИОЛОГИЯ</b>\n"
                 f"Выжившие впервые видят друг друга и зачитывают свои роли:\n\n"
                 f"{cards1}\n\n"
-                f"⏱ <i>У вас 30 секунд на дебаты в чате: почему именно ваша профессия спасёт команду?</i>"
+                f"⏱ <i>У вас {ROUND_SECONDS[0]} секунд на дебаты в чате: почему именно ваша профессия спасёт команду?</i>"
             )
-            msg1 = await bot.send_message(game.chat_id, r1_text, parse_mode="HTML")
-            await asyncio.sleep(25)
+            await bot.send_message(game.chat_id, r1_text, parse_mode="HTML")
+            await asyncio.sleep(ROUND_SECONDS[0])
 
             # 3. Round 2: Health & Hobby
             game.state = "round2"
@@ -434,10 +449,10 @@ class BunkerGame:
                 f"🩺 <b>РАУНД 2: ЗДОРОВЬЕ И НАВЫКИ</b>\n"
                 f"Вскрываются медицинские карты и скрытые таланты:\n\n"
                 f"{cards2}\n\n"
-                f"⏱ <i>Оцените физическое состояние и полезные хобби. Обсуждение — 25 секунд!</i>"
+                f"⏱ <i>Оцените физическое состояние и полезные хобби. Обсуждение — {ROUND_SECONDS[1]} секунд!</i>"
             )
-            msg2 = await bot.send_message(game.chat_id, r2_text, parse_mode="HTML")
-            await asyncio.sleep(20)
+            await bot.send_message(game.chat_id, r2_text, parse_mode="HTML")
+            await asyncio.sleep(ROUND_SECONDS[1])
 
             # 4. Round 3: Baggage & Phobias
             game.state = "round3"
@@ -449,10 +464,10 @@ class BunkerGame:
                 f"🎒 <b>РАУНД 3: ПСИХОЛОГИЯ И БАГАЖ</b>\n"
                 f"Последние козыри и скелеты в шкафу выложены на стол:\n\n"
                 f"{cards3}\n\n"
-                f"⚠️ <i>Через 20 секунд начинается голосование на изгнание!</i>"
+                f"⚠️ <i>Через {ROUND_SECONDS[2]} секунд начинается голосование на изгнание!</i>"
             )
-            msg3 = await bot.send_message(game.chat_id, r3_text, parse_mode="HTML")
-            await asyncio.sleep(15)
+            await bot.send_message(game.chat_id, r3_text, parse_mode="HTML")
+            await asyncio.sleep(ROUND_SECONDS[2])
 
             # 5. Elimination Voting Loop
             game.state = "voting"
@@ -462,16 +477,12 @@ class BunkerGame:
                     break
 
                 exile_count = len(alive) - game.capacity
-                exile_target = await self._run_voting_round(bot, game, alive, exile_count)
-                if not exile_target:
-                    # random expulsion if no votes
-                    exile_target = random.choice(alive)
-
+                exile_target, verdict = await self._run_voting_round(bot, game, alive, exile_count)
                 exile_target.alive = False
                 await bot.send_message(
                     game.chat_id,
                     f"🚪 <b>ИЗГНАНИЕ ИЗ БУНКЕРА!</b>\n\n"
-                    f"Большинством голосов <b>{esc(exile_target.name)}</b> ({exile_target.profession}) "
+                    f"{verdict} <b>{esc(exile_target.name)}</b> ({exile_target.profession}) "
                     f"выталкивается наружу в бушующую катастрофу!\n"
                     f"Двери захлопнулись. В живых осталось кандидатов: {len(alive) - 1} из {game.capacity} нужных.",
                     parse_mode="HTML",
@@ -524,11 +535,13 @@ class BunkerGame:
             tally[target_id] = tally.get(target_id, 0) + 1
 
         if not tally:
-            return None
-
-        # Return target with most votes
-        most_voted_id = max(tally, key=lambda uid: tally[uid])
-        return game.characters.get(most_voted_id)
+            return random.choice(alive), "Никто не проголосовал — жребий выбрал:"
+        # A tie is settled by lot, not by who pressed first
+        most = max(tally.values())
+        leaders = [game.characters[uid] for uid, count in tally.items() if count == most]
+        if len(leaders) > 1:
+            return random.choice(leaders), "Голоса разделились поровну — жребий выбрал:"
+        return leaders[0], "Большинством голосов"
 
     async def _finish(self, bot, game):
         game.state = "done"
@@ -552,12 +565,14 @@ class BunkerGame:
                     (game.chat_id, c.user_id, c.name, points, is_win),
                 )
 
-        final_message = (
+        head = (
             f"🏆 <b>ГЕРМЕТИЗАЦИЯ БУНКЕРА: ФИНАЛ</b>\n\n"
             f"Двери запечатаны титановыми замками. В бункер вошли:\n{survivor_names}\n\n"
-            f"📜 <b>ЛЕТОПИСЬ ВЫЖИВАНИЯ:</b>\n{epilogue}\n\n"
-            f"🎮 Сыграть ещё раз — /{START} · Таблица лидеров чата — /{RATING}"
+            f"📜 <b>ЛЕТОПИСЬ ВЫЖИВАНИЯ:</b>\n"
         )
+        tail = f"\n\n🎮 Сыграть ещё раз — /{START} · Таблица лидеров чата — /{RATING}"
+        # The model's story is plain text: escaped, so its "<" or "&" cannot break the HTML, and cut to one message
+        final_message = head + fit(epilogue, MESSAGE_LIMIT - len(head) - len(tail)) + tail
         await bot.send_message(game.chat_id, final_message, parse_mode="HTML")
 
     async def _generate_epilogue(self, game, survivors):
