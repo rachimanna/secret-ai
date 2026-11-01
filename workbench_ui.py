@@ -228,7 +228,17 @@ class Controls:
         await self.api.send(update.effective_message, '\n\n'.join(blocks))
 
     async def wider_search(self, context, store, user, chat, query, hits):
-        """Ask the model for other ways to say the query and search again. Without a model: what was found stays."""
+        """Search by meaning when it's configured; otherwise ask the model for other ways to say the query. Found stays found."""
+        finder = context.bot_data.get('embeddings')
+        if finder:
+            parts = store.all_chunks(user, chat)
+            ranked = await finder.rank(query, [part['text'] for part in parts]) if parts else []
+            if ranked:
+                found, seen = list(hits), {(hit['id'], hit['start']) for hit in hits}
+                for index, closeness in ranked:
+                    if (parts[index]['id'], parts[index]['start']) not in seen:
+                        found.append({**parts[index], 'score': closeness})
+                return found[:8]
         model = self.api.user_model(context.bot_data, user)
         if not model or not store.files(user, chat, latest=True):
             return hits

@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock, patch
 import approvals
 import automations
 import bot
+import embeddings
+import research
 import mcpbridge
 import moderation
 import pdfscan
@@ -372,6 +374,245 @@ class WiderSearchTest(unittest.IsolatedAsyncioTestCase):
         store = NS(files=lambda u, c, latest=False: [1], search=lambda u, c, q: [])
         hits = [{"id": 1, "start": 0}]
         self.assertEqual(await self.controls(AsyncMock(side_effect=RuntimeError("x"))).wider_search(NS(bot_data={}), store, 1, 1, "q", hits), hits)
+
+
+class GroupProTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.memory = bot.Memory(":memory:")
+        self.addCleanup(self.memory.db.close)
+        self.subs = self.memory.subs
+
+    def test_payload(self):
+        self.assertEqual(subscriptions.parse_group("gsub:-100:5"), (-100, 5))
+        for bad in ("gsub:100:5", "gsub:x:5", "sub:pro:5", "", None):
+            self.assertIsNone(subscriptions.parse_group(bad))
+
+    def test_no_plan_spends_nothing(self):
+        self.assertFalse(self.subs.spend_in_group(-1, 1, NOON))
+
+    def test_member_cap_and_shared_pool(self):
+        self.subs.group_pool = 3
+        self.subs.activate_group(-1, 9, NOON + DAY, now=NOON)
+        self.subs.set_member_limit(-1, 2)
+        self.assertTrue(self.subs.spend_in_group(-1, 1, NOON))
+        self.assertTrue(self.subs.spend_in_group(-1, 1, NOON))
+        self.assertFalse(self.subs.spend_in_group(-1, 1, NOON))
+        self.assertTrue(self.subs.spend_in_group(-1, 2, NOON))
+        self.assertFalse(self.subs.spend_in_group(-1, 3, NOON))
+        self.assertTrue(self.subs.spend_in_group(-1, 3, NOON + DAY))
+
+    def test_plan_ends_after_grace(self):
+        self.subs.activate_group(-1, 9, NOON, now=NOON - DAY)
+        self.assertTrue(self.subs.group_is_pro(-1, NOON + subscriptions.GRACE - 1))
+        self.assertFalse(self.subs.spend_in_group(-1, 1, NOON + subscriptions.GRACE))
+
+    async def test_only_an_admin_passes_precheckout_and_payment_activates_once(self):
+        data = {"memory": self.memory, "subs": self.subs}
+        for status, expected in (("administrator", True), ("member", False)):
+            tg = NS(get_chat_member=AsyncMock(return_value=NS(status=status)))
+            query = NS(invoice_payload="gsub:-1:5", from_user=NS(id=5), currency="XTR", total_amount=self.subs.group_stars, answer=AsyncMock())
+            await bot.precheckout(NS(pre_checkout_query=query), NS(bot_data=data, bot=tg))
+            self.assertEqual(query.answer.call_args.kwargs["ok"], expected)
+        payment = NS(invoice_payload="gsub:-1:5", telegram_payment_charge_id="g1", total_amount=self.subs.group_stars, subscription_expiration_date=None)
+        update = NS(effective_message=NS(successful_payment=payment), effective_user=NS(id=5, language_code="ru"))
+        tg = NS(send_message=AsyncMock())
+        with patch.object(bot, "send", AsyncMock()):
+            await bot.paid(update, NS(bot_data=data, bot=tg))
+            await bot.paid(update, NS(bot_data=data, bot=tg))
+        self.assertTrue(self.subs.group_is_pro(-1))
+        self.assertEqual(tg.send_message.await_count, 1)
+        self.assertEqual(self.subs.numbers()["groups_active"], 1)
+
+    def test_numbers_show_the_funnel(self):
+        for user in (1, 2, 3, 4):
+            self.subs.note_limit_hit(user, NOON)
+        self.subs.record_payment("a", 1, 299, now=NOON)
+        self.subs.record_payment("b", 2, 299, now=NOON - 40 * DAY)
+        self.subs.record_payment("c", 2, 299, now=NOON)
+        self.subs.activate(1, NOON + DAY, now=NOON)
+        numbers = self.subs.numbers(NOON + 60)
+        self.assertEqual((numbers["limit_hit_week"], numbers["bought_week"], numbers["renewed_week"], numbers["conversion"], numbers["pro_active"], numbers["stars_week"]),
+                         (4, 1, 1, 25.0, 1, 598))
+
+
+class ButtonsInsteadOfCommandsTest(unittest.IsolatedAsyncioTestCase):
+    def test_new_commands_are_not_in_the_menu_or_help(self):
+        for language in bot.COMMANDS.values():
+            names = {name for name, _ in language}
+            self.assertFalse(names & {"pro", "auto", "antispam", "awards", "predict", "invite"})
+        self.assertLessEqual(len(bot.COMMANDS["ru"]), 6)
+
+    async def test_the_limit_message_has_a_buy_button_and_no_command(self):
+        memory = bot.Memory(":memory:")
+        self.addCleanup(memory.db.close)
+        tg = NS(create_invoice_link=AsyncMock(return_value="https://t.me/invoice"))
+        text, keyboard = await bot.pro_offer(tg, {"subs": memory.subs}, 1, True, limit_reached=True)
+        self.assertIn("Бесплатный лимит закончился", text)
+        self.assertNotIn("/pro", text)
+        self.assertEqual(keyboard.inline_keyboard[0][0].url, "https://t.me/invoice")
+        self.assertIn("Купить Pro", keyboard.inline_keyboard[0][0].text)
+
+    def test_private_chat_button_opens_the_plans(self):
+        button = bot.private_chat_button({"bot_name": "secret_bot"}, True).inline_keyboard[0][0]
+        self.assertEqual(button.url, "https://t.me/secret_bot?start=pro")
+        self.assertIsNone(bot.private_chat_button({}, True))
+
+
+class AutomationScreenTest(unittest.TestCase):
+    def setUp(self):
+        self.memory = bot.Memory(":memory:")
+        self.addCleanup(self.memory.db.close)
+        self.store = self.memory.automations
+        self.rule = {"time": "09:00", "tz": "UTC", "days": list(range(7))}
+
+    def test_pause_resume_belongs_to_the_owner(self):
+        item = self.store.add(1, self.rule, "a", "ru", 1, now=NOON)
+        self.assertFalse(self.store.set_paused(2, item, True))
+        self.assertTrue(self.store.set_paused(1, item, True, now=NOON))
+        self.assertEqual(self.store.claim_due(now=NOON + 9 * DAY), [])
+        self.assertTrue(self.store.set_paused(1, item, False, now=NOON + 9 * DAY))
+        self.assertFalse(self.store.list(1)[0]["paused"])
+
+    def test_only_the_last_runs_are_kept_and_deleted_with_the_task(self):
+        item = self.store.add(1, self.rule, "a", "ru", 1, now=NOON)
+        for index in range(automations.RUNS_KEPT + 3):
+            self.store.log_run(item, True, f"r{index}", now=NOON + index)
+        runs = self.store.runs(item)
+        self.assertEqual(len(runs), automations.RUNS_KEPT)
+        self.assertEqual(runs[0]["text"], f"r{automations.RUNS_KEPT + 2}")
+        self.store.delete(1, item)
+        self.assertEqual(self.store.runs(item), [])
+
+
+class ChatToolsTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.memory = bot.Memory(":memory:")
+        self.addCleanup(self.memory.db.close)
+        self.context = NS(bot_data={"memory": self.memory, "subs": self.memory.subs, "connections": NS(get_meta=lambda *a: None)},
+                          bot=NS(send_message=AsyncMock(), create_invoice_link=AsyncMock(return_value="https://t.me/i")), application=NS())
+
+    async def test_a_task_is_created_from_the_conversation(self):
+        tool = bot.schedule_tool(self.context, 1, "ru")
+        self.assertIn("Created", await tool["run"]({"when": "по будням в 18:00", "task": "отчёт"}))
+        self.assertEqual(self.memory.automations.list(1)[0]["task"], "отчёт")
+        self.assertIn("slots", await tool["run"]({"when": "каждый день в 09:00", "task": "ещё"}))
+        self.assertIn("Not created", await tool["run"]({"when": "завтра", "task": "x"}))
+
+    async def test_show_pro_sends_a_button(self):
+        await bot.pro_tool(self.context, 1, "ru")["run"]({})
+        self.assertIsNotNone(self.context.bot.send_message.call_args.kwargs["reply_markup"])
+
+    def test_words_that_need_these_tools(self):
+        for text in ("каждое утро присылай новости", "сделай исследование про рынок", "сколько стоит подписка", "закончился лимит", "по будням напоминай"):
+            self.assertTrue(bot.needs_tools(text), text)
+        self.assertFalse(bot.needs_tools("как дела"))
+
+
+class ResearchTest(unittest.IsolatedAsyncioTestCase):
+    def test_queries_fall_back_to_the_topic(self):
+        self.assertEqual(research.queries_from('Вот: ["а", "б", "а"]', "т"), ["а", "б"])
+        for bad in ("нет json", '["', "", None, "[1, 2]"):
+            self.assertEqual(research.queries_from(bad, "т"), ["т"])
+
+    async def test_report_comes_only_from_what_was_found(self):
+        ask = AsyncMock(side_effect=['["a", "b"]', "ОТЧЁТ"])
+        async def search(query):
+            return "Nothing found." if query == "b" else "факт https://x.example"
+        report, count = await research.write_report("тема", "ru", ask, search)
+        self.assertEqual((report, count), ("ОТЧЁТ", 1))
+        notes = ask.call_args_list[1].args[1]
+        self.assertIn("https://x.example", notes)
+        self.assertNotIn("Nothing found", notes)
+
+    async def test_no_sources_no_report(self):
+        ask = AsyncMock(return_value='["a"]')
+        with self.assertRaises(research.NoSources):
+            await research.write_report("т", "ru", ask, AsyncMock(return_value="Web search is unavailable right now; x"))
+        self.assertEqual(ask.await_count, 1)
+
+    async def run_with(self, write):
+        memory = bot.Memory(":memory:")
+        self.addCleanup(memory.db.close)
+        memory.subs.research_free = 1
+        tg = NS(send_message=AsyncMock(), send_document=AsyncMock())
+        data = {"memory": memory, "subs": memory.subs, "connections": NS(get_meta=lambda *a: None), "search_model": "m", "premium": {}}
+        app = NS(bot_data=data, bot=tg)
+        with patch.object(bot, "user_model", lambda d, u: "m"), patch.object(research, "write_report", write):
+            self.assertIsNone(await bot.start_research(app, 1, "ru", "тема"))
+            self.assertEqual(await bot.start_research(app, 1, "ru", "другая"), "busy")
+            await asyncio.gather(*data["gen_tasks"])
+        return memory, tg, app
+
+    async def test_success_sends_the_file_and_uses_the_allowance(self):
+        memory, tg, app = await self.run_with(AsyncMock(return_value=("Заголовок\nтекст", 2)))
+        tg.send_document.assert_awaited_once()
+        self.assertEqual(await bot.start_research(app, 1, "ru", "ещё"), "limit")
+
+    async def test_failure_gives_the_allowance_back(self):
+        memory, tg, app = await self.run_with(AsyncMock(side_effect=research.NoSources()))
+        tg.send_document.assert_not_awaited()
+        self.assertTrue(memory.subs.research_take(1))
+
+    async def test_no_search_and_empty_topic(self):
+        data = {"connections": NS(get_meta=lambda *a: None)}
+        self.assertEqual(await bot.start_research(NS(bot_data=data), 1, "ru", "т"), "no_search")
+        self.assertEqual(await bot.start_research(NS(bot_data=data), 1, "ru", "  "), "empty")
+
+
+class EmbeddingsTest(unittest.IsolatedAsyncioTestCase):
+    def finder(self, vectors):
+        memory = bot.Memory(":memory:")
+        self.addCleanup(memory.db.close)
+        calls = []
+
+        async def create(model, input):
+            calls.append(list(input))
+            return NS(data=[NS(embedding=vectors[text]) for text in input])
+        return embeddings.Embeddings(memory.db, NS(embeddings=NS(create=create)), "m"), calls
+
+    async def test_closest_first_weak_dropped_and_paid_once(self):
+        finder, calls = self.finder({"штраф": [1.0, 0.0], "неустойка": [0.9, 0.1], "погода": [0.0, 1.0]})
+        ranked = await finder.rank("штраф", ["погода", "неустойка"])
+        self.assertEqual([index for index, _ in ranked], [1])
+        count = sum(len(c) for c in calls)
+        await finder.rank("штраф", ["погода", "неустойка"])
+        self.assertEqual(sum(len(c) for c in calls), count)
+
+    async def test_vectors_are_shortened_and_survive_storage(self):
+        finder, _ = self.finder({"a": [1.0] * 1536})
+        first = (await finder.vectors(["a"]))["a"]
+        self.assertEqual(len(first), embeddings.SIZE)
+        again = (await finder.vectors(["a"]))["a"]
+        self.assertAlmostEqual(similarity_of(first, again), 1.0, places=5)
+
+    async def test_service_failure_means_no_results(self):
+        memory = bot.Memory(":memory:")
+        self.addCleanup(memory.db.close)
+        finder = embeddings.Embeddings(memory.db, NS(embeddings=NS(create=AsyncMock(side_effect=RuntimeError("x")))), "m")
+        self.assertEqual(await finder.rank("q", ["a"]), [])
+
+
+def similarity_of(a, b):
+    return embeddings.similarity(a, b)
+
+
+class TaskZoneTest(unittest.TestCase):
+    def setUp(self):
+        self.memory = bot.Memory(":memory:")
+        self.addCleanup(self.memory.db.close)
+
+    def test_someone_without_a_profile_still_gets_a_zone(self):
+        self.assertEqual(bot.task_zone(self.memory, 1, "ru"), "Europe/Moscow")
+        self.assertEqual(bot.task_zone(self.memory, 1, "en"), "UTC")
+
+    def test_the_device_zone_wins_and_a_bad_one_is_ignored(self):
+        self.assertEqual(bot.task_zone(self.memory, 1, "ru", "Asia/Almaty"), "Asia/Almaty")
+        self.assertEqual(bot.task_zone(self.memory, 1, "ru", "Not/AZone"), "Europe/Moscow")
+
+    def test_every_choice_on_the_screen_is_understood(self):
+        for when in ("каждый день", "по будням", "по понедельникам", "по пятницам", "по воскресеньям", "каждое воскресенье",
+                     "every day", "weekdays", "every monday", "every friday", "every sunday"):
+            self.assertIsNotNone(bot.recurring.parse(when + " 09:00", "UTC"), when)
 
 
 class ScanTest(unittest.IsolatedAsyncioTestCase):

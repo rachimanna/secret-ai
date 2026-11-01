@@ -225,6 +225,11 @@ class Store:
             for table in ('wb_files', 'wb_projects', 'wb_scopes'):
                 self.db.execute(f'DELETE FROM {table}' + (' WHERE user_id=?' if user is not None else ''), (user,) if user is not None else ())
 
+    def all_chunks(self, user, chat):
+        """Every chunk of the latest files, for search by meaning."""
+        return [{**chunk, 'id': file['id'], 'name': file['name'], 'version': file['version']}
+                for file in self.files(user, chat, latest=True) for chunk in chunks(file['document']['text'])]
+
     def search(self, user, chat, query, limit=8):
         words = terms(query)
         if not words:
