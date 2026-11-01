@@ -972,7 +972,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
 <script type="application/json" id="apps-data">__APPS__</script>
 
 <script src="/play-core.js?v=1"></script>
-<script src="/play-ui.js?v=1"></script>
+<script src="/play-ui.js?v=2"></script>
 <script>
 let appearanceChoice = "system";
 try { appearanceChoice = localStorage.getItem("secret-appearance") || "system"; } catch {}
@@ -1304,6 +1304,16 @@ function toast(text, icon = "") {
   clearTimeout(toast.t);
   toast.t = setTimeout(() => el.classList.remove("show"), 2400);
 }
+async function buyPro() {
+  const ru = lang === "ru", sub = state.gen.sub;
+  if (sub.pro) { toast(ru ? "Подписка активна. Отменить можно в Telegram → Мои звёзды." : "Your subscription is active. Cancel in Telegram → My Stars."); return; }
+  try {
+    const { url } = await api("/api/sub/buy");
+    const done = status => { if (status === "paid") { toast(T.paidOk); haptic("success"); setTimeout(() => load(true), 1500); } };
+    if (tg?.openInvoice && tg.isVersionAtLeast?.("6.1")) tg.openInvoice(url, done); else openLink(url);
+  } catch (e) { toast(errorText(e)); haptic("error"); }
+}
+
 async function api(path, body = {}, signal) {
   const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", "X-Telegram-Init-Data": tg?.initData || "" }, body: JSON.stringify(body), signal });
   const data = await res.json().catch(() => ({}));
@@ -2604,6 +2614,7 @@ function renderSettings() {
       row("set-mcp", SYM.mcp, T.mcp, state.mcp.length ? String(state.mcp.length) : ""),
       ...(state.gen.owner ? [row("set-gen", SYM.model, T.genKey, state.gen.ready ? T.keySet : "")] : []),
       ...(state.gen.owner ? [row("set-stats", SYM.model, lang === "ru" ? "Статистика бота" : "Bot stats")] : []),
+      ...(state.gen.sub && !state.gen.owner ? [row("set-pro", SYM.model, "Secret AI Pro", state.gen.sub.pro ? (lang === "ru" ? "активна" : "active") : state.gen.sub.stars + " ⭐")] : []),
     ], 3),
     `<div class="section" style="--i:4;margin-top:30px"><div class="list">${row("set-clear", SYM.trash, T.clear, "", "danger")}</div></div>`,
   ].join("");
@@ -2617,6 +2628,7 @@ function renderSettings() {
   $("set-mcp").onclick = openMcpSheet;
   if ($("set-gen")) $("set-gen").onclick = openGenKeySheet;
   if ($("set-stats")) $("set-stats").onclick = openStatsSheet;
+  if ($("set-pro")) $("set-pro").onclick = buyPro;
   $("set-id").onclick = () => { navigator.clipboard?.writeText(String(state.user.id)); toast(T.copied); haptic("light"); };
   $("set-mem").onclick = () => confirmAction(T.clearAsk, clearMemory);
   $("set-clear").onclick = () => confirmAction(T.clearAsk, clearMemory);

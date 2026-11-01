@@ -461,6 +461,12 @@ def make_handler(config):
                     self._send(400, {"error": "bad request"})
                     return
                 self._send(200, {"url": bridge.invoice(user, pack)})
+            elif path == "/api/sub/buy":
+                self._send(200, {"url": bridge.pro_invoice(user)})
+            elif path == "/api/play/score":
+                self._send(200, {"ok": bool(bridge.play_score(user, data.get("kind"), data.get("score")))})
+            elif path == "/api/play/top":
+                self._send(200, bridge.play_top(uid))
             elif path == "/api/gen/key":
                 # Only the bot owner sets the fal.ai key (it spends the owner's money) and the models.
                 if store.claim_owner(uid) != uid:
