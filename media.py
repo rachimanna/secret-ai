@@ -903,3 +903,123 @@ async def abacus_image(client, http, model, prompt, fmt, images=None):
     if picture.status_code >= 400:
         raise MediaError("failed", f"download {picture.status_code}")
     return picture.content
+
+
+# ---------- 4K: a photo made bigger, with AI-drawn detail on a fal key or a careful resize without one ----------
+
+UPSCALE_MODEL = "fal-ai/aura-sr"  # 4x super-resolution, a fraction of a cent per picture
+UPSCALE_SIDE = 3840  # the long side of a 4K picture
+UPSCALE_MAX_PIXELS = 40_000_000  # what a phone can still open
+
+
+def _resize_4k(image):
+    """Blocking: Lanczos up to 4K (at most 4x) with gentle sharpening; JPEG so Telegram takes the file quickly."""
+    import io
+
+    from PIL import Image, ImageFilter, ImageOps
+
+    with Image.open(io.BytesIO(image)) as source:
+        picture = ImageOps.exif_transpose(source).convert("RGB")
+    picture = _fit_4k(picture, Image.LANCZOS)
+    picture = picture.filter(ImageFilter.UnsharpMask(radius=1.6, percent=70, threshold=2))
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=93, subsampling=0, optimize=True)
+    return out.getvalue()
+
+
+def _fit_4k(picture, method):
+    longest = max(picture.size)
+    scale = min(4.0, UPSCALE_SIDE / longest) if longest else 1.0
+    size = (max(1, round(picture.width * scale)), max(1, round(picture.height * scale)))
+    while size[0] * size[1] > UPSCALE_MAX_PIXELS:
+        size = (size[0] * 9 // 10, size[1] * 9 // 10)
+    return picture.resize(size, method) if size != picture.size else picture
+
+
+def _normalize(image):
+    """Blocking: the AI result brought to the 4K long side (AuraSR always makes 4x) as a high-quality JPEG."""
+    import io
+
+    from PIL import Image
+
+    with Image.open(io.BytesIO(image)) as source:
+        picture = _fit_4k(source.convert("RGB"), Image.LANCZOS)
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=94, subsampling=0, optimize=True)
+    return out.getvalue()
+
+
+async def upscale(http, key, image):
+    """(bytes, "ai" or "resize"): the picture at 4K. With a fal key AuraSR draws real detail; any failure there (or no
+    key) falls back to the careful resize, so the person always gets a bigger picture."""
+    if key:
+        try:
+            data_uri = "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii")
+            url = await fal_run(http, key, UPSCALE_MODEL, {"image_url": data_uri, "upscaling_factor": 4}, TIMEOUTS["photo"])
+            result = await http.get(url, timeout=180, follow_redirects=True)
+            if result.status_code < 400:
+                return await asyncio.to_thread(_normalize, result.content), "ai"
+            LOG.warning("4K: downloading the result failed (%s); resizing instead", result.status_code)
+        except MediaError as exc:
+            LOG.warning("4K with %s failed (%s); resizing instead", UPSCALE_MODEL, exc.code)
+    return await asyncio.to_thread(_resize_4k, image), "resize"
+
+
+# ---------- stickers: a photo with its background cut out (fal key) and a white outline, 512 px ----------
+
+CUTOUT_MODEL = "fal-ai/imageutils/rembg"
+STICKER_SIDE = 512
+
+
+async def cut_out(http, key, image):
+    """(PNG with transparency, True) with the background removed on the fal key, or (the photo, False) without."""
+    if key:
+        try:
+            data_uri = "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii")
+            url = await fal_run(http, key, CUTOUT_MODEL, {"image_url": data_uri}, TIMEOUTS["photo"])
+            result = await http.get(url, timeout=120, follow_redirects=True)
+            if result.status_code < 400:
+                return result.content, True
+            LOG.warning("Sticker: downloading the cut-out failed (%s)", result.status_code)
+        except MediaError as exc:
+            LOG.warning("Sticker cut-out failed (%s); using the whole photo", exc.code)
+    return image, False
+
+
+def sticker_png(image, cut):
+    """Blocking: a Telegram sticker (PNG, the longer side 512). A cut-out gets a white outline and a soft shadow,
+    a whole photo rounded corners."""
+    import io
+
+    from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
+
+    with Image.open(io.BytesIO(image)) as source:
+        picture = ImageOps.exif_transpose(source).convert("RGBA")
+    if cut:
+        box = picture.getchannel("A").point(lambda a: 255 if a > 24 else 0).getbbox()
+        if box:
+            picture = picture.crop(box)
+    border = 14 if cut else 0
+    inner = STICKER_SIDE - 2 * border
+    picture.thumbnail((inner, inner), Image.LANCZOS) if max(picture.size) > inner else None
+    if max(picture.size) < inner:  # small photos are brought up to the sticker size too
+        scale = inner / max(picture.size)
+        picture = picture.resize((max(1, round(picture.width * scale)), max(1, round(picture.height * scale))), Image.LANCZOS)
+    canvas = Image.new("RGBA", (picture.width + 2 * border, picture.height + 2 * border), (0, 0, 0, 0))
+    if cut:
+        alpha = Image.new("L", canvas.size, 0)
+        alpha.paste(picture.getchannel("A"), (border, border))
+        outline = alpha.filter(ImageFilter.MaxFilter(21)).filter(ImageFilter.GaussianBlur(1))
+        shadow = ImageChops.offset(outline, 0, 3).filter(ImageFilter.GaussianBlur(4)).point(lambda a: a * 35 // 100)
+        canvas.paste((0, 0, 0, 255), (0, 0), shadow)
+        canvas.paste((255, 255, 255, 255), (0, 0), outline)
+        canvas.alpha_composite(picture, (border, border))
+    else:
+        mask = Image.new("L", picture.size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, picture.width - 1, picture.height - 1), radius=max(12, min(picture.size) // 8),
+                                               fill=255)
+        picture.putalpha(ImageChops.multiply(picture.getchannel("A"), mask))
+        canvas.alpha_composite(picture)
+    out = io.BytesIO()
+    canvas.save(out, "PNG", optimize=True)
+    return out.getvalue()

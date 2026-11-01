@@ -38,5 +38,24 @@ class BunkerLookTest(unittest.TestCase):
         self.assertEqual(words, [])
 
 
+class VoteCounterTest(unittest.IsolatedAsyncioTestCase):
+    async def test_votes_show_up_on_the_voting_message(self):
+        import sqlite3
+        from types import SimpleNamespace as NS
+        from unittest.mock import AsyncMock, patch
+        quiz = game.BunkerGame(sqlite3.connect(":memory:"), AsyncMock())
+        g = game.Game(-1, 1, "A")
+        g.characters = {i: game.Character(i, n) for i, n in ((1, "A"), (2, "B"), (3, "C"))}
+        g.state = "voting"
+        message = NS(text="vote", reply_markup="buttons", edit_text=AsyncMock())
+        g.vote_message, g.vote_text = message, "⚖️ Голосование"
+        with patch.object(game, "VOTE_REFRESH_SECONDS", 0):
+            await quiz._handle_vote(NS(answer=AsyncMock()), g, NS(id=1), ["g", "v", "2", g.session])
+            await g.vote_refresh
+        shown = message.edit_text.call_args.args[0]
+        self.assertIn("Проголосовали: <b>1</b> из 3", shown)
+        self.assertEqual(message.edit_text.call_args.kwargs["reply_markup"], "buttons")
+
+
 if __name__ == "__main__":
     unittest.main()

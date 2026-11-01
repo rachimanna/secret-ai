@@ -3,7 +3,9 @@ import difflib
 import hashlib
 import io
 import json
+import math
 import re
+from collections import Counter
 import time
 import zipfile
 from xml.sax.saxutils import escape
@@ -47,9 +49,38 @@ def chunks(text):
         yield {'start': start, 'end': end, 'location': f'{label} chars {start + 1}–{end}'.strip(), 'text': text[start:end]}
 
 
-def score(query_terms, text, name=''):
-    haystack, title = text.casefold(), name.casefold()
-    return sum(min(haystack.count(w), 6) + (8 if w in title else 0) for w in query_terms)
+ENDINGS = tuple(sorted((
+    'иями', 'ями', 'ами', 'ого', 'его', 'ому', 'ему', 'ыми', 'ими', 'ией', 'ться', 'тся', 'ешь', 'ишь', 'ете', 'ите', 'ют', 'ут', 'ят', 'ат',
+    'ая', 'яя', 'ое', 'ее', 'ые', 'ие', 'ый', 'ий', 'ой', 'ей', 'ую', 'юю', 'ах', 'ях', 'ом', 'ем', 'ам', 'ям', 'ов', 'ев', 'ию', 'ия', 'ии',
+    'а', 'я', 'о', 'е', 'ы', 'и', 'у', 'ю', 'ь', 'й', 'ing', 'ies', 'ed', 'es', 's', 'e'), key=len, reverse=True))
+
+
+def stem(word):
+    """The word without its ending, so 'расчётов' finds 'расчёты' and 'invoices' finds 'invoice'. Only ever a little shorter."""
+    for ending in ENDINGS:
+        if word.endswith(ending) and len(word) - len(ending) >= 4:
+            return word[:-len(ending)]
+    return word
+
+
+def stems(text):
+    return Counter(stem(w) for w in re.findall(r'[\w-]{3,}', text.casefold()))
+
+
+def weights(query_terms, texts):
+    """Rare words count for more than the ones found everywhere."""
+    found = [stems(text) for text in texts]
+    total = len(found)
+    return {w: 1 + math.log((1 + total) / (1 + sum(stem(w) in item for item in found))) for w in query_terms}
+
+
+def score(query_terms, text, name='', rarity=None):
+    haystack, title, tokens = text.casefold(), name.casefold(), stems(text)
+    total = 0
+    for word in query_terms:
+        hits = max(min(haystack.count(word), 6), min(tokens.get(stem(word), 0), 6))
+        total += (hits + (8 if word in title or stem(word) in title else 0)) * ((rarity or {}).get(word, 1))
+    return total
 
 
 class Store:
@@ -199,9 +230,11 @@ class Store:
         if not words:
             return []
         hits = []
-        for file in self.files(user, chat, latest=True):
-            for chunk in chunks(file['document']['text']):
-                rank = score(words, chunk['text'], file['name'])
+        files = [(file, list(chunks(file['document']['text']))) for file in self.files(user, chat, latest=True)]
+        rarity = weights(words, [chunk['text'] for _, parts in files for chunk in parts])
+        for file, parts in files:
+            for chunk in parts:
+                rank = score(words, chunk['text'], file['name'], rarity)
                 if rank:
                     hits.append({**chunk, 'score': rank, 'id': file['id'], 'name': file['name'], 'version': file['version']})
         hits.sort(key=lambda hit: (-hit['score'], -hit['id'], hit['start']))

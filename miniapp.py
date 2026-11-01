@@ -359,6 +359,9 @@ def make_handler(config):
                 self._send(200, result)
             elif path == "/api/state":
                 self._send(200, self._state(user, fresh=bool(data.get("fresh"))))
+            elif path == "/api/stats":
+                stats = bridge.stats(uid)
+                self._send(200, {"stats": stats}) if stats is not None else self._send(403, {"error": "owner only"})
             elif path == "/api/catalog":
                 query, after = str(data.get("q") or "").strip().lower(), str(data.get("after") or "")
                 # Apps that connect without any keys always come first.
@@ -458,6 +461,12 @@ def make_handler(config):
                     self._send(400, {"error": "bad request"})
                     return
                 self._send(200, {"url": bridge.invoice(user, pack)})
+            elif path == "/api/sub/buy":
+                self._send(200, {"url": bridge.pro_invoice(user)})
+            elif path == "/api/play/score":
+                self._send(200, {"ok": bool(bridge.play_score(user, data.get("kind"), data.get("score")))})
+            elif path == "/api/play/top":
+                self._send(200, bridge.play_top(uid))
             elif path == "/api/gen/key":
                 # Only the bot owner sets the fal.ai key (it spends the owner's money) and the models.
                 if store.claim_owner(uid) != uid:

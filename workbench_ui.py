@@ -211,18 +211,41 @@ class Controls:
             await self.api.send(update.effective_message, self.api.ui(update, 'Напиши /find слово или фразу', 'Use /find word or phrase'))
             return
         hits = store.search(user, chat, query)
+        if len(hits) < 3:  # few or none: the same meaning in other words
+            hits = await self.wider_search(context, store, user, chat, query, hits)
         if not hits:
             await self.api.send(update.effective_message, self.api.ui(update, 'Совпадений в текущем проекте не найдено. Поиск проверяет извлечённый текст, не картинки.',
                                                                                   'No matches in the current project. Search covers extracted text, not images.'))
             return
         blocks = []
         words = workbench.terms(query)
+        words += [workbench.stem(w) for w in words]
         for hit in hits:
             text = workbench.redact(hit['text'])
             first = min((text.casefold().find(w) for w in words if w in text.casefold()), default=0)
             excerpt = text[max(0, first - 140):max(0, first - 140) + 650]
             blocks.append(f"#{hit['id']} {hit['name']} v{hit['version']}\n{hit['location']}\n{excerpt}")
         await self.api.send(update.effective_message, '\n\n'.join(blocks))
+
+    async def wider_search(self, context, store, user, chat, query, hits):
+        """Ask the model for other ways to say the query and search again. Without a model: what was found stays."""
+        model = self.api.user_model(context.bot_data, user)
+        if not model or not store.files(user, chat, latest=True):
+            return hits
+        try:
+            answer = await asyncio.wait_for(self.api.quick_answer(context.bot_data, model,
+                'Give up to 6 synonyms or closely related search terms for the query, in its language and in English, '
+                'separated by commas. Output only the terms.', query[:300], max_tokens=80), 15)
+        except Exception as exc:
+            LOG.info('Wider search unavailable: %s', type(exc).__name__)
+            return hits
+        found = list(hits)
+        seen = {(hit['id'], hit['start']) for hit in found}
+        for hit in store.search(user, chat, ' '.join((answer or '').replace(',', ' ').split()[:12])):
+            if (hit['id'], hit['start']) not in seen:
+                found.append(hit)
+                seen.add((hit['id'], hit['start']))
+        return found[:8]
 
     async def analyse(self, update, context, text, instructions, limit=5000):
         model = self.api.user_model(context.bot_data, update.effective_user.id)

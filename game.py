@@ -22,6 +22,7 @@ MIN_PLAYERS, MAX_PLAYERS = 3, 20
 LOBBY_SECONDS = 180
 ROUND_SECONDS = (30, 25, 20)  # debate time after each round's cards, as announced in the chat
 MESSAGE_LIMIT = 4096  # Telegram's limit for one message
+VOTE_REFRESH_SECONDS = 1.5  # Telegram counts edits towards a group's ~20 messages a minute
 GAME_ASK = re.compile(
     r"(поигра|сыграем|давай\s+(?:в\s+)?игр|бункер|\bbunker\b|выживан|викторин|квиз|\bquiz\b|let'?s play)",
     re.I,
@@ -253,6 +254,7 @@ class Game:
         self.capacity = 1
         self.votes = {}  # voter_id -> target_user_id
         self.voted_event = asyncio.Event()
+        self.vote_message, self.vote_text, self.vote_refresh = None, "", None
         self.task = None
         self.lock = asyncio.Lock()
         self.created = time.monotonic()
@@ -433,6 +435,16 @@ class BunkerGame:
         await query.answer(f"Твой голос принят: против {target_name} ❌")
         if len(game.votes) >= len(alive_voters):
             game.voted_event.set()
+        elif not game.vote_refresh or game.vote_refresh.done():
+            game.vote_refresh = asyncio.create_task(self._show_votes(game, len(alive_voters)))
+
+    async def _show_votes(self, game, voters):
+        """"Проголосовали 3 из 5" on the voting message; votes that come in quickly share one edit."""
+        await asyncio.sleep(VOTE_REFRESH_SECONDS)
+        if game.state != "voting" or game.voted_event.is_set() or not game.vote_message:
+            return
+        shown = f"{game.vote_text}\n\n🗳 Проголосовали: <b>{len(game.votes)}</b> из {voters} {progress(len(game.votes), voters)}"
+        await self._edit(game.vote_message, shown, game.vote_message.reply_markup)
 
     # ---------- gameplay loop ----------
 
@@ -525,6 +537,7 @@ class BunkerGame:
             f"<i>30 секунд, голос можно поменять</i>"
         )
         vote_msg = await bot.send_message(game.chat_id, text, parse_mode="HTML", reply_markup=Keyboard(vote_buttons))
+        game.vote_message, game.vote_text = vote_msg, text
 
         # Wait for votes or timeout
         deadline = time.monotonic() + 30
@@ -534,10 +547,11 @@ class BunkerGame:
             except asyncio.TimeoutError:
                 pass
 
-        try:
-            await vote_msg.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
+        if game.vote_refresh and not game.vote_refresh.done():
+            game.vote_refresh.cancel()
+        game.vote_message = None
+        done = f"{text}\n\n🗳 Голосование закрыто: проголосовали {len(game.votes)} из {len(alive)}"
+        await self._edit(vote_msg, done)  # the buttons go away with the edit
 
         # Tally votes
         tally = {}

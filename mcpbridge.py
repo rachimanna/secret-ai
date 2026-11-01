@@ -5,6 +5,7 @@ for everyone else the bot does it: lists each server's tools, offers them as fun
 MCP over "streamable HTTP": JSON-RPC posted to the server URL, answers as JSON or as server-sent events.
 """
 import asyncio
+import approvals
 import hashlib
 import json
 import logging
@@ -115,12 +116,16 @@ class Bridge:
 
     def __init__(self):
         self.functions, self.routes = [], {}  # function name -> (Server, tool name, app label)
+        self.reading = set()  # function names that only read: they run without asking the person
 
     def handles(self, name):
         return name in self.routes
 
     def app(self, name):
         return self.routes[name][2]
+
+    def read_only(self, name):
+        return name in self.reading
 
     async def call(self, name, arguments):
         server, tool, _ = self.routes[name]
@@ -177,6 +182,8 @@ async def load(http, servers):
             if not isinstance(schema,dict) or schema.get("type") != "object":
                 schema = {"type": "object", "properties": {}}
             bridge.routes[name] = (server, tool["name"], server.label)
+            if approvals.read_only(tool):
+                bridge.reading.add(name)
             bridge.functions.append({"type": "function", "function": {
                 "name": name, "description": f"[{server.label}] " + str(tool.get("description") or tool["name"])[:900],
                 "parameters": schema}})
