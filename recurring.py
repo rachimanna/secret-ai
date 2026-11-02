@@ -15,7 +15,7 @@ def parse(value, tz):
     if match:
         return {"time":daily.clock(match[1]),"tz":tz,
                 "days":[0,1,2,3,4] if value.startswith(("по будням","weekdays")) else list(range(7))}
-    match = re.fullmatch(r"(?:каждый|каждую|по|every) (\w+) (?:в )?(\d{2}:\d{2})", value)
+    match = re.fullmatch(r"(?:каждый|каждую|каждое|по|every) (\w+) (?:в )?(\d{2}:\d{2})", value)
     if match and match[1] in DAYS:
         return {"time":daily.clock(match[2]),"tz":tz,"days":[DAYS[match[1]]]}
     return None

@@ -461,6 +461,51 @@ def make_handler(config):
                     self._send(400, {"error": "bad request"})
                     return
                 self._send(200, {"url": bridge.invoice(user, pack)})
+            elif path == "/api/tasks":
+                self._send(200, bridge.tasks_state(uid, language))
+            elif path == "/api/tasks/add":
+                error = bridge.tasks_add(uid, language, data.get("when"), data.get("task"), data.get("tz"))
+                self._send(400, {"error": error}) if error else self._send(200, bridge.tasks_state(uid, language))
+            elif path == "/api/tasks/change":
+                try:
+                    item, action = int(data.get("id")), str(data.get("action") or "")
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "bad request"})
+                    return
+                if action not in ("delete", "pause", "resume"):
+                    self._send(400, {"error": "bad request"})
+                    return
+                bridge.tasks_change(uid, item, action)
+                self._send(200, bridge.tasks_state(uid, language))
+            elif path == "/api/research":
+                error = bridge.research(user, str(data.get("topic") or ""))
+                self._send(400, {"error": error}) if error else self._send(200, {"ok": True})
+            elif path == "/api/invite":
+                self._send(200, bridge.invite_info(uid))
+            elif path in ("/api/groups/extras", "/api/groups/buy", "/api/groups/post"):
+                try:
+                    chat_id = int(data.get("chat_id"))
+                    if chat_id >= 0:
+                        raise ValueError
+                    if path == "/api/groups/buy":
+                        self._send(200, {"url": bridge.group_buy(user, chat_id)})
+                    elif path == "/api/groups/post":
+                        what = str(data.get("what") or "")
+                        if what not in ("awards", "predict"):
+                            raise ValueError
+                        bridge.group_post(user, chat_id, what)
+                        self._send(200, {"ok": True})
+                    else:
+                        keys = ("antispam", "awards", "member_limit")
+                        change = {k: data[k] for k in keys if k in data}
+                        if "member_limit" in change and int(change["member_limit"]) not in (0, 50, 100, 200, 500):
+                            raise ValueError
+                        result = bridge.group_extras(uid, chat_id, change or None)
+                        self._send(200, result) if result else self._send(403, {"error": "forbidden"})
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "bad request"})
+                except PermissionError:
+                    self._send(403, {"error": "group_admin"})
             elif path == "/api/sub/buy":
                 self._send(200, {"url": bridge.pro_invoice(user)})
             elif path == "/api/play/score":

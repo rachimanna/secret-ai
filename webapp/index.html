@@ -887,6 +887,7 @@ body { font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;
     <button class="live-entry press" id="live-open"><span class="live-dot"></span>
       <span class="body"><b>Secret AI Live</b><small id="live-entry-sub"></small></span><span class="go" id="live-entry-go"></span></button>
     <div class="home-actions" id="home-actions"></div>
+    <div class="list" id="home-tools" style="margin-top:12px"></div>
     <div class="section"><div class="section-heading"><h2 id="recent-heading">Последние чаты</h2><button class="text-button" id="all-chats">Все чаты</button></div><div id="recent-chats" class="list"></div></div>
     <div class="section"><div class="section-heading"><h2 id="ideas-heading">Попробуй сегодня</h2></div><div class="list quick" id="quick"></div></div>
 
@@ -1304,6 +1305,129 @@ function toast(text, icon = "") {
   clearTimeout(toast.t);
   toast.t = setTimeout(() => el.classList.remove("show"), 2400);
 }
+function toolRow(id, title, sub) { return `<button class="row compact press" id="${id}"><div class="body"><div class="t">${title}</div>${sub ? `<div class="s">${sub}</div>` : ""}</div></button>`; }
+function renderHomeTools() {
+  const box = $("home-tools"); if (!box) return;
+  const ru = lang === "ru", sub = state?.gen?.sub, owner = state?.gen?.owner;
+  const pro = sub && !owner ? toolRow("tool-pro", "💎 Secret AI Pro", sub.pro ? (ru ? "Подписка активна" : "Subscription is active") : (ru ? `Осталось сегодня: ${sub.left ?? "∞"} · купить за ${sub.stars} ⭐` : `Left today: ${sub.left ?? "∞"} · buy for ${sub.stars} ⭐`)) : "";
+  box.innerHTML = pro
+    + toolRow("tool-tasks", ru ? "⏰ Автозадачи" : "⏰ Scheduled tasks", ru ? "Бот сам делает дела по расписанию" : "The bot does things on a schedule")
+    + toolRow("tool-research", ru ? "🔎 Исследование" : "🔎 Research", ru ? "Отчёт в Word со ссылками на источники" : "A Word report with links to sources")
+    + toolRow("tool-invite", ru ? "🎁 Пригласить друзей" : "🎁 Invite friends", ru ? "Кредиты вам обоим" : "Credits for both of you");
+  if ($("tool-pro")) $("tool-pro").onclick = buyPro;
+  $("tool-tasks").onclick = openTasksSheet;
+  $("tool-research").onclick = openResearchSheet;
+  $("tool-invite").onclick = openInviteSheet;
+}
+function openInvoiceUrl(url) {
+  const done = status => { if (status === "paid") { toast(T.paidOk); haptic("success"); closeSheet(); setTimeout(() => load(true), 1500); } };
+  if (tg?.openInvoice && tg.isVersionAtLeast?.("6.1")) tg.openInvoice(url, done); else openLink(url);
+}
+let tasksData = null;
+function deviceZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch { return ""; } }
+async function openTasksSheet() {
+  const ru = lang === "ru";
+  openSheet(`<div class="head"><h3>${ru ? "Автозадачи" : "Scheduled tasks"}</h3></div><div id="tasks-body"><p class="lead">${ru ? "Загружаю…" : "Loading…"}</p></div>`);
+  try { tasksData = await api("/api/tasks"); renderTasks(); }
+  catch (e) { toast(errorText(e)); closeSheet(); }
+}
+function renderTasks() {
+  const box = $("tasks-body"); if (!box || !tasksData) return;
+  const ru = lang === "ru", d = tasksData, full = d.items.length >= d.slots;
+  const items = d.items.map(i => {
+    const last = i.runs && i.runs[0];
+    return `<div class="list" style="margin-bottom:10px"><div class="row compact"><div class="body"><div class="t">${esc(i.task.slice(0, 120))}</div><div class="s">${esc(i.when)}${i.paused ? (ru ? " · на паузе" : " · paused") : ""}</div>
+      ${last ? `<div class="s">${ru ? "Последний запуск" : "Last run"}: ${new Date(last.at * 1000).toLocaleString(ru ? "ru-RU" : "en-US")} · ${last.ok ? "✅" : "⚠️"}</div>` : ""}</div></div>
+      <div class="row compact"><button class="btn ghost" data-task-action="${i.paused ? "resume" : "pause"}" data-task="${i.id}">${i.paused ? (ru ? "Включить" : "Resume") : (ru ? "Пауза" : "Pause")}</button>
+      <button class="btn ghost" data-task-action="delete" data-task="${i.id}">${ru ? "Удалить" : "Delete"}</button></div></div>`;
+  }).join("");
+  const days = ru ? [["каждый день","Каждый день"],["по будням","По будням"],["по понедельникам","По понедельникам"],["по пятницам","По пятницам"],["по воскресеньям","По воскресеньям"]]
+                  : [["every day","Every day"],["weekdays","Weekdays"],["every monday","Mondays"],["every friday","Fridays"],["every sunday","Sundays"]];
+  box.innerHTML = items + (full ? `<p class="lead">${ru ? `Занято мест: ${d.items.length} из ${d.slots}.` : `Slots used: ${d.items.length} of ${d.slots}.`}</p>${state?.gen?.sub && !state.gen.sub.pro && !state.gen.owner ? `<button class="btn" id="tasks-pro">${ru ? `⭐ Больше автозадач с Pro` : `⭐ More tasks with Pro`}</button>` : ""}` : `
+    <div class="small">${ru ? "Готовые варианты" : "Ready-made"}</div>
+    <div class="phrases">${d.templates.map((t, n) => `<span class="press" role="button" tabindex="0" data-template="${n}">${esc(t.title)}</span>`).join("")}</div>
+    <div class="small">${ru ? "Что делать" : "What to do"}</div>
+    <textarea id="task-text" rows="3" maxlength="1500" style="width:100%;box-sizing:border-box" placeholder="${ru ? "Например: собери главные новости про ИИ" : "For example: collect the main AI news"}"></textarea>
+    <div class="small">${ru ? "Когда" : "When"} (${esc(deviceZone() || d.tz)})</div>
+    <div style="display:flex;gap:8px"><select id="task-days" style="flex:1">${days.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select><input id="task-time" type="time" value="09:00"></div>
+    <p class="hint">${ru ? "В приложениях автозадача только читает и ничего не меняет." : "In apps a scheduled task only reads and changes nothing."}</p>
+    <button class="btn" id="task-add">${ru ? "Создать автозадачу" : "Create the task"}</button>`);
+  box.querySelectorAll("[data-template]").forEach(b => b.onclick = () => { const f = $("task-text"); f.value = d.templates[+b.dataset.template].task; f.focus(); });
+  box.querySelectorAll("[data-task-action]").forEach(b => b.onclick = async () => {
+    try { tasksData = await api("/api/tasks/change", { id: +b.dataset.task, action: b.dataset.taskAction }); renderTasks(); haptic("select"); }
+    catch (e) { toast(errorText(e)); haptic("error"); }
+  });
+  if ($("tasks-pro")) $("tasks-pro").onclick = buyPro;
+  if ($("task-add")) $("task-add").onclick = async () => {
+    const task = $("task-text").value.trim(), time = $("task-time").value;
+    if (!task || !time) { toast(ru ? "Напиши, что делать, и выбери время" : "Say what to do and pick a time"); return; }
+    try { tasksData = await api("/api/tasks/add", { task, when: `${$("task-days").value} ${time}`, tz: deviceZone() }); renderTasks(); toast(T.saved); haptic("success"); }
+    catch (e) { toast(errorText(e)); haptic("error"); }
+  };
+}
+function openResearchSheet() {
+  const ru = lang === "ru";
+  openSheet(`<div class="head"><h3>${ru ? "Исследование" : "Research"}</h3></div>
+    <p class="lead">${ru ? "Бот сделает несколько поисков и пришлёт в чат отчёт в Word со ссылками на источники. Это занимает несколько минут." : "The bot runs several searches and sends a Word report with links to the chat. It takes a few minutes."}</p>
+    <textarea id="research-topic" rows="3" maxlength="500" style="width:100%;box-sizing:border-box" placeholder="${ru ? "Тема исследования" : "Research topic"}"></textarea>
+    <button class="btn" id="research-go">${ru ? "Начать" : "Start"}</button>`);
+  $("research-go").onclick = async () => {
+    const topic = $("research-topic").value.trim();
+    if (!topic) { toast(ru ? "Напиши тему" : "Enter a topic"); return; }
+    $("research-go").disabled = true;
+    try { await api("/api/research", { topic }); toast(ru ? "Начал, отчёт придёт в чат" : "Started, the report will arrive in the chat"); haptic("success"); closeSheet(); }
+    catch (e) {
+      $("research-go").disabled = false;
+      if (e.code === "limit" && state?.gen?.sub) { toast(ru ? "Исследования на сегодня закончились" : "No research left today"); buyPro(); return; }
+      toast(e.code === "no_search" ? (ru ? "Поиск в интернете сейчас недоступен" : "Web search is unavailable right now") : e.code === "busy" ? (ru ? "Одно исследование уже идёт" : "One is already running") : errorText(e)); haptic("error");
+    }
+  };
+}
+async function openInviteSheet() {
+  const ru = lang === "ru";
+  try {
+    const d = await api("/api/invite");
+    const share = "https://t.me/share/url?" + new URLSearchParams({ url: d.link, text: ru ? "Попробуй Secret AI — умный бот в Telegram" : "Try Secret AI — a smart Telegram bot" });
+    openSheet(`<div class="head"><h3>${ru ? "Пригласить друзей" : "Invite friends"}</h3></div>
+      <p class="lead">${ru ? `За каждого нового человека вам обоим +${d.credits} кредита. Уже пришли: ${d.count}.` : `For each new person you both get +${d.credits} credits. Joined so far: ${d.count}.`}</p>
+      <button class="btn" id="invite-share">${ru ? "Отправить другу" : "Send to a friend"}</button>`);
+    $("invite-share").onclick = () => { if (tg?.openTelegramLink) tg.openTelegramLink(share); else openLink(share); };
+  } catch (e) { toast(errorText(e)); haptic("error"); }
+}
+async function loadGroupExtras(chatId, target, change) {
+  if (!target?.isConnected) return;
+  const ru = lang === "ru";
+  let d;
+  try { d = await api("/api/groups/extras", { chat_id: chatId, ...(change || {}) }); }
+  catch (e) { if (e.code === "group_admin") toast(ru ? "Это может только админ группы" : "Only a group admin can do this"); target.innerHTML = ""; return; }
+  if (!target.isConnected || !d || typeof d.antispam !== "boolean") { return; }
+  const until = d.pro.until ? new Date(d.pro.until * 1000).toLocaleDateString(ru ? "ru-RU" : "en-US") : "";
+  const caps = [[50, "50"], [100, "100"], [200, "200"], [500, "500"], [0, ru ? "Без лимита" : "No cap"]];
+  target.innerHTML = `<div class="small">${ru ? "Для всей группы" : "For the whole group"}</div>
+    <button class="btn ghost" id="g-post-awards">${ru ? "🏆 Прислать премии недели" : "🏆 Post the weekly awards"}</button>
+    <button class="btn ghost" id="g-post-predict">${ru ? "🔮 Мой прогноз от чата" : "🔮 My forecast by the chat"}</button>
+    ${d.admin ? `<button class="btn ghost" id="g-antispam" aria-pressed="${d.antispam}">${d.antispam ? (ru ? "🛡 Антиспам включён — выключить" : "🛡 Anti-spam is on — turn off") : (ru ? "🛡 Включить антиспам" : "🛡 Turn on anti-spam")}</button>
+    <button class="btn ghost" id="g-awards" aria-pressed="${d.awards}">${d.awards ? (ru ? "🏆 Премии по понедельникам — выключить" : "🏆 Monday awards — turn off") : (ru ? "🏆 Включить премии по понедельникам" : "🏆 Turn on Monday awards")}</button>` : ""}
+    <div class="small">Secret AI Pro</div>
+    ${d.pro.active ? `<p class="lead">${ru ? `Активен до ${until}. Сегодня использовано ${d.pro.used_today} из ${d.pro.pool}.` : `Active until ${until}. Used today: ${d.pro.used_today} of ${d.pro.pool}.`}</p>
+      ${d.admin ? `<div class="small">${ru ? "Лимит на участника в день" : "Daily cap per member"}</div><div class="seg" id="g-cap">${caps.map(([v, t]) => `<button class="${v === d.pro.member_limit ? "on" : ""}" data-cap="${v}">${t}</button>`).join("")}</div>` : ""}`
+    : d.admin ? `<p class="lead">${ru ? `${d.pro.pool} сообщений в день на всю группу. Участникам не нужна своя подписка.` : `${d.pro.pool} messages a day for the whole group. Members need no subscription of their own.`}</p><button class="btn" id="g-buy">${ru ? `⭐ Подключить за ${d.pro.stars} в месяц` : `⭐ Enable for ${d.pro.stars} a month`}</button>`
+    : `<p class="lead">${ru ? "Подключить Pro для группы может её админ." : "A group admin can enable Pro for the group."}</p>`}`;
+  const post = what => async () => {
+    try { await api("/api/groups/post", { chat_id: chatId, what }); toast(ru ? "Отправил в группу" : "Posted to the group"); haptic("success"); }
+    catch (e) { toast(errorText(e)); haptic("error"); }
+  };
+  target.querySelector("#g-post-awards").onclick = post("awards");
+  target.querySelector("#g-post-predict").onclick = post("predict");
+  if (target.querySelector("#g-antispam")) target.querySelector("#g-antispam").onclick = () => loadGroupExtras(chatId, target, { antispam: !d.antispam });
+  if (target.querySelector("#g-awards")) target.querySelector("#g-awards").onclick = () => loadGroupExtras(chatId, target, { awards: !d.awards });
+  target.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => loadGroupExtras(chatId, target, { member_limit: +b.dataset.cap }));
+  if (target.querySelector("#g-buy")) target.querySelector("#g-buy").onclick = async () => {
+    try { openInvoiceUrl((await api("/api/groups/buy", { chat_id: chatId })).url); }
+    catch (e) { toast(e.code === "group_admin" ? (ru ? "Это может только админ группы" : "Only a group admin can do this") : errorText(e)); haptic("error"); }
+  };
+}
+
 async function buyPro() {
   const ru = lang === "ru", sub = state.gen.sub;
   if (sub.pro) { toast(ru ? "Подписка активна. Отменить можно в Telegram → Мои звёзды." : "Your subscription is active. Cancel in Telegram → My Stars."); return; }
@@ -1925,8 +2049,10 @@ function openGroupSheet(g) {
     <div class="small">${T.adminOnly}</div>
     <div class="small">${lang === "ru" ? "Восстановление сообщений" : "Message restoration"}</div>
     <div id="g-guard" role="region" aria-label="${lang === "ru" ? "Восстановление сообщений" : "Message restoration"}"><p class="lead">${lang === "ru" ? "Проверяю состояние…" : "Checking status…"}</p></div>
+    <div id="g-extras"></div>
     <div class="small">${T.groupCmds}</div>`);
   loadGroupGuard(g.id,$("g-guard"));
+  loadGroupExtras(g.id,$("g-extras"));
   $("g-model").querySelectorAll("[data-model]").forEach(b => b.onclick = async () => {
     haptic("select");
     try {
@@ -2648,6 +2774,7 @@ async function openStatsSheet() {
       ${tile(s.users, ru ? "всего людей" : "people")}${tile(s.new_week, ru ? "новых за неделю" : "new this week")}
       ${tile(s.active_day, ru ? "активны сегодня" : "active today")}${tile(s.active_week, ru ? "активны за неделю" : "active this week")}
       ${tile(s.messages_week, ru ? "сообщений за неделю" : "messages this week")}${tile(s.invited, ru ? "по приглашению" : "invited")}
+      ${s.sales ? tile(s.sales.pro_active, ru ? "активных Pro" : "active Pro") + tile(s.sales.groups_active, ru ? "групп с Pro" : "groups with Pro") + tile(s.sales.limit_hit_week, ru ? "упёрлись в лимит за неделю" : "hit the limit this week") + tile(s.sales.bought_week, ru ? `купили за неделю (${s.sales.conversion}%)` : `bought this week (${s.sales.conversion}%)`) + tile(s.sales.renewed_week, ru ? "продлили за неделю" : "renewed this week") + tile(s.sales.stars_week, ru ? "звёзд с подписок за неделю" : "subscription stars this week") : ""}
       ${tile(s.groups_active, ru ? `групп активны (из ${s.groups})` : `groups active (of ${s.groups})`)}${tile(s.stars, ru ? `звёзд · оплат ${s.payments}` : `stars · ${s.payments} payments`)}
     </div>
     ${groups ? `<div class="section"><h2 class="cap">${ru ? "Самые живые группы за неделю" : "Liveliest groups this week"}</h2><div class="list">${groups}</div></div>` : ""}
@@ -3057,6 +3184,7 @@ function renderHomeActions() {
   }
   homeActions.onclick=event=>{const b=event.target.closest('[data-home-action]');if(!b)return;
     b.dataset.homeAction==='chat'?newConversation():switchTab(b.dataset.homeAction);};
+  renderHomeTools();
   if(state?.user?.first_name)$('account-button').textContent=Array.from(state.user.first_name)[0].toLocaleUpperCase();
 }
 let recentLoading=null,recentUpdated=0,recentChats=[];

@@ -100,6 +100,13 @@ async def dispatch(app, uid, action, payload, answer):
                              "text":workbench.redact(content[max(0,index-150):index+850])})
             if len(hits)>=30:
                 break
+        finder=app.bot_data.get("embeddings")
+        if finder and len(hits)<5:  # few exact matches: the same meaning in other words
+            known={hit["id"] for hit in hits}
+            recent=[row for row in rows if row[0] not in known and len(row[2])>=20][:300]
+            for index,_ in await finder.rank(query,[row[2] for row in recent],limit=10):
+                mid,role,content,created=recent[index]
+                hits.append({"id":mid,"role":role,"created":created,"text":workbench.redact(content[:1000])})
         return {"results":hits,"scope":"Сохранённая история личного диалога; удалённые сообщения недоступны."}
     if action=="reminders":
         return {"reminders":memory.daily.reminders(uid),

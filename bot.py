@@ -71,6 +71,9 @@ import extensions
 import miniapp
 import partygames
 import approvals
+import embeddings
+import recurring
+import research
 import automations
 import awards
 import moderation
@@ -91,6 +94,8 @@ from media import (COST, DEFAULT_MODELS, FAL_SCENE_SECONDS, FORMATS, KLING, KLIN
 from integrations import (GITHUB_TOOLS, Connections, GitHub, GitHubError, Toolbox, apply_change, delete_repos, describe,
                           describe_deletion, prune_pending)
 
+from memory_store import DEFAULT_PERSONA, HISTORY_LIMIT, KEEP_MESSAGES, MAX_FACTS, Memory, PERSONAS, RECALL_MATCHES, REFERRALS_PER_DAY
+from owner_numbers import owner_stats, stats_text
 LOG = logging.getLogger("secret_ai")
 SYSTEM = (
     "You are Secret AI, a brilliant, knowledgeable and friendly assistant. "
@@ -198,37 +203,12 @@ GROUP_RANDOM_PAUSE = 40  # at least this many seconds between two uninvited post
 USERNAME_REFRESH = 300
 GROUP_PARALLEL = 3  # answers being written at once in one group (others wait); uninvited remarks still go one by one  # the bot's @username is re-read so a renamed bot still reacts to mentions
 PHOTO_MARKER = "[Photo attached; image is not retained] "
-HISTORY_LIMIT = 1000  # the newest messages the model reads in full
-KEEP_MESSAGES = 200_000  # kept per person ("forever"); older ones come back by search when the talk touches them
-RECALL_MATCHES = 12
 RECALL_CHARS = 600
 # What the model sees of the history: older long answers are shortened and the whole history fits a budget,
 # so 300 messages stay affordable and inside the model's context.
 HISTORY_CHARS = 24_000  # a big prompt makes every answer slow on the gateways; older messages come back by search
-MAX_FACTS = 80  # lasting facts kept per person
 HISTORY_ITEM_CHARS = 2_500
 
-# id: (emoji, Russian name, English name, extra instructions)
-PERSONAS = {
-    "street": ("😎", "Свой пацан", "Homie",
-               "Style: you talk like a cool guy from the user's own chat, not like an assistant. Small talk gets one short "
-               "line (often lowercase, no full stop at the end), street slang and easy humour: «ну чё», «го», «хз», «изи», "
-               "«жиза», «база», «кринж», «бро» — a touch, not in every line, and never «вах»/«брат»-style accent filler. "
-               "No assistant phrases («чем могу помочь», «рад помочь», «отличный вопрос»), no lists or headings for small "
-               "talk, at most one emoji. Swear only if the user swears first. When they need something real (code, facts, "
-               "advice, a task), do it properly and completely, just in the same relaxed tone. Asked who you are or which "
-               "model: answer casually and truthfully — you're Secret AI, an AI (name the model if asked); never claim to "
-               "be a human."),
-    "assistant": ("✨", "Ассистент", "Assistant", ""),
-    "coder": ("💻", "Программист", "Coder",
-              "Act as a senior software engineer: give complete working code, explain decisions briefly and point out pitfalls."),
-    "translator": ("🌍", "Переводчик", "Translator",
-                   "Act as a translator: translate Russian text into English and any other language into Russian. "
-                   "Preserve tone and line breaks. Output only the translation."),
-    "creative": ("🎨", "Креатив", "Creative",
-                 "Be bold and original: suggest unexpected ideas and write vividly."),
-}
-DEFAULT_PERSONA = "street"  # the relaxed "one of us" tone; /mode switches to the assistant
 
 # The thinking bubble starts with the logo: an animated custom emoji made from webapp/logo-emoji.webm
 # (the bot creates the emoji pack itself) or the one from BRAND_EMOJI_ID.
@@ -281,265 +261,6 @@ def parse_allowed(value):
     return ids
 
 
-class Memory:
-    def __init__(self, path):
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(path, timeout=10)
-        self.db.create_function("ulower", 1, lambda text: text.lower() if isinstance(text, str) else text, deterministic=True)
-        self.db.execute("PRAGMA journal_mode=WAL")
-        self.db.execute("CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS by_user ON messages(user_id, id)")
-        if "created" not in [row[1] for row in self.db.execute("PRAGMA table_info(messages)")]:
-            self.db.execute("ALTER TABLE messages ADD COLUMN created INTEGER")
-        self.db.execute("CREATE TABLE IF NOT EXISTS settings (user_id INTEGER PRIMARY KEY, persona TEXT NOT NULL)")
-        self.db.execute("CREATE TABLE IF NOT EXISTS file_context (user_id INTEGER NOT NULL, chat_id INTEGER NOT NULL, "
-                        "content TEXT NOT NULL, PRIMARY KEY(user_id, chat_id))")
-        if "model" not in [row[1] for row in self.db.execute("PRAGMA table_info(settings)")]:
-            self.db.execute("ALTER TABLE settings ADD COLUMN model TEXT")
-        # Generation: free photos per day, bought credits, and paid Stars charges (each counted once).
-        # Lasting facts about a person (name, city, likes, plans…), shared by the private chat and every group.
-        self.db.execute("CREATE TABLE IF NOT EXISTS facts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, fact TEXT NOT NULL)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS facts_by_user ON facts(user_id, id)")
-        self.db.execute("CREATE TABLE IF NOT EXISTS gen_daily (user_id INTEGER NOT NULL, day TEXT NOT NULL, photos INTEGER NOT NULL, "
-                        "PRIMARY KEY (user_id, day))")
-        self.db.execute("CREATE TABLE IF NOT EXISTS gen_credits (user_id INTEGER PRIMARY KEY, credits INTEGER NOT NULL)")
-        self.db.execute("CREATE TABLE IF NOT EXISTS gen_payments (charge_id TEXT PRIMARY KEY, user_id INTEGER NOT NULL, "
-                        "credits INTEGER NOT NULL, stars INTEGER NOT NULL)")
-        # Promo codes: credits for a code, a limited number of people, each person once; an optional end date.
-        self.db.execute("CREATE TABLE IF NOT EXISTS promo_codes (code TEXT PRIMARY KEY, credits INTEGER NOT NULL, "
-                        "max_uses INTEGER NOT NULL, used INTEGER NOT NULL DEFAULT 0, expires INTEGER, created INTEGER NOT NULL)")
-        self.db.execute("CREATE TABLE IF NOT EXISTS promo_uses (code TEXT NOT NULL, user_id INTEGER NOT NULL, at INTEGER NOT NULL, "
-                        "PRIMARY KEY (code, user_id))")
-        # Invited friends: each person can be brought once, by one referrer.
-        self.db.execute("CREATE TABLE IF NOT EXISTS referrals (user_id INTEGER PRIMARY KEY, referrer INTEGER NOT NULL, "
-                        "at INTEGER NOT NULL)")
-        self.db.execute("CREATE INDEX IF NOT EXISTS referrals_by_referrer ON referrals(referrer, at)")
-        self.db.commit()
-        self.workbench = workbench.Store(self.db)
-        self.daily = daily.Store(self.db)
-        self.subs = subscriptions.Store(self.db)
-        self.automations = automations.Store(self.db)
-        self.board = playboard.Board(self.db)
-
-    def history(self, user_id, limit=HISTORY_LIMIT):
-        rows = self.db.execute("SELECT id, role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, limit)).fetchall()
-        return [{"id": id_, "role": role, "content": content} for id_, role, content in rows]
-
-    def append_turn(self, user_id, question, answer):
-        now = int(time.time())
-        with self.db:
-            self.db.executemany("INSERT INTO messages(user_id, role, content, created) VALUES (?, ?, ?, ?)",
-                                [(user_id, "user", question, now), (user_id, "assistant", answer, now)])
-            self.db.execute("DELETE FROM messages WHERE user_id=? AND id <= (SELECT id FROM messages WHERE user_id=? "
-                            "ORDER BY id DESC LIMIT 1 OFFSET ?)", (user_id, user_id, KEEP_MESSAGES))
-
-    def recall(self, user_id, text, before_id):
-        """Old messages (older than before_id, i.e. no longer in the model's view) about the same things as text:
-        the matching messages with their question/answer partner, oldest first: [(created, role, content)]."""
-        words = list(dict.fromkeys(w for w in re.findall(r"\w{4,}", (text or "").lower()) if not w.isdigit()))[:8]
-        if not words or not before_id:
-            return []
-        stems = [w[:max(4, len(w) - 2)] for w in words]  # Russian endings vary: "айлы", "айле" -> "айл"
-        variants = list(dict.fromkeys(v for s in stems for v in (s, s.capitalize())))  # fast LIKE: case only for Latin
-        rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? AND id < ? AND ("
-                               + " OR ".join("content LIKE ?" for _ in variants) + ") ORDER BY id DESC LIMIT 3000",
-                               (user_id, before_id, *[f"%{v}%" for v in variants])).fetchall()
-        best = sorted(rows, key=lambda r: (-sum(s in r[2].lower() for s in stems), -r[0]))[:RECALL_MATCHES]
-        ids = sorted({i for id_, role, _ in best for i in (id_, id_ + 1 if role == "user" else id_ - 1)})
-        if not ids:
-            return []
-        found = self.db.execute(f"SELECT id, created, role, content FROM messages WHERE user_id=? AND id < ? AND id IN "
-                                f"({','.join('?' * len(ids))}) ORDER BY id", (user_id, before_id, *ids)).fetchall()
-        return [(created, role, content) for _, created, role, content in found]
-
-    def annotate(self, user_id, note):
-        """Add a note to the bot's latest answer (e.g. that a video was sent): the history then remembers it for good,
-        restarts included, and the roles still alternate."""
-        with self.db:
-            self.db.execute("UPDATE messages SET content = content || ? WHERE id = (SELECT MAX(id) FROM messages "
-                            "WHERE user_id=? AND role='assistant')", ("\n" + note, user_id))
-
-    def save_document(self, user_id, chat_id, document):
-        return self.workbench.add(user_id, chat_id, document)
-
-    def document(self, user_id, chat_id):
-        item = self.workbench.file(user_id, chat_id)
-        return item['document'] if item else None
-
-    def _last_turn(self, user_id):
-        rows = self.db.execute("SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT 2", (user_id,)).fetchall()
-        if len(rows) < 2 or rows[0][1] != "assistant" or rows[1][1] != "user":
-            return None
-        return rows
-
-    def last_question(self, user_id):
-        rows = self._last_turn(user_id)
-        return rows[1][2] if rows else None
-
-    def pop_last_turn(self, user_id):
-        """Remove the latest question/answer pair and return the question, or None."""
-        rows = self._last_turn(user_id)
-        if not rows:
-            return None
-        with self.db:
-            self.db.execute("DELETE FROM messages WHERE id IN (?, ?)", (rows[0][0], rows[1][0]))
-        return rows[1][2]
-
-    def facts(self, user_id):
-        return [row[0] for row in self.db.execute("SELECT fact FROM facts WHERE user_id=? ORDER BY id", (user_id,))]
-
-    def remember(self, user_id, add=(), forget=()):
-        """Add facts (no duplicates) and drop the ones containing any of the forget phrases; keeps the newest MAX_FACTS."""
-        def fold(text):  # in Python: SQLite's lower() leaves Cyrillic as it is ("Берлине" never matched "берлине")
-            return text.casefold().replace("ё", "е")
-        with self.db:
-            phrases = [fold(p.strip()) for p in forget if p.strip()]
-            if phrases:
-                rows = self.db.execute("SELECT id, fact FROM facts WHERE user_id=?", (user_id,)).fetchall()
-                gone = [(row_id,) for row_id, fact in rows if any(p in fold(fact) for p in phrases)]
-                self.db.executemany("DELETE FROM facts WHERE id=?", gone)
-            known = {f.casefold() for f in self.facts(user_id)}
-            for fact in add:
-                fact = " ".join(fact.split())[:300]
-                if fact and fact.casefold() not in known:
-                    self.db.execute("INSERT INTO facts(user_id, fact) VALUES (?, ?)", (user_id, fact))
-                    known.add(fact.casefold())
-            self.db.execute("DELETE FROM facts WHERE user_id=? AND id NOT IN (SELECT id FROM facts WHERE user_id=? "
-                            "ORDER BY id DESC LIMIT ?)", (user_id, user_id, MAX_FACTS))
-
-    def reset(self, user_id):
-        """Forget this person: the conversation and the facts remembered about them (name, city…)."""
-        with self.db:
-            self.db.execute("DELETE FROM messages WHERE user_id=?", (user_id,))
-            self.db.execute("DELETE FROM facts WHERE user_id=?", (user_id,))
-            self.db.execute("DELETE FROM file_context WHERE user_id=?", (user_id,))
-        self.workbench.reset(user_id)
-        self.daily.reset(user_id)
-        self.automations.reset(user_id)
-        self.board.forget(user_id)
-
-    def persona(self, user_id):
-        row = self.db.execute("SELECT persona FROM settings WHERE user_id=?", (user_id,)).fetchone()
-        return row[0] if row and row[0] in PERSONAS else DEFAULT_PERSONA
-
-    def set_persona(self, user_id, persona):
-        with self.db:
-            self.db.execute("INSERT INTO settings(user_id, persona) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET persona=excluded.persona", (user_id, persona))
-
-    def model(self, user_id):
-        row = self.db.execute("SELECT model FROM settings WHERE user_id=?", (user_id,)).fetchone()
-        return row[0] if row else None
-
-    def set_model(self, user_id, model):
-        with self.db:
-            self.db.execute("INSERT INTO settings(user_id, persona, model) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET model=excluded.model",
-                            (user_id, DEFAULT_PERSONA, model))
-
-    def count(self, user_id):
-        return self.db.execute("SELECT COUNT(*) FROM messages WHERE user_id=?", (user_id,)).fetchone()[0]
-
-    # ----- generation quota -----
-
-    @staticmethod
-    def _today():
-        return time.strftime("%Y-%m-%d", time.gmtime())
-
-    def promo_create(self, code, credits, max_uses, days=None):
-        """A new code (or the same code replaced); max_uses 0 = no limit."""
-        now = int(time.time())
-        with self.db:
-            self.db.execute("INSERT INTO promo_codes(code, credits, max_uses, used, expires, created) VALUES (?, ?, ?, 0, ?, ?) "
-                            "ON CONFLICT(code) DO UPDATE SET credits=excluded.credits, max_uses=excluded.max_uses, "
-                            "expires=excluded.expires", (code, credits, max_uses, now + days * 86400 if days else None, now))
-
-    def promo_redeem(self, user_id, code):
-        """('ok', credits) or (reason, 0): 'unknown', 'expired', 'empty', 'used'. Atomic: never twice, never over the limit."""
-        now = int(time.time())
-        with self.db:
-            row = self.db.execute("SELECT credits, max_uses, used, expires FROM promo_codes WHERE code=?", (code,)).fetchone()
-            if not row:
-                return "unknown", 0
-            credits, max_uses, used, expires = row
-            if expires and expires < now:
-                return "expired", 0
-            if self.db.execute("SELECT 1 FROM promo_uses WHERE code=? AND user_id=?", (code, user_id)).fetchone():
-                return "used", 0
-            taken = self.db.execute("UPDATE promo_codes SET used=used+1 WHERE code=? AND (max_uses=0 OR used<max_uses)", (code,))
-            if not taken.rowcount:
-                return "empty", 0
-            self.db.execute("INSERT INTO promo_uses(code, user_id, at) VALUES (?, ?, ?)", (code, user_id, now))
-            self._add_credits(user_id, credits)
-        return "ok", credits
-
-    def promo_list(self):
-        return self.db.execute("SELECT code, credits, max_uses, used, expires FROM promo_codes ORDER BY created DESC").fetchall()
-
-    def promo_delete(self, code):
-        with self.db:
-            return self.db.execute("DELETE FROM promo_codes WHERE code=?", (code,)).rowcount > 0
-
-    def gen_info(self, user_id):
-        """(free photos left today, credits)."""
-        used = self.db.execute("SELECT photos FROM gen_daily WHERE user_id=? AND day=?", (user_id, self._today())).fetchone()
-        credits = self.db.execute("SELECT credits FROM gen_credits WHERE user_id=?", (user_id,)).fetchone()
-        return max(0, FREE_PHOTOS_PER_DAY - (used[0] if used else 0)), credits[0] if credits else 0
-
-    def gen_charge(self, user_id, kind, cost):
-        """Take one generation: a free photo first, then credits. Returns 'free', 'credits' or None (not enough)."""
-        free, credits = self.gen_info(user_id)
-        with self.db:
-            if kind == "photo" and free > 0:
-                self.db.execute("INSERT INTO gen_daily(user_id, day, photos) VALUES (?, ?, 1) "
-                                "ON CONFLICT(user_id, day) DO UPDATE SET photos=photos+1", (user_id, self._today()))
-                return "free"
-            if credits >= cost:
-                self.db.execute("UPDATE gen_credits SET credits=credits-? WHERE user_id=?", (cost, user_id))
-                return "credits"
-        return None
-
-    def add_referral(self, user_id, referrer, credits):
-        """Count a new person brought by referrer and give both of them credits; False if it doesn't count (oneself,
-        someone who already talked to the bot or was already brought, or the referrer's daily limit)."""
-        now = int(time.time())
-        with self.db:
-            if user_id == referrer or self.db.execute(
-                    "SELECT 1 FROM messages WHERE user_id=? UNION SELECT 1 FROM referrals WHERE user_id=?",
-                    (user_id, user_id)).fetchone():
-                return False
-            today = self.db.execute("SELECT COUNT(*) FROM referrals WHERE referrer=? AND at>?", (referrer, now - 86400)).fetchone()[0]
-            if today >= REFERRALS_PER_DAY:
-                return False
-            self.db.execute("INSERT INTO referrals(user_id, referrer, at) VALUES (?, ?, ?)", (user_id, referrer, now))
-            self._add_credits(user_id, credits)
-            self._add_credits(referrer, credits)
-        return True
-
-    def referral_count(self, referrer):
-        return self.db.execute("SELECT COUNT(*) FROM referrals WHERE referrer=?", (referrer,)).fetchone()[0]
-
-    def gen_refund(self, user_id, how, cost):
-        with self.db:
-            if how == "free":
-                self.db.execute("UPDATE gen_daily SET photos=MAX(0, photos-1) WHERE user_id=? AND day=?", (user_id, self._today()))
-            elif how == "credits":
-                self._add_credits(user_id, cost)
-
-    def _add_credits(self, user_id, credits):
-        self.db.execute("INSERT INTO gen_credits(user_id, credits) VALUES (?, ?) "
-                        "ON CONFLICT(user_id) DO UPDATE SET credits=credits+excluded.credits", (user_id, credits))
-
-    def gen_paid(self, charge_id, user_id, credits, stars):
-        """Credit a Stars payment once; returns False if this charge was already counted."""
-        with self.db:
-            if self.db.execute("SELECT 1 FROM gen_payments WHERE charge_id=?", (charge_id,)).fetchone():
-                return False
-            self.db.execute("INSERT INTO gen_payments(charge_id, user_id, credits, stars) VALUES (?, ?, ?, ?)",
-                            (charge_id, user_id, credits, stars))
-            self._add_credits(user_id, credits)
-        return True
-
-    def close(self):
-        self.db.close()
 
 
 def utf16_len(text):
@@ -2121,9 +1842,8 @@ HELP_RU = (
     "Фото: пришли снимок и напиши «сделай 4K» — получишь файл в высоком качестве, или «сделай стикер» — он попадёт "
     "в твой личный стикерпак. Под нарисованными картинками есть кнопки: ещё вариант, оригинал, 4K и «оживить».\n\n"
     "Игры в группе: /spy — «Шпион», /croc — «Крокодил» по картинке, /bunker — AI-Бункер, /games_top — рейтинг.\n"
-    "Ещё в группе: /awards — премии недели, /predict — прогноз от чата, /antispam on — антиспам (для админов).\n\n"
-    "/auto — автозадачи по расписанию\n"
-    "/pro — подписка Secret AI Pro\n"
+    "Премии недели, прогноз от чата, антиспам и Pro для группы — в Secret AI → Мои группы.\n\n"
+    "Подписка, автозадачи, исследование и приглашения — на главной Secret AI. Можно и просто написать: «каждое утро присылай новости» или «сделай исследование про…».\n\n"
     "/invite — пригласить друзей: вам обоим бонусные кредиты\n"
     "/mode — режим: ассистент, программист, переводчик, креатив\n"
     "/reset — очистить память\n"
@@ -2151,9 +1871,8 @@ HELP_EN = (
     "Photos: send a photo and write “make it 4K” for a high-quality file, or “make a sticker” to add it to your own "
     "sticker pack. Drawn pictures have buttons: another take, original, 4K and “bring to life”.\n\n"
     "Group games: /spy — Spy, /croc — Crocodile with pictures, /bunker — AI Bunker, /games_top — leaderboard.\n"
-    "Also in groups: /awards — weekly awards, /predict — forecast by the chat, /antispam on — anti-spam (admins).\n\n"
-    "/auto — scheduled tasks\n"
-    "/pro — Secret AI Pro subscription\n"
+    "Weekly awards, forecasts, anti-spam and group Pro are in Secret AI → My groups.\n\n"
+    "Subscription, scheduled tasks, research and invites are on the Secret AI home screen. Or just say: \"send me news every morning\" or \"research…\".\n\n"
     "/invite — invite friends: bonus credits for both of you\n"
     "/mode — mode: assistant, coder, translator, creative\n"
     "/reset — clear memory\n"
@@ -2185,6 +1904,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.args and context.args[0] == "inline":
         await inline_help(update, context)
         return
+    if context.args and context.args[0] == "pro" and context.bot_data.get("subs"):
+        text, keyboard = await pro_offer(context.bot, context.bot_data, update.effective_user.id, lang(update) == "ru")
+        await send(update.effective_message, text, keyboard)
+        return
     store, user_id = context.bot_data["connections"], update.effective_user.id
     invited = re.fullmatch(r"ref_([0-9]{1,15})", context.args[0]) if context.args else None
     if invited and not store.get_meta(f"welcomed:{user_id}"):
@@ -2192,13 +1915,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not store.get_meta(f"welcomed:{user_id}"):
         await send_welcome(context, update.effective_message, user_id)
     # The video note already says hi; the full list of features is one command away.
-    await send(update.effective_message, ui(update, "Если хотите ознакомиться с моими функциями, напишите /help",
-                                            "To see what I can do, send /help"))
+    await send(update.effective_message, ui(update, "Просто напишите мне, а все функции — в Secret AI 👇", "Just write to me; everything else is in Secret AI 👇"),
+               app_button(context.bot_data, lang(update) == "ru"))
 
 
 # ----- invite friends: a personal link, credits for both when a new person comes -----
 REFERRAL_CREDITS = 3  # each side; a picture costs 1
-REFERRALS_PER_DAY = 20  # per referrer: a farm of fake accounts stops quickly
 
 
 def invite_link(data, user_id):
@@ -2841,41 +2563,8 @@ async def emoji_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ----- the owner's numbers: people, activity, groups, money; counts only, nobody's messages -----
 
-def owner_stats(data, now=None):
-    now = int(now or time.time())
-    day, week = now - 86400, now - 7 * 86400
-    db, groups = data["memory"].db, data["groups"].db
-    one = lambda sql, args=(): db.execute(sql, args).fetchone()[0] or 0
-    firsts = "SELECT user_id, MIN(created) AS first FROM messages WHERE role='user' AND created IS NOT NULL GROUP BY user_id"
-    top = groups.execute(
-        "SELECT COALESCE(NULLIF(i.title, ''), 'группа ' || m.chat_id), COUNT(*) FROM group_messages m "
-        "LEFT JOIN group_info i USING(chat_id) WHERE m.created>? GROUP BY m.chat_id ORDER BY 2 DESC LIMIT 5", (week,)).fetchall()
-    return {
-        "users": one("SELECT COUNT(*) FROM (SELECT user_id FROM messages UNION SELECT user_id FROM settings)"),
-        "new_week": one(f"SELECT COUNT(*) FROM ({firsts}) WHERE first>?", (week,)),
-        "active_day": one("SELECT COUNT(DISTINCT user_id) FROM messages WHERE role='user' AND created>?", (day,)),
-        "active_week": one("SELECT COUNT(DISTINCT user_id) FROM messages WHERE role='user' AND created>?", (week,)),
-        "messages_week": one("SELECT COUNT(*) FROM messages WHERE role='user' AND created>?", (week,)),
-        "groups": groups.execute("SELECT COUNT(*) FROM group_info").fetchone()[0] or 0,
-        "groups_active": groups.execute("SELECT COUNT(DISTINCT chat_id) FROM group_messages WHERE created>?", (week,)).fetchone()[0] or 0,
-        "top_groups": [{"title": title, "messages": count} for title, count in top],
-        "pictures_today": one("SELECT SUM(photos) FROM gen_daily WHERE day=?", (time.strftime("%Y-%m-%d", time.gmtime(now)),)),
-        "stars": one("SELECT SUM(stars) FROM gen_payments"),
-        "payments": one("SELECT COUNT(*) FROM gen_payments"),
-        "invited": one("SELECT COUNT(*) FROM referrals"),
-    }
 
 
-def stats_text(stats):
-    groups = "\n".join(f"{i}. {item['title'][:40]} · {item['messages']}" for i, item in enumerate(stats["top_groups"], 1))
-    return (f"📊 **Статистика Secret AI**\n\n"
-            f"**Люди**\n- всего: {stats['users']}\n- новых за неделю: {stats['new_week']}\n"
-            f"- активных за сутки: {stats['active_day']} · за неделю: {stats['active_week']}\n"
-            f"- сообщений за неделю: {stats['messages_week']}\n- пришли по приглашению: {stats['invited']}\n\n"
-            f"**Группы**\n- всего: {stats['groups']} · активных за неделю: {stats['groups_active']}\n"
-            + (f"\nСамые живые за неделю:\n{groups}\n" if groups else "") +
-            f"\n**Генерации и оплаты**\n- бесплатных картинок сегодня: {stats['pictures_today']}\n"
-            f"- оплат: {stats['payments']} · звёзд: {stats['stars']} ⭐")
 
 
 async def stats_command(update, context):
@@ -3269,7 +2958,9 @@ TOOL_WORDS = re.compile(
     r"запомн|забуд|помнишь|секретар|автоответ|отмени|останов|измени|отредакт|исправ|найди|поищи|загугл|поиск|гугл|"
     r"новост|погод|курс|сегодня|сейчас|вчера|завтра|цен[аыу]|стоит|сколько стоит|актуальн|последн|2026|2027|"
     r"нарису|картин|фото|видео|сгенер|озвуч|голос|ссылк|http|www\.|\.com|\.ru|github|репо|код|сайт|"
-    r"remember|forget|search|find|news|weather|price|today|draw|picture|video|link|code|website", re.I)
+    r"кажд[а-я]+ (день|утро|вечер|недел|понедельник|вторник|сред|четверг|пятниц|суббот|воскресен)|ежедневн|по будням|по расписанию|"
+    r"исследован|исследуй|подписк|лимит|тариф|\bpro\b|\bпро\b|"
+    r"remember|forget|search|find|news|weather|price|today|draw|picture|video|link|code|website|every (day|morning|week)|research|subscri|limit", re.I)
 
 
 def needs_tools(text):
@@ -3370,6 +3061,7 @@ async def take_message(update, context, target):
         return False
     if data["subs"].spend(user_id):
         return True
+    data["subs"].note_limit_hit(user_id)
     text, keyboard = await pro_offer(context.bot, data, user_id, lang(update) == "ru", limit_reached=True)
     await send(target, text, keyboard)
     return None
@@ -3395,8 +3087,10 @@ async def pro_offer(bot, data, user_id, ru, limit_reached=False):
     subs, info = data["subs"], data["subs"].state(user_id)
     head = ""
     if limit_reached:
-        head = (f"Сегодня использованы все {info['limit']} сообщений. Новые появятся в 00:00 UTC.\n\n" if ru else
-                f"You've used all {info['limit']} messages for today. More arrive at 00:00 UTC.\n\n")
+        head = (("🔒 Лимит Pro на сегодня закончился" if info["pro"] else "🔒 Бесплатный лимит закончился")
+                + f": {info['limit']} сообщений в день. Новые появятся в 00:00 UTC.\n\n" if ru else
+                ("🔒 Your Pro limit for today is used up" if info["pro"] else "🔒 Your free limit is used up")
+                + f": {info['limit']} messages a day. More arrive at 00:00 UTC.\n\n")
     if info["pro"]:
         until = time.strftime("%d.%m.%Y", time.gmtime(info["until"]))
         return head + (f"💎 Secret AI Pro активна, следующее продление — {until}. Осталось сообщений сегодня: {info['left']}." if ru else
@@ -3412,8 +3106,41 @@ async def pro_offer(bot, data, user_id, ru, limit_reached=False):
     except TelegramError as exc:
         LOG.warning("Pro invoice link failed: %s", type(exc).__name__)
         return text, None
-    button = f"⭐ Оформить за {subs.stars}" if ru else f"⭐ Subscribe for {subs.stars}"
+    button = f"⭐ Купить Pro за {subs.stars}" if ru else f"⭐ Buy Pro for {subs.stars}"
     return text, InlineKeyboardMarkup([[InlineKeyboardButton(button, url=url)]])
+
+
+def private_chat_button(data, ru, start="pro"):
+    """A button that opens the private chat with the bot and shows the plans there."""
+    name = data.get("bot_name")
+    if not name:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton("⭐ Купить Pro" if ru else "⭐ Buy Pro", url=f"https://t.me/{name}?start={start}")]])
+
+
+def app_button(data, ru):
+    """A button that opens the Mini App, where everything is."""
+    base = data.get("public_url")
+    if not base:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton("✨ Открыть Secret AI" if ru else "✨ Open Secret AI", web_app=WebAppInfo(base + "/app"))]])
+
+
+async def is_group_admin(bot, chat_id, user_id):
+    try:
+        return (await bot.get_chat_member(chat_id, user_id)).status in ("administrator", "creator")
+    except TelegramError:
+        return False
+
+
+async def group_pro_invoice(bot, data, chat_id, user_id, ru):
+    subs = data["subs"]
+    return await bot.create_invoice_link(
+        title="Secret AI Pro для группы" if ru else "Secret AI Pro for a group",
+        description=(f"Общий лимит группы: {subs.group_pool} сообщений в день для всех участников" if ru
+                     else f"A shared limit for the group: {subs.group_pool} messages a day for all members"),
+        payload=f"gsub:{chat_id}:{user_id}", currency="XTR", prices=[LabeledPrice("Secret AI Pro", subs.group_stars)],
+        subscription_period=subscriptions.PERIOD)
 
 
 async def pro_command(update, context):
@@ -3422,11 +3149,161 @@ async def pro_command(update, context):
     if not context.bot_data.get("subs"):
         return
     if update.effective_chat.type in GROUP_TYPES:
-        await send(update.effective_message, ui(update, "Подписку можно оформить в личке с ботом: напиши там /pro",
-                                                "Subscribe in a private chat with the bot: send /pro there"))
+        await send(update.effective_message, ui(update, "Подписку можно оформить в личке с ботом.", "Subscribe in a private chat with the bot."),
+                   private_chat_button(context.bot_data, lang(update) == "ru"))
         return
     text, keyboard = await pro_offer(context.bot, context.bot_data, update.effective_user.id, lang(update) == "ru")
     await send(update.effective_message, text, keyboard)
+
+
+def task_zone(memory, user_id, language, given=None):
+    """The time zone for a schedule: the device's, then the one set in «Мой день», then a sensible default by language."""
+    if given:
+        try:
+            daily.zone(str(given))
+            return str(given)
+        except daily.DailyError:
+            pass
+    profile = memory.daily.profile(user_id)
+    if profile and profile["tz"]:
+        return profile["tz"]
+    return "Europe/Moscow" if language == "ru" else "UTC"
+
+
+def automation_slots(data, user_id):
+    subs = data.get("subs")
+    pro = (subs and subs.is_pro(user_id)) or data["connections"].get_meta("owner") == user_id
+    return automations.PRO_SLOTS if pro else automations.FREE_SLOTS
+
+
+def schedule_tool(context, user_id, language):
+    """Set up a scheduled task right from the conversation: no command to learn."""
+    async def run(args):
+        memory, ru = context.bot_data["memory"], language == "ru"
+        rule = None
+        try:
+            rule = recurring.parse(str(args.get("when") or ""), task_zone(memory, user_id, language))
+        except Exception:
+            pass
+        task = str(args.get("task") or "").strip()[:automations.MAX_TASK]
+        if not rule or not task:
+            return "Not created: 'when' must look like «каждый день в 09:00», «по будням в 18:00» or «каждый понедельник в 10:00». Ask the user for the time."
+        item = memory.automations.add(user_id, rule, task, language, automation_slots(context.bot_data, user_id))
+        if item is None:
+            return "Not created: all the user's scheduled task slots are taken. Tell them to delete one in the app (button Secret AI → Автозадачи) or get Pro."
+        return f"Created: {automations.rule_text(rule, ru)}. Tell the user; they can change it in the app (Secret AI → Автозадачи)."
+    return {"definition": SCHEDULE_TOOL, "run": run, "status": ("Настраиваю автозадачу", "Setting up the task"),
+            "hint": "When the user wants something done regularly on a schedule, use schedule_task. Never ask them to type commands."}
+
+
+def research_tool(context, user_id, language):
+    async def run(args):
+        error = await start_research(context.application, user_id, language, str(args.get("topic") or ""))
+        if error == "limit":
+            subs = context.bot_data["subs"]
+            text, keyboard = await pro_offer(context.bot, context.bot_data, user_id, language == "ru")
+            await context.bot.send_message(user_id, text, reply_markup=keyboard)
+            return f"Not started: today's research allowance ({subs.research_limit(user_id)}) is used up. A subscription offer was shown; say so briefly."
+        if error == "no_search":
+            return "Not started: web search isn't available right now. Tell the user briefly; don't write a report from memory as if it were research."
+        if error == "busy":
+            return "Already researching something for this user. Tell them the report is on the way."
+        if error:
+            return "Not started: the topic is empty. Ask what to research."
+        return "Started. A report in Word will arrive in the chat in a few minutes; tell the user briefly."
+    return {"definition": RESEARCH_TOOL, "run": run, "status": ("Запускаю исследование", "Starting research"),
+            "hint": "When the user asks for deep research or a detailed report from sources, use deep_research."}
+
+
+def pro_tool(context, user_id, language):
+    async def run(args):
+        text, keyboard = await pro_offer(context.bot, context.bot_data, user_id, language == "ru")
+        await context.bot.send_message(user_id, text, reply_markup=keyboard)
+        return "The plans and a buy button were sent as a separate message. Say so in a few words, don't repeat the prices."
+    return {"definition": PRO_TOOL, "run": run, "status": ("Открываю тарифы", "Opening the plans"),
+            "hint": "When the user asks about Pro, limits, a subscription or buying more messages, use show_pro."}
+
+
+SCHEDULE_TOOL = {"type": "function", "name": "schedule_task",
+                 "description": "Do a task regularly on a schedule and send the user the result. It may only read in connected apps.",
+                 "parameters": {"type": "object", "properties": {
+                     "when": {"type": "string", "description": "«каждый день в 09:00», «по будням в 18:00» or «каждый понедельник в 10:00» (24-hour time)"},
+                     "task": {"type": "string", "description": "What to do each time, as a clear instruction"}},
+                     "required": ["when", "task"], "additionalProperties": False}}
+RESEARCH_TOOL = {"type": "function", "name": "deep_research",
+                 "description": "Research a topic on the web across several searches and send a report with sources as a Word file in a few minutes.",
+                 "parameters": {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"], "additionalProperties": False}}
+PRO_TOOL = {"type": "function", "name": "show_pro",
+            "description": "Send the user the Secret AI Pro plans with a buy button.",
+            "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}
+
+
+async def start_research(app, user_id, language, topic):
+    """Take today's allowance and start in the background. None, or 'empty', 'no_search', 'limit', 'busy'."""
+    data, topic = app.bot_data, " ".join((topic or "").split())[:research.MAX_TOPIC]
+    if not topic:
+        return "empty"
+    if not (data.get("openai") or data.get("search_model")):
+        return "no_search"
+    running = data.setdefault("research_running", set())
+    if user_id in running:
+        return "busy"
+    owner = data["connections"].get_meta("owner") == user_id
+    subs = data.get("subs")
+    counted = bool(subs) and not owner
+    if counted and not subs.research_take(user_id):
+        subs.note_limit_hit(user_id)
+        return "limit"
+    running.add(user_id)
+
+    async def work():
+        await run_research(app, user_id, language, topic, counted)
+
+    task = asyncio.create_task(work())
+    jobs = data.setdefault("gen_tasks", set())
+    jobs.add(task)
+    task.add_done_callback(jobs.discard)
+    return None
+
+
+async def run_research(app, user_id, language, topic, counted):
+    data, ru = app.bot_data, language == "ru"
+    model = user_model(data, user_id)
+    if data.get("premium", {}).get(model):
+        model = data.get("chat_default")
+
+    async def ask(instructions, text, max_tokens):
+        return await quick_answer(data, model, instructions, text, max_tokens=max_tokens)
+
+    async def search(query):
+        return await web_lookup(data, query)
+
+    delivered = False
+    try:
+        await app.bot.send_message(user_id, f"🔎 Начинаю исследование: {topic[:200]}\nОтчёт придёт сюда через несколько минут." if ru else
+                                   f"🔎 Starting research: {topic[:200]}\nThe report will arrive here in a few minutes.")
+        report, sources = await asyncio.wait_for(research.write_report(topic, language, ask, search), research.TOTAL_SECONDS)
+        document = await asyncio.to_thread(workbench.docx_report, "Secret AI — исследование" if ru else "Secret AI — research", report)
+        note = ((f"📄 Готово. Поисков с результатом: {sources}. Проверяйте важные факты по ссылкам." if ru else
+                 f"📄 Done. Searches with results: {sources}. Check important facts through the links."))
+        await app.bot.send_document(user_id, InputFile(document, filename="secret-ai-research.docx"), caption=note)
+        delivered = True
+    except research.NoSources:
+        await app.bot.send_message(user_id, "⚠️ Поиск ничего не нашёл, поэтому отчёта нет. Исследование не засчитано." if ru else
+                                   "⚠️ The search found nothing, so there is no report. This research wasn't counted.")
+    except Forbidden:
+        pass
+    except Exception as exc:
+        LOG.warning("Research failed: %s", type(exc).__name__)
+        try:
+            await app.bot.send_message(user_id, "⚠️ Исследование не удалось, оно не засчитано. Попробуйте позже." if ru else
+                                       "⚠️ The research failed and wasn't counted. Please try later.")
+        except TelegramError:
+            pass
+    finally:
+        data.get("research_running", set()).discard(user_id)
+        if counted and not delivered:
+            data["subs"].research_refund(user_id)
 
 
 AUTOMATION_RULES = (" This is a scheduled task the user set up earlier; they aren't in the chat right now, so don't ask questions: "
@@ -3460,7 +3337,7 @@ async def auto_command(update, context):
                  "In apps a scheduled task only reads. Time zone: /life tz Europe/Moscow")
         await send(message, "\n\n".join(lines + [guide]))
         return
-    tz = memory.daily.profile(user_id)["tz"]
+    tz = task_zone(memory, user_id, "ru" if ru else "en")
     parsed = automations.parse(" ".join(args).replace(" at ", " "), tz)
     if not parsed:
         await send(message, ui(update, "Не понял расписание. Пример: /auto каждый день в 09:00: собери письма",
@@ -3485,8 +3362,11 @@ async def run_automation(app, item):
     try:
         if limits_apply(data, user_id):
             if not data["subs"].spend(user_id):
-                await app.bot.send_message(user_id, f"⏰ Автозадача #{item['id']} пропущена: сообщения на сегодня закончились. /pro" if ru else
-                                           f"⏰ Scheduled task #{item['id']} skipped: no messages left today. /pro")
+                data["subs"].note_limit_hit(user_id)
+                text, keyboard = await pro_offer(app.bot, data, user_id, ru, limit_reached=True)
+                await app.bot.send_message(user_id, (f"⏰ Автозадача #{item['id']} пропущена.\n\n" if ru else f"⏰ Scheduled task #{item['id']} skipped.\n\n") + text,
+                                           reply_markup=keyboard)
+                store.log_run(item["id"], False, "limit")
                 return
             counted = True
         model = user_model(data, user_id)
@@ -3509,16 +3389,19 @@ async def run_automation(app, item):
         for part in chunks(head + text):
             await app.bot.send_message(user_id, part)
         store.finished(item["id"], True)
+        store.log_run(item["id"], True, text)
     except Forbidden:  # the person blocked the bot
         give_message_back(data, user_id, counted)
         store.pause_user(user_id)
     except Exception as exc:
         give_message_back(data, user_id, counted)
         LOG.warning("Scheduled task %s failed: %s", item["id"], type(exc).__name__)
+        store.log_run(item["id"], False, type(exc).__name__)
         if store.finished(item["id"], False):
             try:
-                await app.bot.send_message(user_id, f"⏸ Автозадача #{item['id']} поставлена на паузу: {automations.FAILURES_TO_PAUSE} неудач подряд. Удалить: /auto delete {item['id']}" if ru else
-                                           f"⏸ Scheduled task #{item['id']} paused after {automations.FAILURES_TO_PAUSE} failures in a row. Delete: /auto delete {item['id']}")
+                await app.bot.send_message(user_id, f"⏸ Автозадача #{item['id']} поставлена на паузу: {automations.FAILURES_TO_PAUSE} неудач подряд. Её можно включить или удалить в Secret AI." if ru else
+                                           f"⏸ Scheduled task #{item['id']} paused after {automations.FAILURES_TO_PAUSE} failures in a row. Resume or delete it in Secret AI.",
+                                           reply_markup=app_button(data, ru))
             except TelegramError:
                 pass
 
@@ -3688,7 +3571,8 @@ async def respond(update, context, target, content, saved_question, voice=False)
                           apps=apps, media=media, extra=[memory_tool(context, user_id), secretary_tool(context, user_id, lang(update) == "ru"),
                                                          edit_tool(context, user_id, lang(update)), upscale_tool(context, user_id, lang(update)),
                                                          sticker_tool(context, update.effective_user, lang(update)),
-                                                         cancel_tool(context, user_id)] + skill_tools)
+                                                         cancel_tool(context, user_id), schedule_tool(context, user_id, lang(update)),
+                                                         research_tool(context, user_id, lang(update)), pro_tool(context, user_id, lang(update))] + skill_tools)
         if not use_apps:  # the person's own MCP servers too: handshakes cost seconds, small talk doesn't need them
             toolbox.mcp = []
     greeting = not scoped_reply and persona in (PERSONAS["assistant"], PERSONAS["street"]) and not use_apps and is_greeting(saved_question)
@@ -4102,13 +3986,15 @@ async def group_chat(update, context):
             except Exception as exc:  # an uninvited joke that failed is no reason to bother the chat
                 LOG.warning("Group surprise failed: %s", type(exc).__name__)
         return
-    if limits_apply(data, user.id) and not data["subs"].spend(user.id):
+    if limits_apply(data, user.id) and not data["subs"].spend_in_group(chat_id, user.id) and not data["subs"].spend(user.id):
+        data["subs"].note_limit_hit(user.id)
         remember_group_message(store, message, name)
         notes = data.setdefault("limit_noted", {})
         if time.monotonic() - notes.get(user.id, float("-inf")) > 3600:  # once an hour, so the chat isn't flooded with it
             notes[user.id] = time.monotonic()
-            await send(message, ui(update, "Твои сообщения на сегодня закончились, новые появятся в 00:00 UTC. Больше — с подпиской: /pro в личке со мной.",
-                                   "You're out of messages for today; more arrive at 00:00 UTC. For more, send /pro in a private chat with me."))
+            await send(message, ui(update, "🔒 Твой бесплатный лимит на сегодня закончился, новые сообщения появятся в 00:00 UTC. Pro можно купить себе, а админ может подключить его всей группе в Secret AI.",
+                                   "🔒 Your free limit for today is used up; more arrive at 00:00 UTC. Buy Pro for yourself, or an admin can enable it for the whole group in Secret AI."),
+                       private_chat_button(data, lang(update) == "ru"))
         return
     async with data.setdefault("group_slots", {}).setdefault(chat_id, asyncio.Semaphore(GROUP_PARALLEL)):
         if reply_context.target(message) is None and await group_generation(update, context):
@@ -6419,6 +6305,13 @@ def parse_payload(payload):
 
 async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.pre_checkout_query
+    group = subscriptions.parse_group(query.invoice_payload)
+    if group:
+        subs = context.bot_data.get("subs")
+        ok = (bool(subs) and group[1] == query.from_user.id and query.currency == "XTR" and query.total_amount == subs.group_stars
+              and await is_group_admin(context.bot, group[0], group[1]))
+        await query.answer(ok=ok, error_message=None if ok else "Оплатить подписку группы может только её админ.")
+        return
     subscriber = subscriptions.parse(query.invoice_payload)
     if subscriber is not None:
         subs = context.bot_data.get("subs")
@@ -6432,6 +6325,24 @@ async def precheckout(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
     payment = update.effective_message.successful_payment
+    group = subscriptions.parse_group(payment.invoice_payload)
+    if group:
+        subs = context.bot_data.get("subs")
+        if not subs or group[1] != update.effective_user.id:
+            LOG.warning("Group subscription payment with an unknown payload")
+            return
+        expires = getattr(payment, "subscription_expiration_date", None)
+        expires = expires.timestamp() if hasattr(expires, "timestamp") else expires
+        if context.bot_data["memory"].gen_paid(payment.telegram_payment_charge_id, group[1], 0, payment.total_amount):
+            subs.activate_group(group[0], group[1], expires)
+            subs.record_payment(payment.telegram_payment_charge_id, group[1], payment.total_amount, chat_id=group[0])
+            await send(update.effective_message, ui(update, "💎 Pro для группы подключён!", "💎 Pro is on for the group!"))
+            try:
+                await context.bot.send_message(group[0], ui(update, f"💎 В этой группе теперь Secret AI Pro: {subs.group_pool} сообщений в день на всех.",
+                                                            f"💎 This group now has Secret AI Pro: {subs.group_pool} messages a day for everyone."))
+            except TelegramError as exc:
+                LOG.info("Group Pro notice failed: %s", type(exc).__name__)
+        return
     subscriber = subscriptions.parse(payment.invoice_payload)
     if subscriber is not None:
         if subscriber != update.effective_user.id or not context.bot_data.get("subs"):
@@ -6441,6 +6352,7 @@ async def paid(update: Update, context: ContextTypes.DEFAULT_TYPE):
         expires = expires.timestamp() if hasattr(expires, "timestamp") else expires
         if context.bot_data["memory"].gen_paid(payment.telegram_payment_charge_id, subscriber, subs.bonus, payment.total_amount):
             subs.activate(subscriber, expires)
+            subs.record_payment(payment.telegram_payment_charge_id, subscriber, payment.total_amount)
             await send(update.effective_message, ui(update, f"💎 Secret AI Pro активна! +{subs.bonus} кредитов, до {subs.pro_limit} сообщений в день.",
                                                     f"💎 Secret AI Pro is active! +{subs.bonus} credits, up to {subs.pro_limit} messages a day."))
         return
@@ -6553,10 +6465,8 @@ def error_text(error):
 
 
 COMMANDS = {
-    "ru": [("life", "Мой день: дела из сообщений"), ("tasks", "Мои задачи"), ("plan", "План дня"), ("review", "Итоги дня"), ("inbox", "Собрать входящие"), ("project", "Проекты и файлы"), ("files", "Мои документы"), ("find", "Поиск по документам"), ("compare", "Сравнить файлы"), ("report", "Отчёт в Word"), ("diagnose", "Разобрать ошибки"), ("app", "Подключения"), ("secretary", "ИИ-секретарь"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"),
-           ("export", "Скачать историю"), ("auto", "Автозадачи по расписанию"), ("pro", "Подписка Pro"), ("invite", "Пригласить друзей"), ("promo", "Ввести промокод"), ("emoji", "Премиум-эмодзи бота"), ("myid", "Мой Telegram ID"), ("version", "Версия бота")],
-    "en": [("life", "My day assistant"), ("tasks", "My tasks"), ("plan", "Daily plan"), ("review", "Daily review"), ("inbox", "Collect inbox"), ("project", "Projects and files"), ("files", "My documents"), ("find", "Search documents"), ("compare", "Compare files"), ("report", "Word report"), ("diagnose", "Diagnose errors"), ("app", "Connections"), ("secretary", "AI secretary"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"),
-           ("export", "Download history"), ("auto", "Scheduled tasks"), ("pro", "Pro subscription"), ("invite", "Invite friends"), ("promo", "Enter a promo code"), ("emoji", "The bot's premium emoji"), ("myid", "My Telegram ID"), ("version", "Bot version")],
+    "ru": [("app", "Открыть Secret AI"), ("help", "Что я умею"), ("mode", "Сменить режим"), ("reset", "Очистить память"), ("export", "Скачать историю")],
+    "en": [("app", "Open Secret AI"), ("help", "What I can do"), ("mode", "Change mode"), ("reset", "Clear memory"), ("export", "Download history")],
 }
 
 
@@ -6675,8 +6585,6 @@ async def post_init(app):
                  BotCommand(partygames.SPY, "🕵️ Шпион: найдите чужака"), BotCommand(partygames.CROC, "🐊 Крокодил: угадай рисунок"),
                  BotCommand(partygames.TOP, "🏆 Рейтинг игр"),
                  BotCommand(digest.COMMAND, "📊 Итоги дня"),
-                 BotCommand(awards.COMMAND, "🏆 Премии недели"), BotCommand(predictions.COMMAND, "🔮 Прогноз от чата"),
-                 BotCommand(moderation.COMMAND, "🛡 Антиспам для группы"),
                  BotCommand("serial", "🎬 Сериал про ваш чат"),
                  BotCommand("q", "Цитата: ответь на сообщение"), BotCommand("dem", "Демотиватор из фото"),
                  BotCommand("meme", "Мем из TikTok")]
@@ -6687,8 +6595,6 @@ async def post_init(app):
                                        BotCommand(partygames.SPY, "🕵️ Spy: find the outsider"), BotCommand(partygames.CROC, "🐊 Crocodile: guess the drawing"),
                                        BotCommand(partygames.TOP, "🏆 Games leaderboard"),
                                        BotCommand(digest.COMMAND, "📊 Day summary"),
-                                       BotCommand(awards.COMMAND, "🏆 Weekly awards"), BotCommand(predictions.COMMAND, "🔮 Forecast by the chat"),
-                                       BotCommand(moderation.COMMAND, "🛡 Group anti-spam"),
                                        BotCommand("serial", "🎬 Your group sitcom"),
                                        BotCommand("q", "Quote: reply to a message"), BotCommand("dem", "Demotivator from a photo"),
                                        BotCommand("meme", "A TikTok meme")] + [BotCommand(*c) for c in COMMANDS["en"][:6]],
@@ -7075,6 +6981,102 @@ class Bridge:
         """Mini App: edit/combine uploaded photos (bytes)."""
         language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
         return self._run(start_generation(self.app, tg_user["id"], language, "photo", prompt, fmt, images=images))
+
+    def tasks_state(self, user_id, language):
+        async def read():
+            data, memory = self.app.bot_data, self.app.bot_data["memory"]
+            items = memory.automations.list(user_id)
+            for item in items:
+                item["when"] = automations.rule_text(item["rule"], language == "ru")
+                item["runs"] = memory.automations.runs(item["id"])
+            return {"items": items, "slots": automation_slots(data, user_id), "tz": task_zone(memory, user_id, language),
+                    "templates": [{"title": t, "task": task} for t, task in automations.TEMPLATES[language]]}
+        return self._run(read())
+
+    def tasks_add(self, user_id, language, when, task, zone=None):
+        """(state, error): error is 'schedule' or 'slots'."""
+        async def write():
+            memory = self.app.bot_data["memory"]
+            try:
+                rule = recurring.parse(str(when or ""), task_zone(memory, user_id, language, zone))
+            except Exception:
+                rule = None
+            text = str(task or "").strip()[:automations.MAX_TASK]
+            if not rule or not text:
+                return "schedule"
+            return None if memory.automations.add(user_id, rule, text, language, automation_slots(self.app.bot_data, user_id)) else "slots"
+        return self._run(write())
+
+    def tasks_change(self, user_id, item, action):
+        async def write():
+            store = self.app.bot_data["memory"].automations
+            if action == "delete":
+                return store.delete(user_id, item)
+            return store.set_paused(user_id, item, action == "pause")
+        return self._run(write())
+
+    def research(self, tg_user, topic):
+        language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
+        async def begin():
+            return await start_research(self.app, tg_user["id"], language, topic)
+        return self._run(begin())
+
+    def invite_info(self, user_id):
+        async def read():
+            data = self.app.bot_data
+            return {"link": invite_link(data, user_id), "count": data["memory"].referral_count(user_id), "credits": REFERRAL_CREDITS}
+        return self._run(read())
+
+    def group_extras(self, user_id, chat_id, change=None):
+        """The group's anti-spam, awards and plan; changes are for its admins only. None: not this person's group."""
+        async def work():
+            data, bot = self.app.bot_data, self.app.bot
+            try:
+                status = (await bot.get_chat_member(chat_id, user_id)).status
+            except TelegramError:
+                return None
+            if status in ("left", "kicked"):
+                return None
+            admin = status in ("administrator", "creator")
+            if change:
+                if not admin:
+                    raise PermissionError("admin")
+                if "antispam" in change:
+                    data["moderation"].set_enabled(chat_id, bool(change["antispam"]))
+                if "awards" in change:
+                    week_awards(data).set_enabled(chat_id, bool(change["awards"]))
+                if "member_limit" in change:
+                    data["subs"].set_member_limit(chat_id, int(change["member_limit"]))
+            return {"admin": admin, "antispam": data["moderation"].enabled(chat_id), "awards": week_awards(data).enabled(chat_id),
+                    "pro": data["subs"].group_state(chat_id)}
+        return self._run(work())
+
+    def group_buy(self, tg_user, chat_id):
+        async def work():
+            if not await is_group_admin(self.app.bot, chat_id, tg_user["id"]):
+                raise PermissionError("admin")
+            ru = (tg_user.get("language_code") or "ru").startswith("ru")
+            return await group_pro_invoice(self.app.bot, self.app.bot_data, chat_id, tg_user["id"], ru)
+        return self._run(work())
+
+    def group_post(self, tg_user, chat_id, what):
+        """Post the week's awards or the person's forecast into the group, right from the Mini App."""
+        async def work():
+            data, bot, user_id = self.app.bot_data, self.app.bot, tg_user["id"]
+            try:
+                member = await bot.get_chat_member(chat_id, user_id)
+            except TelegramError:
+                raise PermissionError("member")
+            if member.status in ("left", "kicked"):
+                raise PermissionError("member")
+            title = (await bot.get_chat(chat_id)).title
+            if what == "awards":
+                await week_awards(data).post(bot, chat_id, title, manual=True)
+            else:
+                avatar = await avatar_bytes(bot, user_id)
+                await predict_cards(data).post(bot, chat_id, user_id, speaker(member.user), avatar=avatar, by_id=False)
+            return True
+        return self._run_long(work(), 120)
 
     def pro_invoice(self, tg_user):
         ru = (tg_user.get("language_code") or "ru").startswith("ru")
@@ -7536,6 +7538,12 @@ def main():
     app.bot_data["subs"] = app.bot_data["memory"].subs
     app.bot_data["approvals"] = approvals.Approvals()
     app.bot_data["moderation"] = moderation.Moderation(app.bot_data["groups"].db)
+    embed_key = os.environ.get("EMBEDDINGS_API_KEY", "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+    if embed_key:  # search by meaning; without a key the word search stays
+        app.bot_data["embeddings"] = embeddings.Embeddings(
+            app.bot_data["memory"].db,
+            AsyncOpenAI(api_key=embed_key, base_url=os.environ.get("EMBEDDINGS_BASE", "").strip() or None, timeout=30, max_retries=1),
+            os.environ.get("EMBEDDINGS_MODEL", "").strip() or "text-embedding-3-small")
     # Track real private/group chats, without changing any command or message handler.
     app.add_handler(TypeHandler(Update, release_notices.track), group=-1)
     # Business updates first: their messages must not reach the regular chat handlers.

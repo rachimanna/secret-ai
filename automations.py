@@ -16,6 +16,18 @@ TICK_SECONDS = 30
 RUN_SECONDS = 240
 PARALLEL = 2
 FAILURES_TO_PAUSE = 5
+RUN_TEXT = 1500
+RUNS_KEPT = 5
+TEMPLATES = {
+    "ru": [("☀️ Утренняя сводка", "Собери непрочитанные письма и встречи на сегодня и выдели главное."),
+           ("📰 Новости по теме", "Найди главные новости за сутки по теме: "),
+           ("📅 План на неделю", "Посмотри мои задачи и календарь и предложи план на неделю."),
+           ("💱 Курс и цены", "Найди сегодняшний курс доллара и евро и коротко скажи, что изменилось.")],
+    "en": [("☀️ Morning digest", "Collect unread email and today's meetings and pick out what matters."),
+           ("📰 News on a topic", "Find the main news of the last day on this topic: "),
+           ("📅 Plan for the week", "Look at my tasks and calendar and suggest a plan for the week."),
+           ("💱 Rates and prices", "Find today's dollar and euro rates and say briefly what changed.")],
+}
 FORM = re.compile(r"^(.+?\d{2}:\d{2})\s*[:—–-]\s*(.+)$", re.S)
 
 
@@ -52,6 +64,8 @@ class Store:
                             "rule TEXT NOT NULL, task TEXT NOT NULL, language TEXT NOT NULL, next_at INTEGER NOT NULL, "
                             "failures INTEGER NOT NULL DEFAULT 0, paused INTEGER NOT NULL DEFAULT 0)")
             self.db.execute("CREATE INDEX IF NOT EXISTS automations_due ON automations(paused, next_at)")
+            self.db.execute("CREATE TABLE IF NOT EXISTS automation_runs (id INTEGER PRIMARY KEY, automation INTEGER NOT NULL, "
+                            "at INTEGER NOT NULL, ok INTEGER NOT NULL, text TEXT NOT NULL)")
 
     def add(self, user_id, rule, task, language, slots, now=None):
         """The new task's id, or None when all the person's slots are taken."""
@@ -68,13 +82,40 @@ class Store:
 
     def delete(self, user_id, item):
         with self.db:
-            return self.db.execute("DELETE FROM automations WHERE id=? AND user_id=?", (item, user_id)).rowcount > 0
+            done = self.db.execute("DELETE FROM automations WHERE id=? AND user_id=?", (item, user_id)).rowcount > 0
+            if done:
+                self.db.execute("DELETE FROM automation_runs WHERE automation=?", (item,))
+            return done
+
+    def set_paused(self, user_id, item, paused, now=None):
+        """Pause or resume; resuming starts from the next scheduled time with a clean record."""
+        now = int(now if now is not None else time.time())
+        with self.db:
+            row = self.db.execute("SELECT rule FROM automations WHERE id=? AND user_id=?", (item, user_id)).fetchone()
+            if not row:
+                return False
+            self.db.execute("UPDATE automations SET paused=?, failures=0, next_at=? WHERE id=?",
+                            (int(bool(paused)), recurring.next_at(row[0], now), item))
+        return True
+
+    def log_run(self, item, ok, text, now=None):
+        with self.db:
+            self.db.execute("INSERT INTO automation_runs(automation, at, ok, text) VALUES (?, ?, ?, ?)",
+                            (item, int(now if now is not None else time.time()), int(bool(ok)), str(text)[:RUN_TEXT]))
+            self.db.execute("DELETE FROM automation_runs WHERE automation=? AND id NOT IN "
+                            "(SELECT id FROM automation_runs WHERE automation=? ORDER BY id DESC LIMIT ?)", (item, item, RUNS_KEPT))
+
+    def runs(self, item):
+        rows = self.db.execute("SELECT at, ok, text FROM automation_runs WHERE automation=? ORDER BY id DESC", (item,)).fetchall()
+        return [{"at": r[0], "ok": bool(r[1]), "text": r[2]} for r in rows]
 
     def reset(self, user_id=None):
         with self.db:
             if user_id is None:
+                self.db.execute("DELETE FROM automation_runs")
                 self.db.execute("DELETE FROM automations")
             else:
+                self.db.execute("DELETE FROM automation_runs WHERE automation IN (SELECT id FROM automations WHERE user_id=?)", (user_id,))
                 self.db.execute("DELETE FROM automations WHERE user_id=?", (user_id,))
 
     def claim_due(self, now=None, limit=PARALLEL):
