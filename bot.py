@@ -44,7 +44,7 @@ from codefiles import extract_files, site_file
 from fun import LEVELS, GroupStore, ago, MemeError, demotivator, quote_card, tiktok_meme
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError
-from telegram.ext import (Application, ApplicationHandlerStop, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler,
+from telegram.ext import (Application, ApplicationHandlerStop, BusinessConnectionHandler, CallbackContext, CallbackQueryHandler, ChatMemberHandler, CommandHandler, ContextTypes, MessageHandler,
                           PreCheckoutQueryHandler, InlineQueryHandler, TypeHandler, filters)
 
 import codex
@@ -71,6 +71,8 @@ import extensions
 import miniapp
 import partygames
 import approvals
+import channels
+import groupdocs
 import embeddings
 import recurring
 import research
@@ -1910,17 +1912,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     store, user_id = context.bot_data["connections"], update.effective_user.id
     invited = re.fullmatch(r"ref_([0-9]{1,15})", context.args[0]) if context.args else None
+    first_time = not store.get_meta(f"welcomed:{user_id}")
     if invited and not store.get_meta(f"welcomed:{user_id}"):
         await accept_invite(update, context, int(invited.group(1)))
     if not store.get_meta(f"welcomed:{user_id}"):
         await send_welcome(context, update.effective_message, user_id)
     # The video note already says hi; the full list of features is one command away.
+    if first_time:
+        await send(update.effective_message, ui(update, "С чего начнём? Нажмите кнопку или просто напишите мне 👇", "Where shall we start? Press a button or just write to me 👇"),
+                   first_steps_keyboard(context.bot_data, lang(update) == "ru"))
+        return
     await send(update.effective_message, ui(update, "Просто напишите мне, а все функции — в Secret AI 👇", "Just write to me; everything else is in Secret AI 👇"),
                app_button(context.bot_data, lang(update) == "ru"))
 
 
 # ----- invite friends: a personal link, credits for both when a new person comes -----
 REFERRAL_CREDITS = 3  # each side; a picture costs 1
+REFERRAL_PRO_DAYS = 3  # free days of the big message limit for the person who invited
 
 
 def invite_link(data, user_id):
@@ -1933,9 +1941,12 @@ async def accept_invite(update, context, referrer):
         return
     await send(update.effective_message, ui(update, f"🎁 Вас пригласил друг — держите +{REFERRAL_CREDITS} кредита на картинки и видео.",
                                             f"🎁 A friend invited you — here are +{REFERRAL_CREDITS} credits for pictures and videos."))
+    subs = context.bot_data.get("subs")
+    if subs:
+        subs.grant_days(referrer, REFERRAL_PRO_DAYS)
     try:
-        await context.bot.send_message(referrer, f"🎉 По вашей ссылке пришёл новый человек! +{REFERRAL_CREDITS} кредита. "
-                                                 f"Всего приглашено: {memory.referral_count(referrer)}. Ссылка — /invite")
+        await context.bot.send_message(referrer, f"🎉 По вашей ссылке пришёл новый человек! +{REFERRAL_PRO_DAYS} дня большого лимита и +{REFERRAL_CREDITS} кредита. "
+                                                 f"Всего приглашено: {memory.referral_count(referrer)}.")
     except TelegramError:
         pass
 
@@ -2482,6 +2493,9 @@ def wipe_all(data):
         memory.db.execute("DELETE FROM file_context")
     memory.workbench.reset()
     memory.automations.reset()
+    memory.channels.forget_all()
+    if data.get("group_docs"):
+        data["group_docs"].forget()
     memory.board.forget()
     if getattr(memory, "daily", None):
         memory.daily.reset()
@@ -3062,7 +3076,13 @@ async def take_message(update, context, target):
     if data["subs"].spend(user_id):
         return True
     data["subs"].note_limit_hit(user_id)
-    text, keyboard = await pro_offer(context.bot, data, user_id, lang(update) == "ru", limit_reached=True)
+    ru = lang(update) == "ru"
+    if data["subs"].start_trial(user_id) and data["subs"].spend(user_id):
+        days, big = data["subs"].trial_days, data["subs"].pro_limit
+        await send(target, f"🎁 Бесплатный лимит закончился, поэтому дарю пробный период: {days} дня до {big} сообщений в день. Бесплатно и без автопродления." if ru else
+                   f"🎁 Your free limit is used up, so here's a trial: {days} days with up to {big} messages a day. Free, nothing renews.")
+        return True
+    text, keyboard = await pro_offer(context.bot, data, user_id, ru, limit_reached=True)
     await send(target, text, keyboard)
     return None
 
@@ -3095,6 +3115,9 @@ async def pro_offer(bot, data, user_id, ru, limit_reached=False):
         until = time.strftime("%d.%m.%Y", time.gmtime(info["until"]))
         return head + (f"💎 Secret AI Pro активна, следующее продление — {until}. Осталось сообщений сегодня: {info['left']}." if ru else
                        f"💎 Secret AI Pro is active, next renewal {until}. Messages left today: {info['left']}."), None
+    if info["bonus_until"]:
+        head += (f"🎁 Большой лимит бесплатно действует до {time.strftime('%d.%m.%Y', time.gmtime(info['bonus_until']))}.\n\n" if ru else
+                 f"🎁 Your big free limit lasts until {time.strftime('%d.%m.%Y', time.gmtime(info['bonus_until']))}.\n\n")
     text = head + (f"💎 Secret AI Pro — {subs.stars} ⭐ в месяц\n• до {subs.pro_limit} сообщений в день (бесплатно — {subs.free_limit})\n"
                    f"• {subs.bonus} кредитов каждый месяц на фото, видео и платные модели\n• до {automations.PRO_SLOTS} автозадач (бесплатно — {automations.FREE_SLOTS})\n\n"
                    "Продление автоматическое, отменить можно в настройках Telegram → Мои звёзды." if ru else
@@ -3107,7 +3130,11 @@ async def pro_offer(bot, data, user_id, ru, limit_reached=False):
         LOG.warning("Pro invoice link failed: %s", type(exc).__name__)
         return text, None
     button = f"⭐ Купить Pro за {subs.stars}" if ru else f"⭐ Buy Pro for {subs.stars}"
-    return text, InlineKeyboardMarkup([[InlineKeyboardButton(button, url=url)]])
+    rows = [[InlineKeyboardButton(button, url=url)]]
+    if info["trial"]:
+        rows.append([InlineKeyboardButton(f"🎁 Попробовать {info['trial_days']} дня бесплатно" if ru else f"🎁 Try {info['trial_days']} days free",
+                                          callback_data="trial:go")])
+    return text, InlineKeyboardMarkup(rows)
 
 
 def private_chat_button(data, ru, start="pro"):
@@ -3141,6 +3168,186 @@ async def group_pro_invoice(bot, data, chat_id, user_id, ru):
                      else f"A shared limit for the group: {subs.group_pool} messages a day for all members"),
         payload=f"gsub:{chat_id}:{user_id}", currency="XTR", prices=[LabeledPrice("Secret AI Pro", subs.group_stars)],
         subscription_period=subscriptions.PERIOD)
+
+
+async def trial_button(update, context):
+    query, ru = update.callback_query, lang(update) == "ru"
+    subs = context.bot_data.get("subs")
+    until = subs.start_trial(update.effective_user.id) if subs else None
+    if not until:
+        await query.answer("Пробный период уже использован." if ru else "The trial has already been used.", show_alert=True)
+        return
+    await query.answer()
+    await send(query.message, f"🎁 Готово: {subs.pro_limit} сообщений в день до {time.strftime('%d.%m.%Y', time.gmtime(until))}. Бесплатно и без автопродления." if ru else
+               f"🎁 Done: {subs.pro_limit} messages a day until {time.strftime('%d.%m.%Y', time.gmtime(until))}. Free, nothing renews.")
+
+
+FIRST_STEPS = {"d": ("Нарисуй уютный домик в лесу на закате", "Draw a cosy house in the forest at sunset"),
+               "a": ("Коротко расскажи, что ты умеешь и с чего мне лучше начать", "Tell me briefly what you can do and where I should start")}
+
+
+def first_steps_keyboard(data, ru):
+    rows = [[InlineKeyboardButton("🎨 Нарисуй что-нибудь" if ru else "🎨 Draw something", callback_data="onb:d")],
+            [InlineKeyboardButton("📄 Разобрать файл" if ru else "📄 Read a file", callback_data="onb:f")],
+            [InlineKeyboardButton("💡 Что ты умеешь?" if ru else "💡 What can you do?", callback_data="onb:a")]]
+    if data.get("bot_name"):
+        rows.append([InlineKeyboardButton("👥 Добавить в группу" if ru else "👥 Add to a group", url=f"https://t.me/{data['bot_name']}?startgroup=1")])
+    if data.get("public_url"):
+        rows.append([InlineKeyboardButton("✨ Все функции" if ru else "✨ All features", web_app=WebAppInfo(data["public_url"] + "/app"))])
+    return InlineKeyboardMarkup(rows)
+
+
+async def first_step_button(update, context):
+    query, user = update.callback_query, update.effective_user
+    choice, ru = query.data.split(":")[-1], lang(update) == "ru"
+    await query.answer()
+    if choice == "f":
+        await send(query.message, "Пришли мне PDF, Word, Excel или любой текстовый файл. Найду ошибки, объясню содержание или отвечу на вопрос по нему." if ru else
+                   "Send me a PDF, Word, Excel or any text file. I'll find errors, explain it or answer questions about it.")
+        return
+    example = FIRST_STEPS.get(choice)
+    if example:
+        await run_prompt(context.application, {"id": user.id, "first_name": user.first_name, "language_code": user.language_code}, example[0 if ru else 1])
+
+
+async def channel_member(update, context):
+    """The bot was made an admin of a channel, or removed: the person who did it manages the channel from the Mini App."""
+    change = update.my_chat_member
+    if not change or change.chat.type != "channel" or not change.from_user:
+        return
+    store, member = context.bot_data["memory"].channels, change.new_chat_member
+    if member.status in ("left", "kicked"):
+        store.disconnect(change.chat.id)
+        return
+    if member.status != "administrator":
+        return
+    ru = (change.from_user.language_code or "ru").startswith("ru")
+    can_post = getattr(member, "can_post_messages", False)
+    if can_post:
+        store.connect(change.chat.id, change.from_user.id, change.chat.title)
+    try:
+        await context.bot.send_message(
+            change.from_user.id,
+            (f"📣 Канал «{change.chat.title}» подключён. Посты можно готовить в Secret AI → Каналы; без вашего одобрения ничего не публикуется." if ru else
+             f"📣 Channel «{change.chat.title}» is connected. Prepare posts in Secret AI → Channels; nothing is published without your approval.") if can_post else
+            (f"Чтобы готовить посты для «{change.chat.title}», дайте мне право публиковать сообщения." if ru else
+             f"To prepare posts for «{change.chat.title}», give me the right to post messages."),
+            reply_markup=app_button(context.bot_data, ru) if can_post else None)
+    except TelegramError as exc:  # they never opened a private chat with the bot
+        LOG.info("Channel notice failed: %s", type(exc).__name__)
+
+
+async def channel_draft(app, user_id, chat_id, topic, image, language):
+    """Write a post and show it to its owner with buttons. None, or 'limit' / 'no_model' / 'empty'."""
+    data, ru = app.bot_data, language == "ru"
+    store = data["memory"].channels
+    counted = limits_apply(data, user_id)
+    if counted and not data["subs"].spend(user_id):
+        data["subs"].note_limit_hit(user_id)
+        text, keyboard = await pro_offer(app.bot, data, user_id, ru, limit_reached=True)
+        await app.bot.send_message(user_id, text, reply_markup=keyboard)
+        return "limit"
+    model = user_model(data, user_id)
+    if data.get("premium", {}).get(model):
+        model = data.get("chat_default")
+    if not model:
+        give_message_back(data, user_id, counted)
+        return "no_model"
+    picture = None
+    try:
+        limit = channels.MAX_CAPTION if image else channels.MAX_POST
+        post = clean_chat_text((await quick_answer(data, model, channels.WRITE.format(limit=limit), topic, max_tokens=1500) or "").strip())[:limit]
+        if not post:
+            give_message_back(data, user_id, counted)
+            return "empty"
+        if image:
+            try:
+                picture = await free_image(data["http"], f"{topic[:300]}, illustration for a post, no text, no letters", "square", data.get("cloudflare"))
+            except Exception as exc:  # the post is still good without a picture
+                LOG.info("Channel picture failed: %s", type(exc).__name__)
+        item = store.new_draft(user_id, chat_id, topic, image)
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Опубликовать" if ru else "✅ Publish", callback_data=f"chn:p:{item}")],
+                                         [InlineKeyboardButton("🔁 Другой вариант" if ru else "🔁 Another take", callback_data=f"chn:r:{item}"),
+                                          InlineKeyboardButton("🗑 Удалить" if ru else "🗑 Delete", callback_data=f"chn:d:{item}")]])
+        sent = (await app.bot.send_photo(user_id, InputFile(picture, filename="post.jpg"), caption=post, reply_markup=keyboard) if picture else
+                await app.bot.send_message(user_id, post, reply_markup=keyboard))
+        store.set_message(item, sent.message_id)
+    except BaseException:
+        give_message_back(data, user_id, counted)
+        raise
+    return None
+
+
+async def channel_button(update, context):
+    query, user_id, ru = update.callback_query, update.effective_user.id, lang(update) == "ru"
+    parts = query.data.split(":")
+    store = context.bot_data["memory"].channels
+    item = store.draft(int(parts[2])) if len(parts) == 3 and parts[2].isdigit() else None
+    if not item or item["user_id"] != user_id:
+        await query.answer("Этот черновик уже неактуален." if ru else "This draft is no longer available.", show_alert=True)
+        return
+    action = parts[1]
+
+    async def drop_buttons():
+        try:
+            await query.edit_message_reply_markup(reply_markup=None)
+        except TelegramError:
+            pass
+
+    if action == "d":
+        store.take(item["id"], user_id, "deleted")
+        await query.answer("Удалено" if ru else "Deleted")
+        await drop_buttons()
+        return
+    if action == "r":
+        if not store.take(item["id"], user_id, "replaced"):
+            await query.answer("Этот черновик уже неактуален." if ru else "This draft is no longer available.", show_alert=True)
+            return
+        await query.answer("Пишу другой вариант…" if ru else "Writing another take…")
+        await drop_buttons()
+        await channel_draft(context.application, user_id, item["chat_id"], item["topic"], item["image"], "ru" if ru else "en")
+        return
+    if action != "p" or not store.take(item["id"], user_id, "publishing"):
+        await query.answer("Этот черновик уже обработан." if ru else "This draft was already handled.", show_alert=True)
+        return
+    try:
+        member = await context.bot.get_chat_member(item["chat_id"], user_id)
+        if member.status not in ("administrator", "creator"):
+            store.release(item["id"])
+            await query.answer("Вы больше не админ этого канала." if ru else "You're no longer an admin of this channel.", show_alert=True)
+            return
+        await context.bot.copy_message(item["chat_id"], user_id, item["message_id"])
+    except TelegramError as exc:
+        store.release(item["id"])
+        LOG.warning("Channel publish failed: %s", type(exc).__name__)
+        await query.answer("Не получилось опубликовать. Проверьте, что я админ канала с правом публикации." if ru else
+                           "Couldn't publish. Check that I'm a channel admin with the right to post.", show_alert=True)
+        return
+    store.take(item["id"], user_id, "published")
+    with store.db:
+        store.db.execute("UPDATE channel_drafts SET status='published' WHERE id=?", (item["id"],))
+    await query.answer("Опубликовано ✅" if ru else "Published ✅")
+    await drop_buttons()
+
+
+async def run_channel_plan(app, item):
+    """A planned post is only ever a draft: it waits for the owner's button."""
+    data, store = app.bot_data, app.bot_data["memory"].channels
+    try:
+        if store.is_owner(item["user_id"], item["chat_id"]):
+            await channel_draft(app, item["user_id"], item["chat_id"], item["topic"], item["image"], item["language"])
+        store.finished(item["id"], True)
+    except Forbidden:
+        store.set_paused(item["user_id"], item["id"], True)
+    except Exception as exc:
+        LOG.warning("Channel plan %s failed: %s", item["id"], type(exc).__name__)
+        if store.finished(item["id"], False):
+            try:
+                await app.bot.send_message(item["user_id"], "⏸ План постов для канала поставлен на паузу из-за повторных ошибок. Включить его можно в Secret AI → Каналы." if item["language"] == "ru" else
+                                           "⏸ A channel post plan was paused after repeated failures. Resume it in Secret AI → Channels.",
+                                           reply_markup=app_button(data, item["language"] == "ru"))
+            except TelegramError:
+                pass
 
 
 async def pro_command(update, context):
@@ -4017,8 +4224,9 @@ async def group_chat(update, context):
         scoped_reply = isinstance(content, reply_context.Prompt)
         before = "" if scoped_reply else "\n".join(store.lines(chat_id))
         older = [] if scoped_reply else store.search(chat_id, question)  # from everything kept: the old messages this one is about
+        saved_files = "" if scoped_reply or not data.get("group_docs") else data["group_docs"].context(chat_id, question)
         store.add_line(chat_id, f"{name}: {question}", message.message_id, user.id)
-        head = ((f"From this group's older history (beyond the recent messages; you remember it — bring it up naturally when it matters, never say you searched), oldest first:\n" + "\n".join(older) + "\n\n"
+        head = (saved_files + (f"From this group's older history (beyond the recent messages; you remember it — bring it up naturally when it matters, never say you searched), oldest first:\n" + "\n".join(older) + "\n\n"
                  if older else "")
                 + (f"Recent messages in the group (oldest first):\n{before}\n\n" if before else "") + f"{name} writes to you:")
         if not scoped_reply:
@@ -6539,6 +6747,10 @@ async def post_init(app):
         async def scheduled(item):
             await run_automation(app, item)
         app.bot_data["automations_task"] = asyncio.create_task(automations.run_forever(app.bot_data["memory"].automations, scheduled))
+
+        async def planned_post(item):
+            await run_channel_plan(app, item)
+        app.bot_data["channel_plans_task"] = asyncio.create_task(automations.run_forever(app.bot_data["memory"].channels, planned_post))
     if app.bot_data.get("snapshots"):
         app.bot_data["snapshot_task"] = asyncio.create_task(app.bot_data["snapshots"].run())
     if hosting.updates_enabled():  # not Render: pull new commits from GitHub and restart by itself
@@ -6982,6 +7194,89 @@ class Bridge:
         language = "ru" if (tg_user.get("language_code") or "ru").startswith("ru") else "en"
         return self._run(start_generation(self.app, tg_user["id"], language, "photo", prompt, fmt, images=images))
 
+    def start_trial(self, user_id):
+        async def work():
+            subs = self.app.bot_data["subs"]
+            return subs.state(user_id) if subs.start_trial(user_id) else None
+        return self._run(work())
+
+    def facts_state(self, user_id, delete=None):
+        async def work():
+            memory = self.app.bot_data["memory"]
+            if delete is not None:
+                memory.forget_fact(user_id, delete)
+            return {"facts": memory.fact_rows(user_id)}
+        return self._run(work())
+
+    def channels_state(self, user_id, language):
+        async def read():
+            data, store = self.app.bot_data, self.app.bot_data["memory"].channels
+            subs = data.get("subs")
+            pro = (subs and subs.is_pro(user_id)) or data["connections"].get_meta("owner") == user_id
+            plans = store.plans(user_id)
+            for plan in plans:
+                plan["when"] = automations.rule_text(plan["rule"], language == "ru")
+            return {"channels": store.owned(user_id), "plans": plans, "slots": channels.PRO_PLANS if pro else channels.FREE_PLANS,
+                    "bot": data.get("bot_name") or ""}
+        return self._run(read())
+
+    def channel_draft(self, user_id, language, chat_id, topic, image):
+        async def work():
+            if not self.app.bot_data["memory"].channels.is_owner(user_id, chat_id):
+                raise PermissionError("channel")
+            return await channel_draft(self.app, user_id, chat_id, topic, image, language)
+        return self._run_long(work(), 120)
+
+    def channel_plan(self, user_id, language, chat_id, topic, image, when, zone):
+        async def work():
+            data, store = self.app.bot_data, self.app.bot_data["memory"].channels
+            if not store.is_owner(user_id, chat_id):
+                raise PermissionError("channel")
+            try:
+                rule = recurring.parse(str(when or ""), task_zone(data["memory"], user_id, language, zone))
+            except Exception:
+                rule = None
+            if not rule:
+                return "schedule"
+            subs = data.get("subs")
+            pro = (subs and subs.is_pro(user_id)) or data["connections"].get_meta("owner") == user_id
+            return None if store.add_plan(user_id, chat_id, rule, topic, image, language, channels.PRO_PLANS if pro else channels.FREE_PLANS) else "slots"
+        return self._run(work())
+
+    def channel_plan_change(self, user_id, item, action):
+        async def work():
+            store = self.app.bot_data["memory"].channels
+            return store.delete_plan(user_id, item) if action == "delete" else store.set_paused(user_id, item, action == "pause")
+        return self._run(work())
+
+    def group_docs(self, user_id, chat_id, action="list", name="", content=None, item=None):
+        """The group's saved files. Members can see the list; adding and deleting are for admins."""
+        async def work():
+            data, bot = self.app.bot_data, self.app.bot
+            docs = data["group_docs"]
+            try:
+                status = (await bot.get_chat_member(chat_id, user_id)).status
+            except TelegramError:
+                raise PermissionError("member")
+            if status in ("left", "kicked"):
+                raise PermissionError("member")
+            admin = status in ("administrator", "creator")
+            pro = data["subs"].group_is_pro(chat_id)
+            slots = groupdocs.PRO_FILES if pro else groupdocs.FREE_FILES
+            if action != "list" and not admin:
+                raise PermissionError("admin")
+            if action == "delete":
+                docs.delete(chat_id, int(item))
+            elif action == "add":
+                raw = base64.b64decode(str(content or ""), validate=True)
+                if not raw or len(raw) > docreader.MAX_FILE:
+                    raise ValueError("size")
+                document = await docreader.read_attachment(release_features.Upload(Path(str(name).replace("\\", "/")).name[:200], raw))
+                if docs.add(chat_id, document["name"], document["text"], user_id, slots) is None:
+                    raise ValueError("slots")
+            return {"files": docs.list(chat_id), "slots": slots, "admin": admin, "pro": pro}
+        return self._run_long(work(), 90)
+
     def tasks_state(self, user_id, language):
         async def read():
             data, memory = self.app.bot_data, self.app.bot_data["memory"]
@@ -7024,7 +7319,7 @@ class Bridge:
     def invite_info(self, user_id):
         async def read():
             data = self.app.bot_data
-            return {"link": invite_link(data, user_id), "count": data["memory"].referral_count(user_id), "credits": REFERRAL_CREDITS}
+            return {"link": invite_link(data, user_id), "count": data["memory"].referral_count(user_id), "credits": REFERRAL_CREDITS, "days": REFERRAL_PRO_DAYS}
         return self._run(read())
 
     def group_extras(self, user_id, chat_id, change=None):
@@ -7169,6 +7464,8 @@ class Bridge:
             except TelegramError as exc:  # already removed: forgetting is still right
                 LOG.info("Leaving group %s: %s", chat_id, type(exc).__name__)
             self.app.bot_data["groups"].forget(chat_id)
+            if self.app.bot_data.get("group_docs"):
+                self.app.bot_data["group_docs"].forget(chat_id)
             for key in ("group_count", "group_due", "group_surprised", "group_spoke"):
                 self.app.bot_data.get(key, {}).pop(chat_id, None)
             return True
@@ -7469,7 +7766,7 @@ def main():
     # Service tokens are encrypted with ENCRYPTION_KEY; without it the key is derived from the bot token.
     owner = os.environ.get("OWNER_ID", "").strip()
     connections = Connections(database, os.environ.get("ENCRYPTION_KEY", "").strip() or token,
-                              int(owner) if owner.isdigit() else None)
+                              int(owner) if owner.isdigit() else None, previous=token)
     # Discovery fills the chat catalog only after the owner explicitly adds models.
     model, models = None, []
     direct = DirectApps(connections, public_url)
@@ -7538,6 +7835,11 @@ def main():
     app.bot_data["subs"] = app.bot_data["memory"].subs
     app.bot_data["approvals"] = approvals.Approvals()
     app.bot_data["moderation"] = moderation.Moderation(app.bot_data["groups"].db)
+    app.bot_data["group_docs"] = groupdocs.Store(app.bot_data["groups"].db)
+    if os.environ.get("ENCRYPTION_KEY", "").strip():
+        moved = app.bot_data["connections"].rotate()
+        if moved:
+            LOG.info("Secrets re-encrypted with ENCRYPTION_KEY: %d", moved)
     embed_key = os.environ.get("EMBEDDINGS_API_KEY", "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
     if embed_key:  # search by meaning; without a key the word search stays
         app.bot_data["embeddings"] = embeddings.Embeddings(
@@ -7604,6 +7906,10 @@ def main():
     daily_controls.register(app)
     app.add_handler(CommandHandler("guard",message_guard.command))
     app.add_handler(CallbackQueryHandler(approval_button, pattern=rf"^{approvals.PREFIX}:"))
+    app.add_handler(CallbackQueryHandler(trial_button, pattern=r"^trial:go$"))
+    app.add_handler(CallbackQueryHandler(first_step_button, pattern=r"^onb:[daf]$"))
+    app.add_handler(CallbackQueryHandler(channel_button, pattern=r"^chn:"))
+    app.add_handler(ChatMemberHandler(channel_member, ChatMemberHandler.MY_CHAT_MEMBER), group=1)
     app.add_handler(CallbackQueryHandler(on_button))
     app.add_handler(PreCheckoutQueryHandler(precheckout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, paid))

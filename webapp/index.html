@@ -1309,14 +1309,18 @@ function toolRow(id, title, sub) { return `<button class="row compact press" id=
 function renderHomeTools() {
   const box = $("home-tools"); if (!box) return;
   const ru = lang === "ru", sub = state?.gen?.sub, owner = state?.gen?.owner;
-  const pro = sub && !owner ? toolRow("tool-pro", "💎 Secret AI Pro", sub.pro ? (ru ? "Подписка активна" : "Subscription is active") : (ru ? `Осталось сегодня: ${sub.left ?? "∞"} · купить за ${sub.stars} ⭐` : `Left today: ${sub.left ?? "∞"} · buy for ${sub.stars} ⭐`)) : "";
+  const pro = sub && !owner ? toolRow("tool-pro", "💎 Secret AI Pro", sub.pro ? (ru ? "Подписка активна" : "Subscription is active") : sub.trial ? (ru ? `Осталось сегодня: ${sub.left ?? "∞"} · ${sub.trial_days} дня бесплатно` : `Left today: ${sub.left ?? "∞"} · ${sub.trial_days} days free`) : (ru ? `Осталось сегодня: ${sub.left ?? "∞"} · купить за ${sub.stars} ⭐` : `Left today: ${sub.left ?? "∞"} · buy for ${sub.stars} ⭐`)) : "";
   box.innerHTML = pro
     + toolRow("tool-tasks", ru ? "⏰ Автозадачи" : "⏰ Scheduled tasks", ru ? "Бот сам делает дела по расписанию" : "The bot does things on a schedule")
     + toolRow("tool-research", ru ? "🔎 Исследование" : "🔎 Research", ru ? "Отчёт в Word со ссылками на источники" : "A Word report with links to sources")
-    + toolRow("tool-invite", ru ? "🎁 Пригласить друзей" : "🎁 Invite friends", ru ? "Кредиты вам обоим" : "Credits for both of you");
+    + toolRow("tool-channels", ru ? "📣 Каналы" : "📣 Channels", ru ? "Посты для вашего канала с вашим одобрением" : "Posts for your channel, with your approval")
+    + toolRow("tool-facts", ru ? "🧠 Что бот обо мне помнит" : "🧠 What the bot remembers", ru ? "Посмотреть и убрать лишнее" : "See it and remove anything")
+    + toolRow("tool-invite", ru ? "🎁 Пригласить друзей" : "🎁 Invite friends", ru ? "Дни большого лимита и кредиты" : "Days of the big limit and credits");
   if ($("tool-pro")) $("tool-pro").onclick = buyPro;
   $("tool-tasks").onclick = openTasksSheet;
   $("tool-research").onclick = openResearchSheet;
+  $("tool-channels").onclick = openChannelsSheet;
+  $("tool-facts").onclick = openFactsSheet;
   $("tool-invite").onclick = openInviteSheet;
 }
 function openInvoiceUrl(url) {
@@ -1389,7 +1393,7 @@ async function openInviteSheet() {
     const d = await api("/api/invite");
     const share = "https://t.me/share/url?" + new URLSearchParams({ url: d.link, text: ru ? "Попробуй Secret AI — умный бот в Telegram" : "Try Secret AI — a smart Telegram bot" });
     openSheet(`<div class="head"><h3>${ru ? "Пригласить друзей" : "Invite friends"}</h3></div>
-      <p class="lead">${ru ? `За каждого нового человека вам обоим +${d.credits} кредита. Уже пришли: ${d.count}.` : `For each new person you both get +${d.credits} credits. Joined so far: ${d.count}.`}</p>
+      <p class="lead">${ru ? `За каждого нового человека вам обоим +${d.credits} кредита, а вам ещё +${d.days} дня большого лимита. Уже пришли: ${d.count}.` : `For each new person you both get +${d.credits} credits, and you also get +${d.days} days of the big limit. Joined so far: ${d.count}.`}</p>
       <button class="btn" id="invite-share">${ru ? "Отправить другу" : "Send to a friend"}</button>`);
     $("invite-share").onclick = () => { if (tg?.openTelegramLink) tg.openTelegramLink(share); else openLink(share); };
   } catch (e) { toast(errorText(e)); haptic("error"); }
@@ -1428,9 +1432,102 @@ async function loadGroupExtras(chatId, target, change) {
   };
 }
 
+function openFactsSheet() {
+  const ru = lang === "ru";
+  const draw = list => {
+    const box = $("facts-body"); if (!box) return;
+    box.innerHTML = list.length ? `<div class="list">${list.map(f => `<div class="row compact"><div class="body"><div class="t">${esc(f.text)}</div></div><button class="btn ghost" style="width:auto" data-fact="${f.id}" aria-label="${ru ? "Забыть" : "Forget"}">${ru ? "Забыть" : "Forget"}</button></div>`).join("")}</div>`
+      : `<p class="lead">${ru ? "Пока ничего. Бот запоминает то, что важно для разговоров: имя, город, планы." : "Nothing yet. The bot remembers what matters in conversations: your name, city, plans."}</p>`;
+    box.querySelectorAll("[data-fact]").forEach(b => b.onclick = async () => {
+      try { draw((await api("/api/facts", { delete: +b.dataset.fact })).facts || []); haptic("select"); }
+      catch (e) { toast(errorText(e)); haptic("error"); }
+    });
+  };
+  openSheet(`<div class="head"><h3>${ru ? "Что бот обо мне помнит" : "What the bot remembers"}</h3></div><div id="facts-body"><p class="lead">${ru ? "Загружаю…" : "Loading…"}</p></div>`);
+  api("/api/facts").then(d => draw(d.facts || [])).catch(e => { toast(errorText(e)); closeSheet(); });
+}
+let channelsData = null;
+async function openChannelsSheet() {
+  const ru = lang === "ru";
+  openSheet(`<div class="head"><h3>${ru ? "Каналы" : "Channels"}</h3></div><div id="channels-body"><p class="lead">${ru ? "Загружаю…" : "Loading…"}</p></div>`);
+  try { channelsData = await api("/api/channels"); renderChannels(); }
+  catch (e) { toast(errorText(e)); closeSheet(); }
+}
+function renderChannels() {
+  const box = $("channels-body"); if (!box || !channelsData) return;
+  const ru = lang === "ru", d = channelsData, names = Object.fromEntries((d.channels || []).map(c => [c.id, c.title]));
+  if (!(d.channels || []).length) {
+    box.innerHTML = `<p class="lead">${ru ? "Добавьте бота админом в свой канал с правом публикации. Канал появится здесь сам." : "Add the bot to your channel as an admin who can post. The channel will appear here by itself."}</p>
+      ${d.bot ? `<button class="btn" id="channel-add">${ru ? "Добавить в канал" : "Add to a channel"}</button>` : ""}
+      <p class="hint">${ru ? "Без вашего одобрения бот ничего не публикует." : "The bot publishes nothing without your approval."}</p>`;
+    if ($("channel-add")) $("channel-add").onclick = () => { const link = `https://t.me/${d.bot}?startchannel=1&admin=post_messages`; if (tg?.openTelegramLink) tg.openTelegramLink(link); else openLink(link); };
+    return;
+  }
+  const days = ru ? [["каждый день","Каждый день"],["по будням","По будням"],["по понедельникам","По понедельникам"],["по пятницам","По пятницам"]] : [["every day","Every day"],["weekdays","Weekdays"],["every monday","Mondays"],["every friday","Fridays"]];
+  const plans = (d.plans || []).map(p => `<div class="list" style="margin-bottom:10px"><div class="row compact"><div class="body"><div class="t">${esc(p.topic.slice(0, 100))}</div><div class="s">${esc(names[p.chat_id] || "")} · ${esc(p.when)}${p.paused ? (ru ? " · на паузе" : " · paused") : ""}</div></div></div>
+    <div class="row compact"><button class="btn ghost" data-plan-action="${p.paused ? "resume" : "pause"}" data-plan="${p.id}">${p.paused ? (ru ? "Включить" : "Resume") : (ru ? "Пауза" : "Pause")}</button><button class="btn ghost" data-plan-action="delete" data-plan="${p.id}">${ru ? "Удалить" : "Delete"}</button></div></div>`).join("");
+  box.innerHTML = `<div class="small">${ru ? "Канал" : "Channel"}</div><select id="channel-pick" style="width:100%">${d.channels.map(c => `<option value="${c.id}">${esc(c.title)}</option>`).join("")}</select>
+    <div class="small">${ru ? "О чём пост" : "What's the post about"}</div><textarea id="channel-topic" rows="3" maxlength="500" style="width:100%;box-sizing:border-box"></textarea>
+    <label class="hint" style="display:block;margin:8px 0"><input type="checkbox" id="channel-image" checked> ${ru ? "С картинкой" : "With a picture"}</label>
+    <button class="btn" id="channel-draft">${ru ? "Написать пост" : "Write a post"}</button>
+    <p class="hint">${ru ? "Черновик придёт в чат с ботом. Опубликуется только после вашей кнопки." : "The draft arrives in your chat with the bot. It's published only after your button."}</p>
+    <div class="small">${ru ? "Регулярные посты" : "Regular posts"}</div>${plans}
+    ${(d.plans || []).length < d.slots ? `<div style="display:flex;gap:8px;margin-bottom:8px"><select id="plan-days" style="flex:1">${days.map(([v, t]) => `<option value="${v}">${t}</option>`).join("")}</select><input id="plan-time" type="time" value="10:00"></div>
+      <button class="btn ghost" id="plan-add">${ru ? "Присылать черновики на эту тему по расписанию" : "Send drafts on this topic on a schedule"}</button>`
+      : `<p class="hint">${ru ? `Занято планов: ${d.plans.length} из ${d.slots}.` : `Plans used: ${d.plans.length} of ${d.slots}.`}</p>`}`;
+  const topic = () => $("channel-topic").value.trim();
+  $("channel-draft").onclick = async () => {
+    if (!topic()) { toast(ru ? "Напишите тему" : "Enter a topic"); return; }
+    $("channel-draft").disabled = true;
+    try { channelsData = await api("/api/channels/draft", { chat_id: +$("channel-pick").value, topic: topic(), image: $("channel-image").checked }); toast(ru ? "Черновик в чате с ботом" : "The draft is in your chat with the bot"); haptic("success"); renderChannels(); }
+    catch (e) { $("channel-draft").disabled = false; toast(errorText(e)); haptic("error"); }
+  };
+  if ($("plan-add")) $("plan-add").onclick = async () => {
+    if (!topic()) { toast(ru ? "Напишите тему" : "Enter a topic"); return; }
+    try { channelsData = await api("/api/channels/plan", { chat_id: +$("channel-pick").value, topic: topic(), image: $("channel-image").checked, when: `${$("plan-days").value} ${$("plan-time").value}`, tz: deviceZone() }); toast(T.saved); haptic("success"); renderChannels(); }
+    catch (e) { toast(errorText(e)); haptic("error"); }
+  };
+  box.querySelectorAll("[data-plan-action]").forEach(b => b.onclick = async () => {
+    try { channelsData = await api("/api/channels/plan/change", { id: +b.dataset.plan, action: b.dataset.planAction }); renderChannels(); haptic("select"); }
+    catch (e) { toast(errorText(e)); haptic("error"); }
+  });
+}
+async function loadGroupDocs(chatId, target, change) {
+  if (!target?.isConnected) return;
+  const ru = lang === "ru";
+  let d;
+  try { d = await api("/api/groups/docs", { chat_id: chatId, ...(change || {}) }); }
+  catch (e) {
+    toast(e.code === "slots" ? (ru ? "Все места заняты. Больше файлов — с Pro для группы." : "All places are taken. More files with group Pro.") : e.code === "group_admin" ? (ru ? "Это может только админ группы" : "Only a group admin can do this") : (ru ? "Не удалось прочитать файл" : "Couldn't read the file")); haptic("error");
+    if (!change) { target.innerHTML = ""; return; }
+    try { d = await api("/api/groups/docs", { chat_id: chatId }); } catch { return; }
+  }
+  if (!target.isConnected || !Array.isArray(d?.files)) return;
+  target.innerHTML = `<div class="small">${ru ? "Файлы для всей группы" : "Files for the whole group"}</div>
+    <p class="hint">${ru ? "Бот отвечает участникам по этим файлам: правила, расписание, договор." : "The bot answers members from these files: rules, a schedule, a contract."}</p>
+    ${d.files.length ? `<div class="list">${d.files.map(f => `<div class="row compact"><div class="body"><div class="t">${esc(f.name)}</div></div>${d.admin ? `<button class="btn ghost" style="width:auto" data-doc="${f.id}">${ru ? "Удалить" : "Delete"}</button>` : ""}</div>`).join("")}</div>` : ""}
+    ${d.admin ? (d.files.length < d.slots ? `<input type="file" id="g-doc-file" hidden accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.csv,.json"><button class="btn ghost" id="g-doc-add">${ru ? `Добавить файл (${d.files.length} из ${d.slots})` : `Add a file (${d.files.length} of ${d.slots})`}</button>` : `<p class="hint">${ru ? `Заняты все места: ${d.slots}.` : `All ${d.slots} places are taken.`}</p>`) : ""}`;
+  target.querySelectorAll("[data-doc]").forEach(b => b.onclick = () => loadGroupDocs(chatId, target, { action: "delete", id: +b.dataset.doc }));
+  const input = target.querySelector("#g-doc-file");
+  if (input) {
+    target.querySelector("#g-doc-add").onclick = () => input.click();
+    input.onchange = () => {
+      const file = input.files?.[0]; if (!file) return;
+      if (file.size > 19 * 1024 * 1024) { toast(ru ? "Файл должен быть до 19 МБ" : "The file must be up to 19 MB"); return; }
+      const reader = new FileReader();
+      reader.onload = () => { toast(ru ? "Читаю файл…" : "Reading the file…"); loadGroupDocs(chatId, target, { action: "add", name: file.name, content: String(reader.result).split(",")[1] || "" }); };
+      reader.readAsDataURL(file);
+    };
+  }
+}
+
 async function buyPro() {
   const ru = lang === "ru", sub = state.gen.sub;
   if (sub.pro) { toast(ru ? "Подписка активна. Отменить можно в Telegram → Мои звёзды." : "Your subscription is active. Cancel in Telegram → My Stars."); return; }
+  if (sub.trial) {
+    try { const r = await api("/api/sub/trial"); toast(ru ? "Пробный период включён" : "Your trial is on"); haptic("success"); state.gen.sub = r.sub; renderHomeTools(); return; }
+    catch { /* no trial after all: offer the purchase */ }
+  }
   try {
     const { url } = await api("/api/sub/buy");
     const done = status => { if (status === "paid") { toast(T.paidOk); haptic("success"); setTimeout(() => load(true), 1500); } };
@@ -2050,9 +2147,11 @@ function openGroupSheet(g) {
     <div class="small">${lang === "ru" ? "Восстановление сообщений" : "Message restoration"}</div>
     <div id="g-guard" role="region" aria-label="${lang === "ru" ? "Восстановление сообщений" : "Message restoration"}"><p class="lead">${lang === "ru" ? "Проверяю состояние…" : "Checking status…"}</p></div>
     <div id="g-extras"></div>
+    <div id="g-docs"></div>
     <div class="small">${T.groupCmds}</div>`);
   loadGroupGuard(g.id,$("g-guard"));
   loadGroupExtras(g.id,$("g-extras"));
+  loadGroupDocs(g.id,$("g-docs"));
   $("g-model").querySelectorAll("[data-model]").forEach(b => b.onclick = async () => {
     haptic("select");
     try {

@@ -227,7 +227,7 @@ def make_handler(config):
             if not user:
                 return
             try:
-                limit = MAX_EXTENSION_BODY if path.startswith("/api/extensions/") else MAX_UPLOAD if path in ("/api/edit", "/api/live/turn", "/api/features/upload") else MAX_BODY
+                limit = MAX_EXTENSION_BODY if path.startswith("/api/extensions/") else MAX_UPLOAD if path in ("/api/edit", "/api/live/turn", "/api/features/upload", "/api/groups/docs") else MAX_BODY
                 data = self._json(limit)
             except ValueError:
                 self._send(400, {"error": "bad request"})
@@ -461,6 +461,46 @@ def make_handler(config):
                     self._send(400, {"error": "bad request"})
                     return
                 self._send(200, {"url": bridge.invoice(user, pack)})
+            elif path == "/api/facts":
+                try:
+                    forget = int(data["delete"]) if "delete" in data else None
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "bad request"})
+                    return
+                self._send(200, bridge.facts_state(uid, forget))
+            elif path == "/api/channels":
+                self._send(200, bridge.channels_state(uid, language))
+            elif path in ("/api/channels/draft", "/api/channels/plan", "/api/channels/plan/change"):
+                try:
+                    if path == "/api/channels/plan/change":
+                        action = str(data.get("action") or "")
+                        if action not in ("delete", "pause", "resume"):
+                            raise ValueError
+                        bridge.channel_plan_change(uid, int(data.get("id")), action)
+                        self._send(200, bridge.channels_state(uid, language))
+                        return
+                    chat_id, topic = int(data.get("chat_id")), " ".join(str(data.get("topic") or "").split())[:500]
+                    if not topic:
+                        raise ValueError
+                    if path == "/api/channels/draft":
+                        error = bridge.channel_draft(uid, language, chat_id, topic, bool(data.get("image")))
+                    else:
+                        error = bridge.channel_plan(uid, language, chat_id, topic, bool(data.get("image")), data.get("when"), data.get("tz"))
+                    self._send(400, {"error": error}) if error else self._send(200, bridge.channels_state(uid, language))
+                except (TypeError, ValueError):
+                    self._send(400, {"error": "bad request"})
+                except PermissionError:
+                    self._send(403, {"error": "forbidden"})
+            elif path == "/api/groups/docs":
+                try:
+                    chat_id, action = int(data.get("chat_id")), str(data.get("action") or "list")
+                    if chat_id >= 0 or action not in ("list", "add", "delete"):
+                        raise ValueError("bad")
+                    self._send(200, bridge.group_docs(uid, chat_id, action, data.get("name") or "", data.get("content"), data.get("id")))
+                except PermissionError:
+                    self._send(403, {"error": "group_admin"})
+                except Exception as exc:  # an unreadable file or a full list: the screen explains it
+                    self._send(400, {"error": "slots" if str(exc) == "slots" else "file"})
             elif path == "/api/tasks":
                 self._send(200, bridge.tasks_state(uid, language))
             elif path == "/api/tasks/add":
@@ -506,6 +546,9 @@ def make_handler(config):
                     self._send(400, {"error": "bad request"})
                 except PermissionError:
                     self._send(403, {"error": "group_admin"})
+            elif path == "/api/sub/trial":
+                sub = bridge.start_trial(uid)
+                self._send(200, {"sub": sub}) if sub else self._send(400, {"error": "trial"})
             elif path == "/api/sub/buy":
                 self._send(200, {"url": bridge.pro_invoice(user)})
             elif path == "/api/play/score":
