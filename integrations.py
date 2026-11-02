@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 from urllib.parse import parse_qsl, quote, urlparse
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 GITHUB_API = "https://api.github.com"
 INIT_DATA_MAX_AGE = 24 * 3600
@@ -78,18 +78,39 @@ def read_state(secret, state):
 class Connections:
     """Per-user service tokens, encrypted at rest. Safe to use from the bot and the HTTP thread."""
 
-    def __init__(self, path, secret, owner=None):
+    def __init__(self, path, secret, owner=None, previous=None):
+        """previous: the key used so far, when ENCRYPTION_KEY has just been set. Old secrets stay readable and are re-encrypted."""
         self.owner = owner  # OWNER_ID: fixed bot owner, survives a wiped database
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(path, timeout=10, check_same_thread=False)
         self.lock = threading.Lock()
-        key = hashlib.sha256(("secret-ai-vault:" + secret).encode()).digest()
-        self.fernet = Fernet(base64.urlsafe_b64encode(key))
+        def cipher(value):
+            return Fernet(base64.urlsafe_b64encode(hashlib.sha256(("secret-ai-vault:" + value).encode()).digest()))
+        self.fernet = MultiFernet([cipher(secret)] + ([cipher(previous)] if previous and previous != secret else []))
         with self.lock, self.db:
             self.db.execute(
                 "CREATE TABLE IF NOT EXISTS connections (user_id INTEGER NOT NULL, service TEXT NOT NULL, "
                 "label TEXT NOT NULL, url TEXT NOT NULL DEFAULT '', secret BLOB NOT NULL, meta TEXT NOT NULL DEFAULT '{}', "
                 "PRIMARY KEY (user_id, service, label))")
+
+    def rotate(self):
+        """Re-encrypt every stored secret with the current key; how many changed. What can't be read is left alone."""
+        changed = 0
+        with self.lock, self.db:
+            self._meta_table()
+            for table, column, key_columns in (("connections", "secret", ("user_id", "service", "label")), ("bot_meta", "value", ("key",))):
+                names = ", ".join(key_columns)
+                where = " AND ".join(f"{name}=?" for name in key_columns)
+                for row in self.db.execute(f"SELECT {column}, {names} FROM {table}").fetchall():
+                    if not isinstance(row[0], (bytes, bytearray)):
+                        continue  # plain settings in bot_meta aren't encrypted
+                    try:
+                        fresh = self.fernet.rotate(bytes(row[0]))
+                    except InvalidToken:
+                        continue
+                    self.db.execute(f"UPDATE {table} SET {column}=? WHERE {where}", (fresh, *row[1:]))
+                    changed += 1
+        return changed
 
     def save(self, user_id, service, label, token, url="", meta=None):
         encrypted = self.fernet.encrypt((token or "").encode())

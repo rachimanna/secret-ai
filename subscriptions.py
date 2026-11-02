@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 PERIOD = 2592000  # Telegram Stars subscriptions renew every 30 days: the only period the Bot API accepts
 GRACE = 86400  # a renewal may arrive a little late: Pro doesn't drop for that
+BONUS_CAP_DAYS = 90
 
 
 def _number(name, default):
@@ -46,6 +47,7 @@ class Store:
         self.group_member = _number("GROUP_PRO_MEMBER_LIMIT", 200)
         self.research_free = _number("FREE_RESEARCH_PER_DAY", 1)
         self.research_pro = _number("PRO_RESEARCH_PER_DAY", 10)
+        self.trial_days = _number("TRIAL_DAYS", 3)
         with self.db:
             self.db.execute("CREATE TABLE IF NOT EXISTS sub_plans (user_id INTEGER PRIMARY KEY, until INTEGER NOT NULL, "
                             "started INTEGER NOT NULL)")
@@ -58,6 +60,7 @@ class Store:
             self.db.execute("CREATE TABLE IF NOT EXISTS sub_payments (charge TEXT PRIMARY KEY, user_id INTEGER NOT NULL, chat_id INTEGER, "
                             "stars INTEGER NOT NULL, at INTEGER NOT NULL)")
             self.db.execute("CREATE TABLE IF NOT EXISTS sub_limit_hits (user_id INTEGER NOT NULL, day TEXT NOT NULL, PRIMARY KEY(user_id, day))")
+            self.db.execute("CREATE TABLE IF NOT EXISTS sub_bonus (user_id INTEGER PRIMARY KEY, until INTEGER NOT NULL, trial_at INTEGER)")
             self.db.execute("CREATE TABLE IF NOT EXISTS research_usage (user_id INTEGER NOT NULL, day TEXT NOT NULL, "
                             "used INTEGER NOT NULL, PRIMARY KEY(user_id, day))")
 
@@ -73,8 +76,42 @@ class Store:
         until = self.until(user_id)
         return bool(until) and until + GRACE > (now if now is not None else time.time())
 
+    def bonus_until(self, user_id):
+        row = self.db.execute("SELECT until FROM sub_bonus WHERE user_id=?", (user_id,)).fetchone()
+        return row[0] if row else 0
+
+    def has_bonus(self, user_id, now=None):
+        """Free days (a trial or a friend who came): the big message limit, nothing else that costs money."""
+        return self.bonus_until(user_id) > (now if now is not None else time.time())
+
+    def trial_available(self, user_id):
+        if not self.trial_days or self.until(user_id):
+            return False
+        row = self.db.execute("SELECT trial_at FROM sub_bonus WHERE user_id=?", (user_id,)).fetchone()
+        return not (row and row[0])
+
+    def start_trial(self, user_id, now=None):
+        """The one free trial; its end time, or None when it can't start. Atomic: only ever once."""
+        now = int(now if now is not None else time.time())
+        if not self.trial_available(user_id):
+            return None
+        until = max(self.bonus_until(user_id), now) + self.trial_days * 86400
+        with self.db:
+            self.db.execute("INSERT INTO sub_bonus(user_id, until, trial_at) VALUES (?, ?, ?) ON CONFLICT(user_id) "
+                            "DO UPDATE SET until=excluded.until, trial_at=excluded.trial_at WHERE trial_at IS NULL", (user_id, until, now))
+        return until
+
+    def grant_days(self, user_id, days, now=None):
+        """Free days for a friend brought in, added up but never more than BONUS_CAP_DAYS ahead."""
+        now = int(now if now is not None else time.time())
+        until = min(max(self.bonus_until(user_id), now) + int(days) * 86400, now + BONUS_CAP_DAYS * 86400)
+        with self.db:
+            self.db.execute("INSERT INTO sub_bonus(user_id, until) VALUES (?, ?) ON CONFLICT(user_id) DO UPDATE SET until=excluded.until",
+                            (user_id, until))
+        return until
+
     def limit(self, user_id, now=None):
-        return self.pro_limit if self.is_pro(user_id, now) else self.free_limit
+        return self.pro_limit if self.is_pro(user_id, now) or self.has_bonus(user_id, now) else self.free_limit
 
     def activate(self, user_id, until=None, now=None):
         """Pro up to `until` (what Telegram reports), never shortening what was already paid for."""
@@ -195,7 +232,8 @@ class Store:
         first_payers = "SELECT user_id, chat_id, MIN(at) AS first FROM sub_payments GROUP BY user_id, COALESCE(chat_id, 0)"
         bought = one(f"SELECT COUNT(*) FROM ({first_payers}) WHERE first>=?", (week,))
         payments = one("SELECT COUNT(*) FROM sub_payments WHERE at>=?", (week,))
-        return {"pro_active": one("SELECT COUNT(*) FROM sub_plans WHERE until>?", (alive,)),
+        return {"trials_week": one("SELECT COUNT(*) FROM sub_bonus WHERE trial_at>=?", (week,)),
+                "pro_active": one("SELECT COUNT(*) FROM sub_plans WHERE until>?", (alive,)),
                 "groups_active": one("SELECT COUNT(*) FROM group_plans WHERE until>?", (alive,)),
                 "limit_hit_week": hit, "bought_week": bought, "renewed_week": max(0, payments - bought),
                 "stars_week": one("SELECT SUM(stars) FROM sub_payments WHERE at>=?", (week,)),
@@ -203,5 +241,7 @@ class Store:
 
     def state(self, user_id, now=None):
         return {"pro": self.is_pro(user_id, now), "until": self.until(user_id), "left": self.left(user_id, now),
+                "bonus_until": self.bonus_until(user_id) if self.has_bonus(user_id, now) else 0,
+                "trial": self.trial_available(user_id), "trial_days": self.trial_days,
                 "limit": self.limit(user_id, now), "stars": self.stars, "bonus": self.bonus,
                 "free_limit": self.free_limit, "pro_limit": self.pro_limit, "group_stars": self.group_stars}

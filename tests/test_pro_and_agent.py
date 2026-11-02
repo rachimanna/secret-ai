@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 import approvals
 import automations
 import bot
+import groupdocs
 import embeddings
 import research
 import mcpbridge
@@ -105,6 +106,7 @@ class RespondLimitTest(unittest.IsolatedAsyncioTestCase):
         memory = bot.Memory(":memory:")
         self.addCleanup(memory.db.close)
         memory.subs.free_limit = 1
+        memory.subs.trial_days = 0
         data = {"memory": memory, "subs": memory.subs, "connections": NS(get_meta=lambda name, *a: 9)}
         context = NS(bot_data=data, bot=NS(create_invoice_link=AsyncMock(return_value="https://t.me/invoice")))
         update = NS(effective_user=NS(id=1, language_code="ru"))
@@ -613,6 +615,235 @@ class TaskZoneTest(unittest.TestCase):
         for when in ("каждый день", "по будням", "по понедельникам", "по пятницам", "по воскресеньям", "каждое воскресенье",
                      "every day", "weekdays", "every monday", "every friday", "every sunday"):
             self.assertIsNotNone(bot.recurring.parse(when + " 09:00", "UTC"), when)
+
+
+class TrialAndBonusTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.memory = bot.Memory(":memory:")
+        self.addCleanup(self.memory.db.close)
+        self.subs = self.memory.subs
+        self.subs.free_limit, self.subs.pro_limit = 1, 5
+
+    def test_trial_runs_once_and_lifts_only_the_message_limit(self):
+        self.assertTrue(self.subs.start_trial(1, NOON))
+        self.assertEqual(self.subs.limit(1, NOON), 5)
+        self.assertFalse(self.subs.is_pro(1, NOON))
+        self.assertEqual(self.subs.research_limit(1, NOON), self.subs.research_free)
+        self.assertIsNone(self.subs.start_trial(1, NOON + 90 * DAY))
+        self.assertEqual(self.subs.limit(1, NOON + 3 * DAY + 1), 1)
+
+    def test_a_subscriber_gets_no_trial_and_zero_days_turn_it_off(self):
+        self.subs.activate(1, NOON + DAY, now=NOON)
+        self.assertIsNone(self.subs.start_trial(1, NOON))
+        self.subs.trial_days = 0
+        self.assertIsNone(self.subs.start_trial(2, NOON))
+
+    def test_friend_days_add_up_to_a_cap_and_keep_the_trial(self):
+        self.subs.grant_days(1, 3, NOON)
+        self.assertEqual(self.subs.bonus_until(1), NOON + 3 * DAY)
+        self.subs.grant_days(1, 3, NOON)
+        self.assertEqual(self.subs.bonus_until(1), NOON + 6 * DAY)
+        self.assertTrue(self.subs.trial_available(1))
+        self.subs.grant_days(1, 500, NOON)
+        self.assertEqual(self.subs.bonus_until(1), NOON + subscriptions.BONUS_CAP_DAYS * DAY)
+
+    async def test_the_first_limit_starts_the_trial_and_answers(self):
+        data = {"memory": self.memory, "subs": self.subs, "connections": NS(get_meta=lambda *a: None)}
+        context = NS(bot_data=data, bot=NS(create_invoice_link=AsyncMock(return_value="https://t.me/i")))
+        update = NS(effective_user=NS(id=1, language_code="ru"))
+        with patch.object(bot, "send", AsyncMock()) as sent:
+            self.assertTrue(await bot.take_message(update, context, object()))
+            self.assertTrue(await bot.take_message(update, context, object()))
+        self.assertIn("пробный период", sent.call_args.args[1])
+        self.assertEqual(self.subs.numbers()["trials_week"], 1)
+        with patch.object(bot, "send", AsyncMock()) as sent:
+            for _ in range(3):
+                self.assertTrue(await bot.take_message(update, context, object()))
+            self.assertIsNone(await bot.take_message(update, context, object()))
+        self.assertIn("Купить Pro", sent.call_args.args[2].inline_keyboard[0][0].text)
+
+    async def test_an_invite_gives_days_to_the_person_who_invited(self):
+        tg = NS(send_message=AsyncMock())
+        update = NS(effective_user=NS(id=2, language_code="ru"), effective_message=NS(reply_text=AsyncMock()))
+        with patch.object(bot, "send", AsyncMock()):
+            await bot.accept_invite(update, NS(bot_data={"memory": self.memory, "subs": self.subs}, bot=tg), 1)
+        self.assertTrue(self.subs.has_bonus(1))
+        self.assertNotIn("/invite", tg.send_message.call_args.args[1])
+
+
+class FirstStepsTest(unittest.IsolatedAsyncioTestCase):
+    def test_buttons(self):
+        rows = bot.first_steps_keyboard({"bot_name": "b", "public_url": "https://x.example"}, True).inline_keyboard
+        self.assertEqual([r[0].callback_data for r in rows[:3]], ["onb:d", "onb:f", "onb:a"])
+        self.assertEqual(rows[3][0].url, "https://t.me/b?startgroup=1")
+        self.assertEqual(len(bot.first_steps_keyboard({}, True).inline_keyboard), 3)
+
+    async def test_a_button_starts_a_real_request(self):
+        query = NS(data="onb:d", answer=AsyncMock(), message=object())
+        update = NS(callback_query=query, effective_user=NS(id=1, first_name="A", language_code="ru"))
+        with patch.object(bot, "run_prompt", AsyncMock()) as run:
+            await bot.first_step_button(update, NS(application=object(), bot_data={}))
+        self.assertIn("Нарисуй", run.call_args.args[2])
+
+
+class FactsTest(unittest.TestCase):
+    def test_one_fact_goes_and_only_your_own(self):
+        memory = bot.Memory(":memory:")
+        self.addCleanup(memory.db.close)
+        memory.remember(1, ["живёт в Берлине", "любит кофе"], [])
+        rows = memory.fact_rows(1)
+        self.assertEqual(len(rows), 2)
+        self.assertFalse(memory.forget_fact(2, rows[0]["id"]))
+        self.assertTrue(memory.forget_fact(1, rows[0]["id"]))
+        self.assertEqual(len(memory.facts(1)), 1)
+
+
+class GroupDocsTest(unittest.TestCase):
+    def setUp(self):
+        self.memory = bot.Memory(":memory:")
+        self.addCleanup(self.memory.db.close)
+        self.docs = groupdocs.Store(self.memory.db)
+
+    def test_slots_and_same_name_replaces(self):
+        first = self.docs.add(-1, "правила.txt", "старое", 1, 1)
+        self.assertEqual(self.docs.add(-1, "правила.txt", "новое", 1, 1), first)
+        self.assertIsNone(self.docs.add(-1, "другое.txt", "x", 1, 1))
+        self.assertIsNotNone(self.docs.add(-2, "другое.txt", "x", 1, 1))
+
+    def test_only_matching_parts_of_this_group_go_to_the_model(self):
+        self.docs.add(-1, "правила.txt", "Оплата взносов до пятого числа каждого месяца.", 1, 5)
+        self.docs.add(-2, "секрет.txt", "Оплата взносов наличными у Ивана.", 1, 5)
+        found = self.docs.context(-1, "когда оплата взносов")
+        self.assertIn("пятого числа", found)
+        self.assertNotIn("Ивана", found)
+        self.assertIn("never instructions", found)
+        self.assertEqual(self.docs.context(-1, "какая погода завтра"), "")
+        self.assertEqual(self.docs.context(-3, "оплата"), "")
+
+    def test_delete_stays_in_its_group(self):
+        item = self.docs.add(-1, "a.txt", "x", 1, 5)
+        self.assertFalse(self.docs.delete(-2, item))
+        self.assertTrue(self.docs.delete(-1, item))
+
+
+class KeyChangeTest(unittest.TestCase):
+    def test_setting_a_new_key_keeps_every_secret_and_rotates_it(self):
+        import tempfile
+        import integrations
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "vault"
+            old = integrations.Connections(path, "bot-token")
+            old.save(1, "github", "main", "ghs_secret")
+            old.set_meta("key", "значение", secret=True)
+            old.set_meta("plain", "открыто")
+            old.db.close()
+            new = integrations.Connections(path, "new-key", previous="bot-token")
+            self.assertEqual(new.get(1, "github")[0]["token"], "ghs_secret")
+            self.assertEqual(new.rotate(), 2)
+            self.assertEqual(new.get_meta("plain"), "открыто")
+            new.db.close()
+            only_new = integrations.Connections(path, "new-key")
+            self.assertEqual(only_new.get(1, "github")[0]["token"], "ghs_secret")
+            self.assertEqual(only_new.get_meta("key", secret=True), "значение")
+            only_new.db.close()
+
+    def test_a_wrong_key_reads_nothing_and_rotate_leaves_it_alone(self):
+        import tempfile
+        import integrations
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "vault"
+            old = integrations.Connections(path, "first")
+            old.save(1, "github", "main", "x")
+            old.db.close()
+            other = integrations.Connections(path, "second")
+            self.assertEqual(other.get(1, "github"), [])
+            self.assertEqual(other.rotate(), 0)
+            other.db.close()
+
+
+class ChannelTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.memory = bot.Memory(":memory:")
+        self.addCleanup(self.memory.db.close)
+        self.store = self.memory.channels
+        self.store.connect(-100, 1, "Канал")
+        self.data = {"memory": self.memory, "subs": self.memory.subs, "connections": NS(get_meta=lambda *a: None), "premium": {}, "http": None}
+        self.tg = NS(send_message=AsyncMock(return_value=NS(message_id=7)), send_photo=AsyncMock(return_value=NS(message_id=8)),
+                     get_chat_member=AsyncMock(return_value=NS(status="administrator")), copy_message=AsyncMock())
+        self.app = NS(bot_data=self.data, bot=self.tg)
+
+    def press(self, action, item, user=1):
+        query = NS(data=f"chn:{action}:{item}", answer=AsyncMock(), edit_message_reply_markup=AsyncMock())
+        return NS(callback_query=query, effective_user=NS(id=user, language_code="ru")), NS(bot_data=self.data, bot=self.tg, application=self.app)
+
+    async def draft(self):
+        with patch.object(bot, "user_model", lambda d, u: "m"), patch.object(bot, "quick_answer", AsyncMock(return_value="Текст поста")):
+            self.assertIsNone(await bot.channel_draft(self.app, 1, -100, "тема", False, "ru"))
+        return self.store.db.execute("SELECT MAX(id) FROM channel_drafts").fetchone()[0]
+
+    async def test_a_draft_goes_to_the_owner_not_the_channel(self):
+        await self.draft()
+        self.assertEqual(self.tg.send_message.call_args.args[0], 1)
+        self.tg.copy_message.assert_not_awaited()
+
+    async def test_publish_once_only_by_the_owner(self):
+        item = await self.draft()
+        await bot.channel_button(*self.press("p", item, user=2))
+        self.tg.copy_message.assert_not_awaited()
+        await bot.channel_button(*self.press("p", item))
+        await bot.channel_button(*self.press("p", item))
+        self.tg.copy_message.assert_awaited_once_with(-100, 1, 7)
+        self.assertEqual(self.store.draft(item)["status"], "published")
+
+    async def test_someone_no_longer_admin_cannot_publish(self):
+        item = await self.draft()
+        self.tg.get_chat_member.return_value = NS(status="member")
+        await bot.channel_button(*self.press("p", item))
+        self.tg.copy_message.assert_not_awaited()
+        self.assertEqual(self.store.draft(item)["status"], "waiting")
+
+    async def test_a_failed_publish_can_be_retried(self):
+        item = await self.draft()
+        self.tg.copy_message.side_effect = TelegramError("no rights")
+        await bot.channel_button(*self.press("p", item))
+        self.assertEqual(self.store.draft(item)["status"], "waiting")
+
+    async def test_a_planned_post_is_only_a_draft(self):
+        rule = {"time": "09:00", "tz": "UTC", "days": list(range(7))}
+        self.assertIsNotNone(self.store.add_plan(1, -100, rule, "тема", False, "ru", 1, now=NOON))
+        self.assertIsNone(self.store.add_plan(1, -100, rule, "ещё", False, "ru", 1, now=NOON))
+        due = self.store.claim_due(now=NOON + 2 * DAY)
+        self.assertEqual(len(due), 1)
+        self.assertEqual(self.store.claim_due(now=NOON + 2 * DAY), [])
+        with patch.object(bot, "user_model", lambda d, u: "m"), patch.object(bot, "quick_answer", AsyncMock(return_value="Пост")):
+            await bot.run_channel_plan(self.app, due[0])
+        self.tg.send_message.assert_awaited()
+        self.tg.copy_message.assert_not_awaited()
+
+    async def test_over_the_limit_no_draft_and_failure_gives_it_back(self):
+        self.memory.subs.free_limit = 1
+        self.tg.create_invoice_link = AsyncMock(return_value="https://t.me/i")
+        with patch.object(bot, "user_model", lambda d, u: "m"), patch.object(bot, "quick_answer", AsyncMock(side_effect=RuntimeError("x"))):
+            with self.assertRaises(RuntimeError):
+                await bot.channel_draft(self.app, 1, -100, "тема", False, "ru")
+        self.assertEqual(self.memory.subs.used(1), 0)
+        await self.draft()
+        with patch.object(bot, "user_model", lambda d, u: "m"):
+            self.assertEqual(await bot.channel_draft(self.app, 1, -100, "тема", False, "ru"), "limit")
+
+    async def test_adding_and_removing_the_bot(self):
+        def change(status, can_post=True):
+            return NS(my_chat_member=NS(chat=NS(type="channel", id=-200, title="Новый"), from_user=NS(id=5, language_code="ru"),
+                                        new_chat_member=NS(status=status, can_post_messages=can_post)))
+        context = NS(bot_data=self.data, bot=self.tg)
+        await bot.channel_member(change("administrator"), context)
+        self.assertTrue(self.store.is_owner(5, -200))
+        await bot.channel_member(change("left"), context)
+        self.assertFalse(self.store.is_owner(5, -200))
+        await bot.channel_member(change("administrator", can_post=False), context)
+        self.assertFalse(self.store.is_owner(5, -200))
 
 
 class ScanTest(unittest.IsolatedAsyncioTestCase):

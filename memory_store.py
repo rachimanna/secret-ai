@@ -3,6 +3,7 @@ from media import FREE_PHOTOS_PER_DAY
 from pathlib import Path
 import automations
 import daily
+import channels
 import playboard
 import re
 import sqlite3
@@ -86,6 +87,7 @@ class Memory:
         self.subs = subscriptions.Store(self.db)
         self.automations = automations.Store(self.db)
         self.board = playboard.Board(self.db)
+        self.channels = channels.Store(self.db)
 
     def history(self, user_id, limit=HISTORY_LIMIT):
         rows = self.db.execute("SELECT id, role, content FROM (SELECT id, role, content FROM messages WHERE user_id=? ORDER BY id DESC LIMIT ?) ORDER BY id", (user_id, limit)).fetchall()
@@ -151,6 +153,15 @@ class Memory:
             self.db.execute("DELETE FROM messages WHERE id IN (?, ?)", (rows[0][0], rows[1][0]))
         return rows[1][2]
 
+    def fact_rows(self, user_id):
+        """What the bot remembers, with ids so that the person can remove one thing at a time."""
+        return [{"id": row[0], "text": row[1]} for row in
+                self.db.execute("SELECT id, fact FROM facts WHERE user_id=? ORDER BY id DESC", (user_id,))]
+
+    def forget_fact(self, user_id, fact_id):
+        with self.db:
+            return self.db.execute("DELETE FROM facts WHERE id=? AND user_id=?", (fact_id, user_id)).rowcount > 0
+
     def facts(self, user_id):
         return [row[0] for row in self.db.execute("SELECT fact FROM facts WHERE user_id=? ORDER BY id", (user_id,))]
 
@@ -183,6 +194,7 @@ class Memory:
         self.daily.reset(user_id)
         self.automations.reset(user_id)
         self.board.forget(user_id)
+        self.channels.forget_user(user_id)
 
     def persona(self, user_id):
         row = self.db.execute("SELECT persona FROM settings WHERE user_id=?", (user_id,)).fetchone()

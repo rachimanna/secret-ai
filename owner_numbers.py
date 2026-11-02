@@ -38,6 +38,7 @@ def stats_text(stats):
             f"\n**Генерации и оплаты**\n- бесплатных картинок сегодня: {stats['pictures_today']}\n"
             f"- оплат: {stats['payments']} · звёзд: {stats['stars']} ⭐\n\n"
             f"**Подписка Pro за неделю**\n- упёрлись в лимит: {stats['sales']['limit_hit_week']} чел.\n"
+            f"- начали пробный период: {stats['sales']['trials_week']}\n"
             f"- купили: {stats['sales']['bought_week']} ({stats['sales']['conversion']}%) · продлили: {stats['sales']['renewed_week']}\n"
             f"- звёзд с подписок: {stats['sales']['stars_week']} ⭐\n"
             f"- сейчас активно: людей {stats['sales']['pro_active']} · групп {stats['sales']['groups_active']}")
