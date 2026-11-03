@@ -1011,6 +1011,7 @@ def is_abacus(model):
 EXTRA_PROVIDERS = {
     "oxionai": ("https://www.oxionai.com/v1", [], ""),  # OXIONAI_API_KEY; test routing is exclusive when configured
     "reformboss": ("https://api.reformboss.com/v1", [], ""),  # REFORMBOSS_API_KEY; models added explicitly later
+    "xpiki": ("https://api.xpiki.com/v1", [], ""),  # XPIKI_API_KEY: when set, the only gateway (XPIKI_MODELS picks its models)
     "nvidia": ("https://integrate.api.nvidia.com/v1",       # build.nvidia.com: DeepSeek, Kimi, Qwen for free
                [(r"deepseek-(v\d|chat)", None), (r"qwen-?3", None)], ""),
     "openrouter": ("https://openrouter.ai/api/v1",           # openrouter.ai: only its ":free" models
@@ -1387,18 +1388,26 @@ async def chat_answer(context, live, request, toolbox=None, prefix=""):
 
 CHAT_SOURCES = ((ANYMODEL_PREFIX, "anymodel_chat"), ("reformboss:", "reformboss"))
 OXIONAI_MODELS = ("claude-sonnet-5",)
+XPIKI_MODELS = ("claude-opus-5-5", "claude-opus-4-8")  # the first is the default
+
+
+def exclusive_gateway(data):
+    """A gateway that replaces all the others while its key is set: Oxion (the test) first, then xpiki."""
+    return next((name for name in ("oxionai", "xpiki") if data.get(name)), None)
 
 
 def chat_sources(data):
-    # Enabling the test never silently falls back to another paid gateway.
-    return (("oxionai:", "oxionai"),) if data.get("oxionai") else CHAT_SOURCES
+    # An exclusive gateway never silently falls back to another paid one.
+    name = exclusive_gateway(data)
+    return ((name + ":", name),) if name else CHAT_SOURCES
 
 
 def chat_model_catalog(data):
-    if not data.get("oxionai"):
+    name = exclusive_gateway(data)
+    if not name:
         return MODEL_CATALOG
-    ids = data.get("oxionai_models") or OXIONAI_MODELS
-    return [(model_title(i), r"(?:^|:)" + re.escape(i) + r"$", "oxionai:") for i in ids]
+    ids = data.get(name + "_models") or {"oxionai": OXIONAI_MODELS, "xpiki": XPIKI_MODELS}[name]
+    return [(model_title(i), r"(?:^|:)" + re.escape(i) + r"$", name + ":") for i in ids]
 
 
 
@@ -1422,6 +1431,8 @@ async def discover_models(app):
         try:
             result = await asyncio.wait_for(data[name].models.list(), 20)
             ids = [m.id for m in result.data]
+            if name == "xpiki":  # a reseller's list may be closed or partial: its models are the ones the owner bought
+                ids = list(dict.fromkeys(ids + list(data.get("xpiki_models") or XPIKI_MODELS)))
             confirmed = [prefix + i for i in ids if approved(prefix + i, prefix)]
             # Persist only gateway-confirmed IDs, never credentials. Do not rewrite unchanged metadata.
             cache_key = "confirmed_chat_models:" + name
@@ -1446,6 +1457,8 @@ async def discover_models(app):
                     # Earlier releases persisted the catalog-confirmed default here.
                     known.append(store.get_meta("default_model"))
             ids = list(dict.fromkeys(m[len(prefix):] for m in known if approved(m, prefix)))
+            if name == "xpiki":
+                ids = list(dict.fromkeys(ids + list(data.get("xpiki_models") or XPIKI_MODELS)))
             LOG.warning("%s model list unavailable: %s; reusing %d confirmed IDs", name, type(exc).__name__, len(ids))
             return prefix, ids
 
@@ -5308,7 +5321,7 @@ async def api_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sources, requested = chat_sources(data), chat_model_catalog(data)
 
     async def check(prefix, name):
-        title = {"anymodel_chat": "AnyModel", "reformboss": "Reformboss", "oxionai": "Oxion AI"}.get(name, name)
+        title = {"anymodel_chat": "AnyModel", "reformboss": "Reformboss", "oxionai": "Oxion AI", "xpiki": "xpiki"}.get(name, name)
         client = data.get(name)
         if not client:
             variable = "ANYMODEL_API_KEY" if name == "anymodel_chat" else name.upper() + "_API_KEY"
@@ -7787,6 +7800,7 @@ def main():
         memory=Memory(database), allowed=allowed, snapshots=snapshots, codex=codex.CodexStore(connections), codex_jobs={},
         model=model, models=models, pipedream=pipedream, github_apps=github_apps, direct=direct,
         oxionai_models=list(dict.fromkeys(i.strip() for i in os.environ.get("OXIONAI_MODELS", "").split(",") if i.strip())) or list(OXIONAI_MODELS),
+        xpiki_models=list(dict.fromkeys(i.strip() for i in os.environ.get("XPIKI_MODELS", "").split(",") if i.strip())) or list(XPIKI_MODELS),
         stream=os.environ.get("STREAM_REPLIES", "1").strip() != "0",
         drafts=os.environ.get("DRAFT_REPLIES", "1").strip() != "0",
         clear_drafts=os.environ.get("CLEAR_DRAFTS", "1").strip() != "0",
