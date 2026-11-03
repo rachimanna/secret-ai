@@ -32,6 +32,7 @@ from openai import (
     AsyncOpenAI,
     AuthenticationError,
     BadRequestError,
+    InternalServerError,
     NotFoundError,
     PermissionDeniedError,
     APIStatusError,
@@ -1108,6 +1109,7 @@ async def chat_completion(data, model_id, client, **options):
     """Adapt optional effort once per model; wait and retry when the gateway is momentarily overloaded (429)."""
     options.update(quick_thinking(data, model_id))
     waits = list(RATE_RETRIES)
+    server_retry = True
     while True:
         try:
             started = __import__("time").monotonic()
@@ -1137,6 +1139,20 @@ async def chat_completion(data, model_id, client, **options):
                 data.setdefault("no_effort", set()).add(model_id)
                 options.pop("reasoning_effort")
             LOG.info("Adjusted effort compatibility for %s", model_id)
+        except InternalServerError as exc:
+            # Some resellers (xpiki with Claude) answer the optional effort with a 500 instead of a 400: drop it and
+            # remember; a plain 5xx hiccup is retried once after a short pause.
+            __import__("release_features").record(data,model_id,started,type(exc).__name__)
+            if "reasoning_effort" in options:
+                data.setdefault("no_effort", set()).add(model_id)
+                options.pop("reasoning_effort")
+                LOG.info("%s failed with effort (5xx); retrying without it", model_id)
+            elif server_retry:
+                server_retry = False
+                LOG.warning("%s answered 5xx; retrying once", model_id)
+                await asyncio.sleep(2)
+            else:
+                raise
         except Exception as exc:
             __import__("release_features").record(data,model_id,started,type(exc).__name__)
             raise
@@ -6633,7 +6649,10 @@ async def alert_owner(context, kind, place):
         if len(seen) > 500:
             seen.clear()
         seen[key] = now
-        await context.bot.send_message(owner, f"⚠️ Ошибка в боте: {kind}\n{place[:600]}")
+        upstream = kind in ("InternalServerError", "APIConnectionError", "APITimeoutError", "ServiceUnavailableError")
+        head = (f"⚠️ Сервис модели не ответил ({kind}) — сбой на стороне провайдера, бот повторял запрос"
+                if upstream else f"⚠️ Ошибка в боте: {kind}")
+        await context.bot.send_message(owner, f"{head}\n{place[:600]}")
     except Exception as exc:  # a failed alert must never hide the original error's handling
         LOG.info("Owner alert failed: %s", type(exc).__name__)
 
@@ -6643,7 +6662,9 @@ async def on_error(update, context):
     # Never log exception bodies: they can contain tokens, URLs or user content.
     # Where it broke (file:line function) and, for model errors, what the provider said: enough to find a bug.
     frames = traceback.extract_tb(error.__traceback__) if error else []
-    place = " ← ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in frames[-3:][::-1])
+    here = str(Path(__file__).resolve().parent)
+    own = [f for f in frames if f.filename.startswith(here) and "site-packages" not in f.filename]
+    place = " ← ".join(f"{Path(f.filename).name}:{f.lineno} {f.name}" for f in (own or frames)[-3:][::-1])
     LOG.error("Handler error: %s at %s %s", type(error).__name__, place, str(error)[:300] if isinstance(error, MODEL_ERRORS) else "")
     await alert_owner(context, type(error).__name__, place)
     if not isinstance(update, Update) or not update.effective_message or not update.effective_user or update.business_message:
